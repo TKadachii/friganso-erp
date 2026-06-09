@@ -1335,6 +1335,25 @@
             // Normaliza um código para comparação (só dígitos, sem zeros à esquerda)
             const normCode = (v) => String(v).replace(/[^0-9a-z]/gi, '').replace(/^0+/, '').toLowerCase();
 
+            // Monta a URL do mapa embutido a partir de endereço, coordenadas ou link do Google Maps
+            const buildMapEmbed = (loc) => {
+                const t = (loc || '').trim();
+                if (!t) return '';
+                if (/google\.[^/]+\/maps\/embed/i.test(t)) return t;            // já é um embed
+                const at = t.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);                // link com @lat,lng
+                if (at) return `https://www.google.com/maps?q=${at[1]},${at[2]}&z=16&output=embed`;
+                const ll = t.match(/^\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*$/);   // "lat,lng"
+                if (ll) return `https://www.google.com/maps?q=${ll[1]},${ll[2]}&z=16&output=embed`;
+                return `https://www.google.com/maps?q=${encodeURIComponent(t)}&output=embed`; // endereço/texto
+            };
+            // Link para abrir no app/site do Google Maps
+            const buildMapLink = (loc) => {
+                const t = (loc || '').trim();
+                if (!t) return '';
+                if (/^https?:\/\//i.test(t)) return t;
+                return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t)}`;
+            };
+
             // Lê a planilha de histórico de compras e monta o preview
             const handleHistoryFileSelected = (e) => {
                 const file = e.target.files && e.target.files[0];
@@ -1535,7 +1554,7 @@
             const handleUpdateClient = async () => {
                 if(!editForm.code) { showMessage("O ID não pode ficar vazio.", "error"); return; }
                 try {
-                    await db.collection('clients').doc(selectedClient.id).update({ name: editForm.name, contactName: editForm.contactName || '', code: editForm.code, cnpj: editForm.cnpj || '', phone: editForm.phone || '', address: editForm.address || '' });
+                    await db.collection('clients').doc(selectedClient.id).update({ name: editForm.name, contactName: editForm.contactName || '', code: editForm.code, cnpj: editForm.cnpj || '', phone: editForm.phone || '', address: editForm.address || '', mapLocation: editForm.mapLocation || '' });
                     showMessage("Alterações salvas!", "success");
                 } catch(e) { showMessage("Erro ao atualizar.", "error"); }
             };
@@ -1639,6 +1658,11 @@
                                                 </div>
                                                 <div><label className="text-xs font-bold text-slate-500">WhatsApp</label><input type="text" value={editForm.phone || ''} onChange={e => setEditForm({...editForm, phone: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm outline-none focus:border-rose-500"/></div>
                                                 <div><label className="text-xs font-bold text-slate-500">Endereço</label><textarea value={editForm.address || ''} onChange={e => setEditForm({...editForm, address: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm resize-none outline-none focus:border-rose-500" rows="2"></textarea></div>
+                                                <div>
+                                                    <label className="text-xs font-bold text-slate-500 flex items-center gap-1">📍 Localização no Mapa</label>
+                                                    <input type="text" value={editForm.mapLocation || ''} onChange={e => setEditForm({...editForm, mapLocation: e.target.value})} placeholder="Endereço, coordenadas (lat,lng) ou link do Google Maps" className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm outline-none focus:border-rose-500"/>
+                                                    <p className="text-[10px] text-slate-400 mt-1">Deixe vazio para usar o Endereço acima. Dica: no Google Maps, clique com o botão direito no local e copie as coordenadas.</p>
+                                                </div>
                                                 <button onClick={handleUpdateClient} className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-bold shadow-md transition-colors">Salvar Alterações</button>
                                             </div>
                                         </div>
@@ -1685,6 +1709,34 @@
                                                 )}
                                             </div>
                                         </div>
+                                    </div>
+
+                                    {/* Mapa da localização da loja */}
+                                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                                        <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-4">
+                                            <h3 className="font-bold text-slate-800 flex items-center gap-2"><span className="text-lg">📍</span> Localização da Loja</h3>
+                                            {(editForm.mapLocation || editForm.address) && (
+                                                <a href={buildMapLink(editForm.mapLocation || editForm.address)} target="_blank" rel="noopener noreferrer" className="text-xs font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">Abrir no Google Maps ↗</a>
+                                            )}
+                                        </div>
+                                        {(editForm.mapLocation || editForm.address) ? (
+                                            <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+                                                <iframe
+                                                    title="Mapa da loja"
+                                                    src={buildMapEmbed(editForm.mapLocation || editForm.address)}
+                                                    className="w-full"
+                                                    style={{ height: '320px', border: 0 }}
+                                                    loading="lazy"
+                                                    referrerPolicy="no-referrer-when-downgrade"
+                                                    allowFullScreen
+                                                ></iframe>
+                                            </div>
+                                        ) : (
+                                            <div className="h-40 flex flex-col items-center justify-center text-slate-400 text-sm bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                                                <span className="text-2xl mb-2">🗺️</span>
+                                                Preencha o Endereço ou a Localização no Mapa para ver aqui.
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
