@@ -1,0 +1,1479 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Friganso ERP</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#e11d48">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="FrigansoERP">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- PDF.js para leitura de PDFs offline -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    
+    <!-- FIREBASE (Banco de Dados e Auth) -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        body { background-color: #f1f5f9; font-family: 'Inter', sans-serif; margin: 0; padding: 0; overflow-x: hidden; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+        .glass-dark { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(16px); }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const firebaseConfig = {
+            apiKey: atob("QUl6YVN5RGFRLVdEUW5HaS10NW1Ddkw2clhBV0xnTzRneFdfajdZ"),
+            authDomain: atob("ZnJpZ2Fuc29lcm0uZmlyZWJhc2VhcHAuY29t"),
+            projectId: atob("ZnJpZ2Fuc29lcm0="),
+            storageBucket: atob("ZnJpZ2Fuc29lcm0uZmlyZWJhc2VzdG9yYWdlLmFwcA=="),
+            messagingSenderId: atob("MTMzMzI5Mjg0MDc="),
+            appId: atob("MToxMzMzMjkyODQwNzp3ZWI6YjNiNTFkMWI4MjVjNTYwYjkwMTZkMg=="),
+            measurementId: atob("Ry05NjNTVzNYU1lN")
+        };
+        
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // Persistência offline — dados ficam em cache local no dispositivo
+        db.enablePersistence({ synchronizeTabs: true })
+            .catch(err => {
+                if (err.code === 'failed-precondition') {
+                    // Múltiplas abas abertas — offline funciona só na aba ativa
+                    console.warn('[Firestore] Persistência limitada a uma aba por vez.');
+                } else if (err.code === 'unimplemented') {
+                    // Navegador não suporta (raro em Android/iOS modernos)
+                    console.warn('[Firestore] Persistência offline não suportada neste navegador.');
+                }
+            });
+
+        const hashPassword = async (password) => {
+            if (!password) return '';
+            const msgBuffer = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        };
+
+        const FrigansoLogo = ({ className }) => (
+            <svg className={className} viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+                <defs><linearGradient id="roseGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#e11d48" /><stop offset="100%" stopColor="#881337" /></linearGradient></defs>
+                <path d="M100 10 L180 50 L180 140 L100 190 L20 140 L20 50 Z" fill="url(#roseGrad)" />
+                <path d="M100 30 L160 60 L160 130 L100 165 L40 130 L40 60 Z" fill="#0f172a" />
+                <path d="M85 70 L125 70 L125 85 L100 85 L100 100 L120 100 L120 115 L100 115 L100 140 L85 140 Z" fill="#ffffff" />
+            </svg>
+        );
+
+        const BG_IMAGE = "https://images.unsplash.com/photo-1607623814075-e51df1bd682f?q=80&w=2000&auto=format&fit=crop";
+
+        const IconUser = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+        const IconLock = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>;
+        const IconDashboard = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>;
+        const IconFileText = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>;
+        const IconReceipt = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/></svg>;
+        const IconWhatsApp = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>;
+        const IconUsers = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+        const IconSupport = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+        const IconCode = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>;
+        const IconLogOut = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
+        const IconPlus = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+        const IconMenu = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>;
+        const IconCheck = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
+        const IconMail = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>;
+        const IconUpload = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>;
+        const IconSearch = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
+        const IconTag = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>;
+        const IconLoader2 = () => <svg className="w-full h-full animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>;
+        const IconX = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+        const IconSettings = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h-.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>;
+        const IconCloudDownload = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/><polyline points="8 12 12 16 16 12"/><line x1="12" y1="8" x2="12" y2="16"/></svg>;
+        const IconCloudUpload = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/><polyline points="16 12 12 8 8 12"/><line x1="12" y1="16" x2="12" y2="8"/></svg>;
+        const IconHistory = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+        const IconWand = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/><path d="M17.8 11.8l1.4 1.4"/><path d="M17.8 6.2l1.4-1.4"/><path d="M12.2 6.2l-1.4-1.4"/><path d="M12.2 11.8l-1.4 1.4"/><path d="M2.5 21.5l14-14"/></svg>;
+        const IconGoogle = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="currentColor"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>;
+
+        const normalizeForSearch = (str) => {
+            if (!str) return '';
+            let s = str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); 
+            s = s.replace(/\bcong\.?\b/g, "congelado").replace(/\b(resf|ref)\.?\b/g, "resfriado").replace(/[-_./]/g, " ").replace(/\s+/g, " ").trim();
+            return s;
+        };
+        const parsePrice = (priceStr) => {
+            if (!priceStr) return null;
+            let cleanStr = priceStr.includes('.') && priceStr.includes(',') ? priceStr.replace(/\./g, '').replace(',', '.') : priceStr.replace(',', '.');
+            const val = parseFloat(cleanStr); return isNaN(val) ? null : val;
+        };
+        const formatPrice = (value) => {
+            if (value === null || value === undefined) return 'R$ 0,00';
+            return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 });
+        };
+        const checkDiscountRules = (code, name, originalPrice) => {
+            const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
+            let hasDiscount = true;
+            if (codeStr.startsWith('16') || codeStr.startsWith('27') || codeStr.startsWith('90')) hasDiscount = false;
+            if (nameStr.includes('fraldinha ramax')) hasDiscount = false;
+            return { hasDiscount, origPrice, unitFinalPrice: hasDiscount ? Math.round((origPrice * 0.97) * 100) / 100 : origPrice };
+        };
+
+        const CustomMessageBox = ({ message, type = 'info', onClose }) => (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] animate-in fade-in">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col items-center text-center zoom-in-95 animate-in">
+                    <div className={`h-16 w-16 rounded-full flex items-center justify-center mb-4 ${type === 'error' ? 'bg-red-100 text-red-600' : type === 'success' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                        {type === 'error' ? <IconX /> : <IconCheck />}
+                    </div>
+                    <h3 className="text-lg font-bold text-slate-800 mb-2">{type === 'error' ? 'Atenção' : type === 'success' ? 'Sucesso' : 'Aviso'}</h3>
+                    <p className="text-slate-600 text-sm mb-6">{message}</p>
+                    <button onClick={onClose} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-xl transition-colors">Entendi</button>
+                </div>
+            </div>
+        );
+
+        const LoginScreen = ({ onLogin, showMessage }) => {
+            const [isRegistering, setIsRegistering] = useState(false);
+            const [isLoading, setIsLoading] = useState(false);
+            const [loginCode, setLoginCode] = useState('');
+            const [password, setPassword] = useState('');
+            const [regName, setRegName] = useState('');
+            const [regCode, setRegCode] = useState('');
+            const [regEmail, setRegEmail] = useState('');
+            const [regPassword, setRegPassword] = useState('');
+            const [pendingGoogleUser, setPendingGoogleUser] = useState(null);
+            const [googleCode, setGoogleCode] = useState('');
+
+            const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@$!%*#?&.])[A-Za-z\d@$!%*#?&.]{6,}$/;
+
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                setIsLoading(true);
+                try {
+                    const hashedPass = await hashPassword(password);
+                    let snapshot = await db.collection('users').where('code', '==', loginCode).where('password', '==', hashedPass).get();
+                    if (snapshot.empty) {
+                        snapshot = await db.collection('users').where('code', '==', loginCode).where('password', '==', password).get();
+                        if (!snapshot.empty) await db.collection('users').doc(snapshot.docs[0].id).update({ password: hashedPass });
+                    }
+
+                    if (!snapshot.empty) {
+                        const userDoc = snapshot.docs[0].data();
+                        if (userDoc.code === '99206' && userDoc.role !== 'admin') {
+                            await db.collection('users').doc(snapshot.docs[0].id).update({ role: 'admin' });
+                            userDoc.role = 'admin';
+                        }
+                        onLogin({ ...userDoc, id: snapshot.docs[0].id });
+                    } else { showMessage('Código ou senha incorretos.', 'error'); }
+                } catch(err) { showMessage('Erro de conexão com o banco.', 'error'); } finally { setIsLoading(false); }
+            };
+
+            const handleGoogleLoginOnly = async () => {
+                setIsLoading(true);
+                try {
+                    const provider = new firebase.auth.GoogleAuthProvider();
+                    const result = await auth.signInWithPopup(provider);
+                    const snapshot = await db.collection('users').where('email', '==', result.user.email).get();
+                    if (!snapshot.empty) {
+                        onLogin({ ...snapshot.docs[0].data(), id: snapshot.docs[0].id });
+                    } else {
+                        showMessage('Conta não encontrada. Crie seu cadastro primeiro.', 'error');
+                        auth.signOut();
+                    }
+                } catch (error) { showMessage(`Erro: ${error.message}`, 'error'); } finally { setIsLoading(false); }
+            };
+
+            const handleRegister = async (e) => {
+                e.preventDefault();
+                if (!passwordRegex.test(regPassword)) { showMessage('Senha deve ter letras, números e especiais.', 'error'); return; }
+                setIsLoading(true);
+                try {
+                    const emailSnap = await db.collection('users').where('email', '==', regEmail).get();
+                    if (!emailSnap.empty) { showMessage('E-mail já está em uso.', 'error'); setIsLoading(false); return; }
+                    const codeSnap = await db.collection('users').where('code', '==', regCode).get();
+                    if (!codeSnap.empty) { showMessage('Código já em uso.', 'error'); setIsLoading(false); return; }
+
+                    const userRole = regCode === '99206' ? 'admin' : 'vendedor';
+                    const safePassword = await hashPassword(regPassword);
+                    await db.collection('users').add({ name: regName, code: regCode, email: regEmail, password: safePassword, role: userRole, avatar: '' });
+                    showMessage('Cadastro realizado com sucesso!', 'success');
+                    setIsRegistering(false);
+                } catch(err) { showMessage('Erro ao salvar.', 'error'); } finally { setIsLoading(false); }
+            };
+
+            const handleGoogleRegisterInit = async () => {
+                setIsLoading(true);
+                try {
+                    const provider = new firebase.auth.GoogleAuthProvider();
+                    const result = await auth.signInWithPopup(provider);
+                    const snapshot = await db.collection('users').where('email', '==', result.user.email).get();
+                    if (!snapshot.empty) { showMessage('Google já cadastrado. Faça login.', 'error'); auth.signOut(); } 
+                    else { setPendingGoogleUser(result.user); }
+                } catch (error) { showMessage(`Erro: ${error.message}`, 'error'); } finally { setIsLoading(false); }
+            };
+
+            const handleConfirmGoogleCode = async (e) => {
+                e.preventDefault();
+                setIsLoading(true);
+                try {
+                    const codeSnap = await db.collection('users').where('code', '==', googleCode).get();
+                    if (!codeSnap.empty) { showMessage('Código em uso.', 'error'); setIsLoading(false); return; }
+                    const userRole = googleCode === '99206' ? 'admin' : 'vendedor';
+                    const newUser = { name: pendingGoogleUser.displayName, code: googleCode, email: pendingGoogleUser.email, password: '', role: userRole, avatar: pendingGoogleUser.photoURL };
+                    const docRef = await db.collection('users').add(newUser);
+                    showMessage('Conta Google vinculada!', 'success');
+                    onLogin({ ...newUser, id: docRef.id });
+                } catch(err) { showMessage('Erro ao gravar.', 'error'); } finally { setIsLoading(false); }
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-slate-900 relative overflow-hidden p-4">
+                    <img src={BG_IMAGE} className="absolute inset-0 w-full h-full object-cover opacity-20" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-rose-950/80 to-transparent"></div>
+                    
+                    <div className="w-full max-w-md p-8 glass rounded-3xl shadow-2xl relative z-10 border border-white/20 animate-in fade-in slide-in-from-bottom-4">
+                        <div className="flex flex-col items-center mb-6">
+                            <FrigansoLogo className="h-20 w-20 rounded-2xl bg-black/80 p-2 shadow-lg border border-rose-500/50 mb-4" />
+                            <h1 className="text-3xl font-extrabold text-slate-800">Friganso<span className="text-rose-700">ERP</span></h1>
+                            <p className="text-slate-500 text-sm mt-1">{isRegistering ? 'Crie sua conta de Vendedor' : 'Gestão Inteligente de Vendas'}</p>
+                        </div>
+
+                        {pendingGoogleUser ? (
+                            <form onSubmit={handleConfirmGoogleCode} className="space-y-4 animate-in fade-in">
+                                <div className="text-center mb-4">
+                                    <img src={pendingGoogleUser.photoURL} alt="Perfil" className="w-16 h-16 rounded-full mx-auto border-2 border-rose-500 mb-2"/>
+                                    <p className="text-slate-800 text-sm">Olá, <span className="font-bold">{pendingGoogleUser.displayName}</span>!</p>
+                                    <p className="text-slate-500 text-xs mt-1">Defina seu código de vendedor (ID):</p>
+                                </div>
+                                <div className="relative"><div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400"><IconUser/></div><input type="text" value={googleCode} onChange={e => setGoogleCode(e.target.value)} disabled={isLoading} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none text-sm" required placeholder="Seu Código Único (Ex: 99206)"/></div>
+                                <button type="submit" disabled={isLoading} className="w-full bg-rose-700 hover:bg-rose-800 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all flex justify-center">{isLoading ? <div className="h-5 w-5"><IconLoader2/></div> : 'Finalizar Cadastro'}</button>
+                            </form>
+                        ) : !isRegistering ? (
+                            <form onSubmit={handleLogin} className="space-y-4">
+                                <div className="relative"><div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400"><IconUser/></div><input type="text" value={loginCode} onChange={e => setLoginCode(e.target.value)} disabled={isLoading} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none text-sm" required placeholder="Seu Código de Vendedor"/></div>
+                                <div className="relative"><div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400"><IconLock/></div><input type="password" value={password} onChange={e => setPassword(e.target.value)} disabled={isLoading} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none text-sm" required placeholder="Sua Senha"/></div>
+                                <button type="submit" disabled={isLoading} className="w-full bg-rose-700 hover:bg-rose-800 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all flex justify-center">{isLoading ? <div className="h-5 w-5"><IconLoader2/></div> : 'Entrar no Sistema'}</button>
+                                <div className="relative flex py-2 items-center"><div className="flex-grow border-t border-slate-300"></div><span className="flex-shrink-0 mx-4 text-slate-400 text-xs font-medium">OU</span><div className="flex-grow border-t border-slate-300"></div></div>
+                                <button type="button" onClick={handleGoogleLoginOnly} disabled={isLoading} className="w-full bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 text-sm"><div className="h-5 w-5"><IconGoogle/></div> Entrar com Google</button>
+                                <div className="text-center mt-4"><button type="button" onClick={() => setIsRegistering(true)} disabled={isLoading} className="text-sm font-bold text-slate-600 hover:text-rose-700 transition-colors">Não possui acesso? <span className="underline">Cadastrar</span></button></div>
+                            </form>
+                        ) : (
+                            <form onSubmit={handleRegister} className="space-y-3">
+                                <button type="button" onClick={handleGoogleRegisterInit} disabled={isLoading} className="w-full bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 text-sm mb-2"><div className="h-5 w-5"><IconGoogle/></div> Cadastrar com Google</button>
+                                <div className="relative flex py-1 items-center"><div className="flex-grow border-t border-slate-300"></div><span className="flex-shrink-0 mx-4 text-slate-400 text-xs font-medium">OU MANUAL</span><div className="flex-grow border-t border-slate-300"></div></div>
+                                <input type="text" value={regName} onChange={e => setRegName(e.target.value)} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none text-sm focus:border-rose-500" required placeholder="Nome Completo"/>
+                                <input type="text" value={regCode} onChange={e => setRegCode(e.target.value)} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none text-sm focus:border-rose-500" required placeholder="Cód Vendedor (ID)"/>
+                                <input type="email" value={regEmail} onChange={e => setRegEmail(e.target.value)} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none text-sm focus:border-rose-500" required placeholder="E-mail Corporativo"/>
+                                <input type="password" value={regPassword} onChange={e => setRegPassword(e.target.value)} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none text-sm focus:border-rose-500" required placeholder="Senha (Letras, Núm, Especiais)"/>
+                                <button type="submit" disabled={isLoading} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3.5 rounded-xl shadow-lg mt-2 flex justify-center">{isLoading ? <div className="h-5 w-5"><IconLoader2/></div> : 'Criar Cadastro'}</button>
+                                <div className="text-center mt-2"><button type="button" onClick={() => setIsRegistering(false)} disabled={isLoading} className="text-sm font-bold text-rose-700 hover:text-rose-800">Voltar para Login</button></div>
+                            </form>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const ProfileAdminScreen = ({ user, showMessage }) => {
+            const [usersList, setUsersList] = useState([]);
+            const [loading, setLoading] = useState(false);
+
+            useEffect(() => {
+                if (user.role === 'admin') {
+                    setLoading(true);
+                    const unsubscribe = db.collection('users').onSnapshot(snap => {
+                        setUsersList(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                        setLoading(false);
+                    }, err => { console.error(err); setLoading(false); });
+                    return () => unsubscribe();
+                }
+            }, [user.role]);
+
+            const changeRole = async (id, currentRole) => {
+                const newRole = currentRole === 'admin' ? 'vendedor' : 'admin';
+                await db.collection('users').doc(id).update({ role: newRole });
+                showMessage(`Nível alterado para ${newRole}`, 'success');
+            };
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-8">
+                        <div className="flex items-center gap-6 mb-6">
+                            <div className="h-24 w-24 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold text-3xl shadow-inner border border-rose-200 overflow-hidden">
+                                {user.avatar ? <img src={user.avatar} className="w-full h-full object-cover"/> : user.name.charAt(0)}
+                            </div>
+                            <div>
+                                <h2 className="text-2xl font-bold text-slate-800">{user.name}</h2>
+                                <p className="text-slate-500">{user.email}</p>
+                                <span className="inline-block mt-2 bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-bold border border-slate-200 uppercase tracking-wider">
+                                    Cargo: {user.role} | ID: {user.code}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {user.role === 'admin' && (
+                        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-6 border-b border-slate-100 bg-slate-50"><h3 className="text-lg font-bold text-slate-800">Gestão de Vendedores (Admin)</h3></div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left">
+                                    <thead className="bg-white border-b border-slate-200">
+                                        <tr><th className="p-4 text-slate-500 font-bold">Vendedor</th><th className="p-4 text-slate-500 font-bold">Cód</th><th className="p-4 text-slate-500 font-bold">Nível</th><th className="p-4 text-slate-500 font-bold">Ação</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {loading ? <tr><td colSpan="4" className="p-4 text-center">Carregando...</td></tr> : usersList.map(u => (
+                                            <tr key={u.id} className="border-b border-slate-50 hover:bg-slate-50">
+                                                <td className="p-4 font-medium text-slate-800">{u.name}<br/><span className="text-xs text-slate-400">{u.email}</span></td>
+                                                <td className="p-4 text-slate-600 font-mono">{u.code}</td>
+                                                <td className="p-4"><span className={`text-xs font-bold px-2 py-1 rounded ${u.role === 'admin' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>{u.role}</span></td>
+                                                <td className="p-4">
+                                                    {u.code !== '99206' && (
+                                                        <button onClick={() => changeRole(u.id, u.role)} className="text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded-lg font-bold transition-colors">Alternar Nível</button>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const DashboardScreen = ({ user }) => (
+            <div className="animate-in fade-in space-y-6">
+                <div className="bg-slate-900 rounded-3xl p-8 text-white relative overflow-hidden shadow-xl border border-slate-800">
+                    <img src={BG_IMAGE} className="absolute inset-0 w-full h-full object-cover opacity-20 mix-blend-overlay" />
+                    <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-rose-950/90 to-transparent"></div>
+                    <div className="relative z-10">
+                        <h2 className="text-3xl font-extrabold mb-1">Olá, {user.name}!</h2>
+                        <p className="text-rose-200 font-medium opacity-80">Bem-vindo ao seu painel operacional corporativo.</p>
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                        <div className="h-10 w-10 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center mb-4"><IconReceipt/></div>
+                        <p className="text-slate-500 font-semibold text-sm">Vendas no Mês</p>
+                        <h3 className="text-2xl font-black text-slate-800 mt-1">R$ 0,00</h3>
+                    </div>
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                        <div className="h-10 w-10 bg-blue-100 text-blue-700 rounded-xl flex items-center justify-center mb-4"><IconUsers/></div>
+                        <p className="text-slate-500 font-semibold text-sm">Clientes CRM</p>
+                        <h3 className="text-2xl font-black text-slate-800 mt-1">Ativo na Nuvem</h3>
+                    </div>
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                        <div className="h-10 w-10 bg-rose-100 text-rose-700 rounded-xl flex items-center justify-center mb-4"><IconFileText/></div>
+                        <p className="text-slate-500 font-semibold text-sm">Status da Tabela</p>
+                        <h3 className="text-xl font-bold text-slate-800 mt-1 truncate text-rose-600">Sincronizada</h3>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const PdfScreen = ({ user, products, setProducts, showMessage }) => {
+            const [isLoading, setIsLoading] = useState(false);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [cloudInfo, setCloudInfo] = useState(null);
+            const [showCloudModal, setShowCloudModal] = useState(false);
+            const [pdfVersions, setPdfVersions] = useState([]);
+            const [isLoadingVersions, setIsLoadingVersions] = useState(false);
+
+            useEffect(() => { 
+                if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; 
+                fetchCloudInfo();
+            }, []);
+
+            const fetchCloudInfo = async () => {
+                try {
+                    const doc = await db.collection('system_data').doc('shared_pdf').get();
+                    if(doc.exists) {
+                        const data = doc.data();
+                        const date = data.updatedAt ? data.updatedAt.toDate() : new Date();
+                        setCloudInfo({ date: date.toLocaleDateString('pt-BR') + ' às ' + date.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}) });
+                    }
+                } catch(e) { console.error(e) }
+            };
+
+            const fetchPdfVersions = async () => {
+                setIsLoadingVersions(true);
+                try {
+                    const snap = await db.collection('pdf_versions').orderBy('updatedAt', 'desc').limit(20).get();
+                    setPdfVersions(snap.docs.map(d => {
+                        const data = d.data();
+                        return { id: d.id, ...data, date: data.updatedAt ? data.updatedAt.toDate() : null };
+                    }));
+                } catch(e) { console.error(e); } finally { setIsLoadingVersions(false); }
+            };
+
+            const handleFileUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file || file.type !== 'application/pdf') { showMessage('Selecione um PDF válido.', 'error'); return; }
+                setIsLoading(true);
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                    let extractedProducts = [];
+                    
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        const linesMap = new Map();
+                        
+                        textContent.items.forEach(item => {
+                            const y = Math.round(item.transform[5] / 6) * 6; 
+                            if (!linesMap.has(y)) linesMap.set(y, []); linesMap.get(y).push(item);
+                        });
+                        
+                        const sortedY = Array.from(linesMap.keys()).sort((a, b) => b - a);
+                        
+                        sortedY.forEach(y => {
+                            const lineItems = linesMap.get(y).sort((a, b) => a.transform[4] - b.transform[4]);
+                            const lineText = lineItems.map(item => item.str).join(' ').replace(/\s+/g, ' ').trim();
+                            
+                            const match = lineText.match(/(?:^|\s)(\d{4,7})\s+([A-Z0-9ÇÃÕÁÉÍÓÚÂÊÔ].*)/i);
+                            if (match) {
+                                const code = match[1]; 
+                                let rest = match[2].trim(); 
+                                
+                                // O grande truque de limpeza de preço: achar o último número com vírgula de verdade!
+                                const priceMatches = [...rest.matchAll(/\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})\b/g)];
+                                let rawPriceStr = null;
+                                if (priceMatches.length > 0) { 
+                                    rawPriceStr = priceMatches[priceMatches.length - 1][1]; 
+                                }
+                                const rawPrice = parsePrice(rawPriceStr) || 0; 
+                                
+                                // Limpa o nome do produto cortando fora as colunas de tabela do PDF
+                                let finalName = rest.split(/Kg\s*\[?L\]?|Vista\s*\/\s*PIX/i)[0];
+                                finalName = finalName.replace(/\s+(?:CX|PC|PCT|BD|PLT|FD|UN|SC|GF|CB)\s+(?:\d+.*)?$/i, '');
+                                finalName = finalName.replace(/\s+(?:\d+(?:\.\d+)?\s*Kg).*$/i, '');
+                                finalName = finalName.replace(/\s+(?:CX|PC|PCT|BD|PLT|FD|UN|SC|GF|CB)\s*$/i, '');
+                                finalName = finalName.replace(/[-—.,]+$/, '').trim();
+
+                                const { hasDiscount, unitFinalPrice } = checkDiscountRules(code, finalName, rawPrice);
+                                
+                                extractedProducts.push({ 
+                                    code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice 
+                                });
+                            }
+                        });
+                    }
+                    setProducts(extractedProducts); 
+                    showMessage(`Sucesso! ${extractedProducts.length} produtos carregados (Incluindo os sem preço).`, 'success');
+                } catch (err) { showMessage('Erro ao processar PDF.', 'error'); } finally { setIsLoading(false); }
+            };
+
+            const handleDistribute = async () => {
+                try {
+                    setIsLoading(true);
+                    const now = new Date();
+                    await db.collection('system_data').doc('shared_pdf').set({ products, updatedAt: now });
+                    await db.collection('pdf_versions').add({ products, updatedAt: now, productCount: products.length });
+                    showMessage('Tabela salva na Nuvem para todos os Vendedores!', 'success');
+                    fetchCloudInfo();
+                } catch(e) { showMessage('Erro ao distribuir tabela.', 'error'); } finally { setIsLoading(false); }
+            };
+
+            const handleDownloadCloud = async () => {
+                try {
+                    setIsLoading(true);
+                    const doc = await db.collection('system_data').doc('shared_pdf').get();
+                    if(doc.exists) {
+                        setProducts(doc.data().products);
+                        showMessage('Tabela mais recente da Nuvem baixada com sucesso!', 'success');
+                    } else { showMessage('O Administrador ainda não distribuiu nenhuma tabela.', 'error'); }
+                } catch(e) { showMessage('Erro ao baixar tabela da nuvem.', 'error'); } finally { setIsLoading(false); }
+            };
+
+            const filteredProducts = useMemo(() => {
+                if (!searchTerm) return products; const searchNorm = normalizeForSearch(searchTerm);
+                return products.filter(p => normalizeForSearch(p.name).includes(searchNorm) || p.code.includes(searchNorm));
+            }, [products, searchTerm]);
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    {showCloudModal && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md flex flex-col max-h-[70vh] overflow-hidden">
+                                <div className="p-5 border-b bg-slate-50 flex justify-between items-center">
+                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><div className="h-5 w-5"><IconCloudDownload/></div> Histórico de Tabelas</h2>
+                                    <button onClick={() => setShowCloudModal(false)} className="h-8 w-8 flex items-center justify-center rounded-full bg-slate-200 hover:bg-slate-300 transition-colors"><div className="h-4 w-4"><IconX/></div></button>
+                                </div>
+                                <div className="overflow-y-auto flex-1 p-4 space-y-2">
+                                    {isLoadingVersions ? (
+                                        <div className="flex justify-center py-8"><div className="h-6 w-6 text-rose-600"><IconLoader2/></div></div>
+                                    ) : pdfVersions.length === 0 ? (
+                                        <div className="text-center py-8 text-slate-400 text-sm font-medium">Nenhuma versão salva. Distribua uma tabela para ver o histórico.</div>
+                                    ) : pdfVersions.map((v, i) => (
+                                        <div key={v.id} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl hover:border-rose-300 transition-colors">
+                                            <div>
+                                                <p className="font-bold text-slate-700 text-sm">{i === 0 ? '🟢 Versão Atual' : `Versão ${pdfVersions.length - i}`}</p>
+                                                <p className="text-xs text-slate-500 mt-0.5">{v.date ? v.date.toLocaleDateString('pt-BR') + ' às ' + v.date.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'}) : 'Data desconhecida'} • {v.productCount || (v.products?.length || 0)} produtos</p>
+                                            </div>
+                                            <button onClick={() => { setProducts(v.products); setShowCloudModal(false); showMessage('Tabela carregada com sucesso!', 'success'); }} className="text-xs bg-rose-700 hover:bg-rose-800 text-white px-3 py-1.5 rounded-lg font-bold shadow-sm transition-colors">Carregar</button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="p-4 border-t bg-slate-50">
+                                    <button onClick={async () => { try { setIsLoading(true); const doc = await db.collection('system_data').doc('shared_pdf').get(); if(doc.exists){ setProducts(doc.data().products); setShowCloudModal(false); showMessage('Tabela atual carregada!','success'); } else { showMessage('Nenhuma tabela distribuída ainda.','error'); } } catch(e){ showMessage('Erro ao baixar.','error'); } finally{ setIsLoading(false); } }} disabled={isLoading} className="w-full bg-slate-800 hover:bg-slate-900 text-white py-2.5 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2">
+                                        <div className="h-4 w-4"><IconCloudDownload/></div> Baixar Tabela Atual
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+                        <div>
+                            <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2"><div className="h-6 w-6"><IconFileText /></div> Tabela de Preços</h1>
+                            <p className="text-slate-500 text-sm mt-1">Sincronizada automaticamente no seu dispositivo.</p>
+                            {cloudInfo && <p className="text-xs font-bold text-emerald-600 mt-2 bg-emerald-50 inline-block px-2 py-1 rounded-md border border-emerald-100">Última Tabela da Nuvem: {cloudInfo.date}</p>}
+                        </div>
+                        
+                        <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+                            <button onClick={() => { fetchPdfVersions(); setShowCloudModal(true); }} disabled={isLoading} className="bg-slate-800 hover:bg-slate-900 text-white px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md">
+                                <div className="h-5 w-5"><IconCloudDownload /></div> Nuvem
+                            </button>
+                            <div className="relative flex-1 sm:flex-none">
+                                <input type="file" accept=".pdf" onChange={handleFileUpload} disabled={isLoading} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                <button disabled={isLoading} className="w-full bg-rose-700 hover:bg-rose-800 text-white px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md">
+                                    <div className="h-5 w-5">{isLoading ? <IconLoader2 /> : <IconUpload />}</div>{isLoading ? 'Lendo...' : 'Ler PDF Local'}
+                                </button>
+                            </div>
+                            {user.role === 'admin' && products.length > 0 && (
+                                <button onClick={handleDistribute} disabled={isLoading} className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md">
+                                    <div className="h-5 w-5"><IconCloudUpload /></div> Distribuir Tabela
+                                </button>
+                            )}
+                        </div>
+                    </header>
+
+                    {products.length > 0 && (
+                        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col h-[60vh] overflow-hidden">
+                            <div className="p-4 border-b border-slate-100 bg-slate-50 relative"><div className="absolute left-7 top-1/2 -translate-y-1/2 text-slate-400 h-5 w-5"><IconSearch /></div><input type="text" placeholder="Pesquise por código ou nome..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:border-rose-500 outline-none font-medium" /></div>
+                            <div className="overflow-auto flex-1">
+                                <table className="w-full text-left border-collapse">
+                                    <thead className="bg-white sticky top-0 shadow-sm"><tr><th className="p-4 font-bold text-slate-600 border-b">Cód</th><th className="p-4 font-bold text-slate-600 border-b">Produto</th><th className="p-4 font-bold text-slate-600 border-b text-right">Orig.</th><th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">À Vista (-3%)</th></tr></thead>
+                                    <tbody>
+                                        {filteredProducts.map((p, i) => (
+                                            <tr key={i} className="hover:bg-slate-50 border-b border-slate-50">
+                                                <td className="p-4 text-slate-500 font-bold">{p.code}</td>
+                                                <td className="p-4 text-slate-800 font-medium">{p.name}</td>
+                                                <td className="p-4 text-right text-slate-600">{formatPrice(p.originalPrice)}</td>
+                                                <td className="p-4 text-right font-bold text-rose-700 bg-rose-50/30">{formatPrice(p.discountedPrice)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ResumoScreen = ({ products, showMessage, clients, setActiveRoute }) => {
+            const [orderText, setOrderText] = useState('');
+            const [showModal, setShowModal] = useState(false);
+            const [pendingCustomer, setPendingCustomer] = useState('');
+            const [pendingSpamov, setPendingSpamov] = useState('');
+            const [pendingItems, setPendingItems] = useState([]);
+            const [orderSummary, setOrderSummary] = useState(null);
+            const [showHistoryPrompt, setShowHistoryPrompt] = useState(false);
+            const [clientToSave, setClientToSave] = useState(null);
+            const [editedPrices, setEditedPrices] = useState({});
+            const [detectedClientName, setDetectedClientName] = useState('');
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [wantCreateProfile, setWantCreateProfile] = useState(true);
+
+            const handleProcessText = (forcedText) => {
+                const txt = typeof forcedText === 'string' ? forcedText : orderText;
+                if (!txt.trim()) { showMessage('Cole o texto do pedido no campo acima.', 'error'); return; }
+                setIsProcessing(true);
+                try {
+                    // Extrai cliente e SPAmov SEMPRE
+                    let customerName = '', spamov = '', clienteName = '';
+                    const spMatch = txt.match(/SPAmov[\s\t]*(\d+)/i);
+                    if (spMatch) spamov = spMatch[1];
+                    const clienteMatch = txt.match(/CLIENTE\s*\[f\]\s*(\d+)\s*[-–]?\s*([^\n\r]+)?/i)
+                        || txt.match(/(?:cliente|código|codigo)[\s\t:\-]+(\d+)/i);
+                    if (clienteMatch) {
+                        customerName = clienteMatch[1].trim();
+                        if (clienteMatch[2]) clienteName = clienteMatch[2].replace(/\s*\[.*?\]\s*/g, '').trim().split(/\s{2,}/)[0];
+                    }
+
+                    // Extrai produtos apenas se a tabela estiver carregada
+                    let extractedItemsMap = new Map();
+                    if (products.length > 0) {
+                        txt.split('\n').forEach(line => {
+                            if (!line.trim() || line.toUpperCase().includes('CLIENTE') || line.toUpperCase().includes('SPAMOV')) return;
+                            const cleanLine = line.replace(/\([^)]+\)/g, ' ').trim();
+                            let codeFound = null;
+                            const possibleNumbers = cleanLine.match(/\d+/g) || [];
+                            for (let numStr of possibleNumbers) {
+                                if (products.some(p => p.code === numStr)) { codeFound = numStr; break; }
+                            }
+                            if (codeFound && !extractedItemsMap.has(codeFound)) {
+                                const rp = products.find(p => p.code === codeFound);
+                                extractedItemsMap.set(codeFound, { code: codeFound, name: rp.name, quantity: '' });
+                            }
+                        });
+                    }
+
+                    // Se não achou nada útil, ainda abre o modal se pelo menos tem ID do cliente
+                    if (extractedItemsMap.size === 0 && !customerName) {
+                        showMessage('Nenhuma informação reconhecida no texto.', 'error');
+                        setIsProcessing(false); return;
+                    }
+
+                    const existingCli = clients.find(c => c.code === customerName);
+                    setWantCreateProfile(!existingCli); // padrão: criar se for novo
+                    setPendingCustomer(customerName);
+                    setPendingSpamov(spamov);
+                    setPendingItems(Array.from(extractedItemsMap.values()));
+                    setDetectedClientName(clienteName);
+                    setIsProcessing(false);
+                    setShowModal(true);
+                } catch (err) { showMessage('Erro crítico ao ler pedido.', 'error'); setIsProcessing(false); }
+            };
+
+            const handleConfirmModal = async () => {
+                const validItems = pendingItems.filter(item => Number(item.quantity) > 0);
+                const processed = validItems.map(item => {
+                    const rp = products.find(p => p.code === item.code);
+                    const { hasDiscount, origPrice, unitFinalPrice } = checkDiscountRules(item.code, rp.name, rp.originalPrice);
+                    const qty = Number(item.quantity);
+                    return { ...item, quantity: qty, unitFinalPrice, discountedPrice: unitFinalPrice * qty, originalPrice: origPrice * qty, hasDiscount };
+                });
+                setEditedPrices({});
+                setOrderSummary({ customerCode: pendingCustomer, spamov: pendingSpamov, items: processed, totalDiscounted: processed.reduce((acc, c) => acc + c.discountedPrice, 0) });
+                setShowModal(false);
+
+                if (pendingCustomer) {
+                    const existingClient = clients.find(c => c.code === pendingCustomer);
+                    if (existingClient && validItems.length > 0) {
+                        // Cliente existe: só mostra prompt pra atualizar histórico
+                        setClientToSave(existingClient);
+                        setShowHistoryPrompt(true);
+                    } else if (!existingClient && wantCreateProfile) {
+                        // Cliente novo e usuário quer criar perfil: cria e navega
+                        try {
+                            const autoName = detectedClientName || `Cliente ${pendingCustomer}`;
+                            const newCodes = processed.map(i => i.code);
+                            const docRef = await db.collection('clients').add({
+                                name: autoName, code: pendingCustomer, phone: '', cnpj: '',
+                                address: '', contactName: '', history: newCodes, rawData: orderText,
+                                profile: { title: "Cadastro Automático", color: "bg-slate-100 text-slate-600" }
+                            });
+                            window.localStorage.setItem('friganso_open_client_id', docRef.id);
+                            showMessage(`Perfil de ${autoName} criado! Abrindo no CRM...`, 'success');
+                            setTimeout(() => setActiveRoute('clients'), 900);
+                        } catch(e) { showMessage('Erro ao criar perfil.', 'error'); }
+                    } else if (!existingClient && !wantCreateProfile && validItems.length > 0) {
+                        // Não quer criar perfil mas tem itens: só mostra histórico prompt
+                        setClientToSave({ code: pendingCustomer, isNew: true });
+                        setShowHistoryPrompt(true);
+                    }
+                }
+            };
+
+            const handleSaveToHistory = async () => {
+                if (!clientToSave) return;
+                const newCodes = orderSummary.items.map(i => i.code);
+                try {
+                    if (clientToSave.isNew) {
+                        const autoName = detectedClientName || `Cliente ${clientToSave.code}`;
+                        const docRef = await db.collection('clients').add({ name: autoName, code: clientToSave.code, phone: '', cnpj: '', address: '', contactName: '', history: newCodes, rawData: orderText, profile: { title: "Cadastro Automático", color: "bg-slate-100 text-slate-600" } });
+                        window.localStorage.setItem('friganso_open_client_id', docRef.id);
+                        showMessage('Cliente criado! Abrindo perfil no CRM...', 'success');
+                        setTimeout(() => setActiveRoute('clients'), 900);
+                    } else {
+                        const currentHistory = clientToSave.history || [];
+                        const updatedHistory = [...new Set([...currentHistory, ...newCodes])];
+                        await db.collection('clients').doc(clientToSave.id).update({ history: updatedHistory });
+                        showMessage('Histórico do cliente atualizado!', 'success');
+                    }
+                    setShowHistoryPrompt(false);
+                } catch (err) { showMessage('Erro ao salvar no histórico.', 'error'); }
+            };
+
+            const generateWhatsAppText = () => {
+                if (!orderSummary) return '';
+                let txt = '';
+                if (orderSummary.customerCode) txt += `ID: ${orderSummary.customerCode}\n`;
+                if (orderSummary.spamov) txt += `SPAmov: ${orderSummary.spamov}\n`;
+                if (txt !== '') txt += '\n';
+                orderSummary.items.forEach(item => {
+                    const price = editedPrices[item.code] !== undefined ? editedPrices[item.code] : item.unitFinalPrice;
+                    txt += `${item.code} - ${item.quantity}x - ${formatPrice(price)}\n`;
+                });
+                return txt.trim();
+            };
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    {showModal && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[85vh] overflow-hidden">
+
+                                {/* Cabeçalho: cliente detectado */}
+                                <div className="p-5 border-b bg-slate-50">
+                                    <h2 className="text-lg font-bold text-slate-800 mb-3">Resumo Detectado</h2>
+                                    <div className="flex flex-wrap gap-2 mb-3">
+                                        {pendingCustomer && <span className="text-sm font-black bg-slate-900 text-white px-3 py-1.5 rounded-lg">ID: {pendingCustomer}</span>}
+                                        {detectedClientName && <span className="text-sm font-bold bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg border">{detectedClientName}</span>}
+                                        {pendingSpamov && <span className="text-sm font-bold bg-rose-100 text-rose-700 px-3 py-1.5 rounded-lg border border-rose-200">SPAmov: {pendingSpamov}</span>}
+                                        {pendingItems.length > 0 && <span className="text-sm font-bold bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg border border-emerald-200">{pendingItems.length} produto(s)</span>}
+                                        {pendingItems.length === 0 && products.length === 0 && <span className="text-xs font-bold bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg border border-amber-200">⚠ Tabela não carregada</span>}
+                                    </div>
+
+                                    {/* Pergunta sobre perfil */}
+                                    {pendingCustomer && (() => {
+                                        const existingCli = clients.find(c => c.code === pendingCustomer);
+                                        return existingCli ? (
+                                            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center gap-2">
+                                                <span className="text-emerald-600 text-lg">✓</span>
+                                                <p className="text-sm font-bold text-emerald-800">Cliente já cadastrado: <span className="font-black">{existingCli.name}</span></p>
+                                            </div>
+                                        ) : (
+                                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                                                <p className="text-sm font-bold text-blue-800 mb-2">🆕 ID {pendingCustomer} não está no seu CRM</p>
+                                                <label className="flex items-center gap-3 cursor-pointer">
+                                                    <div onClick={() => setWantCreateProfile(!wantCreateProfile)} className={`w-12 h-6 rounded-full transition-colors relative flex-shrink-0 ${wantCreateProfile ? 'bg-blue-600' : 'bg-slate-300'}`}>
+                                                        <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${wantCreateProfile ? 'left-6' : 'left-0.5'}`}></div>
+                                                    </div>
+                                                    <span className="text-sm font-bold text-blue-700">{wantCreateProfile ? 'Criar perfil no CRM ao confirmar' : 'Não criar perfil agora'}</span>
+                                                </label>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
+
+                                {/* Itens do pedido */}
+                                {pendingItems.length > 0 ? (
+                                    <>
+                                        <div className="px-5 pt-4 pb-1 bg-white"><p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Informe as quantidades</p></div>
+                                        <div className="p-4 overflow-y-auto flex-1 space-y-3">
+                                            {pendingItems.map((item, idx) => (
+                                                <div key={idx} className="flex items-center justify-between p-4 rounded-xl border border-slate-200 bg-white hover:border-rose-200 transition-colors">
+                                                    <div><span className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded">CÓD: {item.code}</span><p className="font-bold text-slate-800 mt-1 text-sm">{item.name}</p></div>
+                                                    <input type="number" min="0" value={item.quantity} onChange={(e) => { const n = [...pendingItems]; n[idx].quantity = e.target.value; setPendingItems(n); }} className="w-24 p-3 text-center border border-slate-300 rounded-xl outline-none focus:border-rose-500 font-bold text-lg" placeholder="Qtd" autoFocus={idx===0}/>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="p-6 flex-1 flex items-center justify-center text-center">
+                                        <div>
+                                            <p className="text-slate-500 text-sm font-medium mb-1">Nenhum produto encontrado no texto.</p>
+                                            <p className="text-slate-400 text-xs">{products.length === 0 ? 'Baixe a Tabela do Dia para reconhecer os códigos.' : 'Os códigos do pedido não estão na tabela carregada.'}</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="p-5 border-t flex gap-3 justify-end bg-slate-50">
+                                    <button onClick={() => setShowModal(false)} className="px-6 py-3 font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors">Cancelar</button>
+                                    <button onClick={handleConfirmModal} className="px-6 py-3 font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-xl shadow-lg transition-colors">
+                                        {wantCreateProfile && pendingCustomer && !clients.find(c=>c.code===pendingCustomer) ? 'Confirmar e Criar Perfil' : 'Confirmar'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    <div className="bg-white rounded-3xl shadow-xl border border-slate-200 p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="text-xl font-bold text-rose-800 flex items-center gap-2"><div className="h-6 w-6"><IconReceipt /></div> Resumo de Pedido</h2>
+                            <div className="flex items-center gap-2">
+                                {products.length > 0
+                                    ? <span className="text-xs font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg border border-emerald-200">✓ Tabela carregada ({products.length} produtos)</span>
+                                    : <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-lg border border-amber-200">⚠ Baixe a Tabela primeiro</span>
+                                }
+                            </div>
+                        </div>
+
+                        <div className={`relative rounded-2xl border-2 transition-all duration-200 ${orderText.trim() ? 'border-rose-400 shadow-md shadow-rose-100' : 'border-slate-200'}`}>
+                            <textarea
+                                value={orderText}
+                                onChange={e => setOrderText(e.target.value)}
+                                onPaste={e => { const t = e.clipboardData.getData('text'); setTimeout(() => handleProcessText(t), 120); }}
+                                placeholder="Cole aqui o texto do pedido do ERP..."
+                                className="w-full h-44 p-4 rounded-2xl outline-none resize-none font-mono text-sm bg-slate-50 focus:bg-white transition-colors">
+                            </textarea>
+                            {orderText.trim() && (
+                                <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                                    <span className="text-[10px] text-slate-400 font-mono">{orderText.split('\n').length} linhas</span>
+                                    <button onClick={() => { setOrderText(''); setOrderSummary(null); setShowHistoryPrompt(false); }} className="text-[10px] font-bold text-slate-400 hover:text-red-500 bg-white border border-slate-200 px-2 py-0.5 rounded-md transition-colors">limpar</button>
+                                </div>
+                            )}
+                        </div>
+
+                        <button
+                            onClick={() => handleProcessText()}
+                            disabled={isProcessing || !orderText.trim()}
+                            className={`w-full mt-4 py-4 rounded-2xl font-black text-base shadow-lg transition-all duration-200 flex items-center justify-center gap-3
+                                ${orderText.trim() && !isProcessing
+                                    ? 'bg-rose-700 hover:bg-rose-800 active:scale-95 text-white cursor-pointer shadow-rose-200'
+                                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+                            {isProcessing
+                                ? <><div className="h-5 w-5"><IconLoader2 /></div> Analisando...</>
+                                : <><div className="h-5 w-5"><IconReceipt /></div> Gerar Resumo do Pedido</>
+                            }
+                        </button>
+                    </div>
+                    {orderSummary && !showModal && (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 flex flex-col relative">
+                                <div className="mb-4">
+                                    <h3 className="text-lg font-bold text-slate-800">Itens do Pedido</h3>
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        {orderSummary.customerCode && <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-1 rounded-lg border border-slate-200">ID: {orderSummary.customerCode}</span>}
+                                        {orderSummary.spamov && <span className="text-xs font-bold bg-rose-100 text-rose-700 px-2 py-1 rounded-lg border border-rose-200">SPAmov: {orderSummary.spamov}</span>}
+                                    </div>
+                                </div>
+                                <div className="overflow-auto flex-1">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead className="bg-white sticky top-0 shadow-sm">
+                                            <tr>
+                                                <th className="p-4 font-bold text-slate-600 border-b">Cód</th>
+                                                <th className="p-4 font-bold text-slate-600 border-b text-center">Qtd</th>
+                                                <th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">Preço Unit.</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {orderSummary.items.map((i, idx) => (
+                                                <tr key={idx} className="hover:bg-slate-50 border-b border-slate-50">
+                                                    <td className="p-4 text-slate-500 font-bold">{i.code}</td>
+                                                    <td className="p-4 text-center text-slate-600 font-bold">{i.quantity}x</td>
+                                                    <td className="p-4 bg-rose-50/30 text-right">
+                                                        <input
+                                                            type="text"
+                                                            value={editedPrices[i.code] !== undefined ? String(editedPrices[i.code]).replace('.', ',') : (i.unitFinalPrice||0).toFixed(2).replace('.',',')}
+                                                            onChange={e => { const num = parseFloat(e.target.value.replace(',','.')); setEditedPrices(prev => ({...prev, [i.code]: isNaN(num) ? i.unitFinalPrice : num})); }}
+                                                            className="w-28 text-right font-bold text-rose-700 bg-transparent border-b-2 border-rose-200 focus:border-rose-600 outline-none px-1 py-0.5"
+                                                        />
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {showHistoryPrompt && (
+                                     <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-2">
+                                         <div>
+                                            <p className="text-sm font-bold text-blue-800">{clientToSave?.isNew ? '🆕 Cliente não cadastrado!' : '📋 Adicionar ao histórico?'}</p>
+                                            <p className="text-xs text-blue-600 mt-1">{clientToSave?.isNew
+                                                ? `ID ${clientToSave.code}${detectedClientName ? ` · ${detectedClientName}` : ''} — deseja cadastrar e salvar o histórico?`
+                                                : `Adicionar estes itens ao histórico de ${clientToSave?.name || `ID ${clientToSave?.code}`}?`}
+                                            </p>
+                                         </div>
+                                         <div className="flex gap-2">
+                                            <button onClick={() => setShowHistoryPrompt(false)} className="px-3 py-1.5 text-xs font-bold text-blue-600 hover:bg-blue-100 rounded-lg transition-colors">Não</button>
+                                            <button onClick={handleSaveToHistory} className="px-3 py-1.5 text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 rounded-lg shadow-sm transition-colors">Sim, Salvar</button>
+                                         </div>
+                                     </div>
+                                )}
+                            </div>
+                            
+                            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+                                <div className="p-4 border-b bg-slate-50 flex justify-between items-center">
+                                    <h3 className="font-semibold text-slate-700 flex items-center gap-2"><div className="h-5 w-5 text-emerald-600"><IconWhatsApp /></div> Resumo WhatsApp</h3>
+                                    <button onClick={() => { navigator.clipboard.writeText(generateWhatsAppText()); showMessage('Copiado para o Zap!', 'success'); }} className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-4 py-2 rounded-xl text-sm font-bold transition-colors">Copiar Resumo</button>
+                                </div>
+                                <div className="p-6 bg-slate-100 flex-1 overflow-y-auto" style={{backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')", backgroundSize: 'cover', backgroundPosition: 'center'}}>
+                                    <div className="bg-[#e1ffc7] p-3 rounded-xl shadow-sm border border-[#d3f4b8] inline-block text-left relative min-w-[200px] max-w-full">
+                                        <pre className="font-mono text-sm whitespace-pre-wrap text-slate-800 font-medium">{generateWhatsAppText()}</pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const OrcamentosScreen = ({ products, showMessage, activeRoute }) => {
+            const [search, setSearch] = useState(''); 
+            const [selectedCodes, setSelectedCodes] = useState(new Set());
+            
+            useEffect(() => {
+                const offerCodes = window.localStorage.getItem('friganso_offer_codes');
+                if (offerCodes && activeRoute === 'orcamentos') {
+                    try { setSelectedCodes(new Set(JSON.parse(offerCodes))); window.localStorage.removeItem('friganso_offer_codes'); showMessage('Itens do histórico carregados na oferta.', 'success'); } catch(e) {}
+                }
+            }, [activeRoute]);
+
+            const filtered = useMemo(() => { 
+                if (!search.trim() && selectedCodes.size > 0) return products.filter(p => selectedCodes.has(p.code));
+                if (!search.trim()) return []; const norm = normalizeForSearch(search); return products.filter(p => normalizeForSearch(p.name).includes(norm) || p.code.includes(norm)); 
+            }, [products, search, selectedCodes]);
+
+            const toggleCode = code => { const s = new Set(selectedCodes); s.has(code) ? s.delete(code) : s.add(code); setSelectedCodes(s); };
+            
+            const generateText = () => {
+                if(selectedCodes.size === 0) return '';
+                let txt = search.trim() ? `🥩 *${search.toUpperCase()}*\n\n` : `🥩 *ORÇAMENTO*\n\n`;
+                products.filter(p => selectedCodes.has(p.code)).forEach(p => {
+                    const { hasDiscount, origPrice, unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
+                    txt += `Cod: ${p.code}\n\n${p.name}\n`;
+                    if(hasDiscount) txt += `💰 Valor: ~${formatPrice(origPrice)}~ por *${formatPrice(unitFinalPrice)}/kg* 🔥 (Com 3% de Desconto)\n\n`;
+                    else txt += `💰 Valor: *${formatPrice(origPrice)}/kg*\n\n`;
+                }); return txt.trim();
+            };
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6"><h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2 mb-4"><div className="h-6 w-6"><IconTag /></div> Gerador de Zap</h1><input type="text" placeholder="Digite Picanha, Costela..." value={search} onChange={e=>setSearch(e.target.value)} disabled={products.length===0} className="w-full p-4 rounded-xl border border-slate-200 outline-none focus:border-rose-500 font-bold bg-slate-50"/></header>
+                    {(search || selectedCodes.size > 0) && (
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                            <div className="lg:col-span-4 bg-white rounded-3xl border border-slate-200 flex flex-col h-[600px] overflow-hidden">
+                                <div className="p-4 border-b bg-slate-50 flex justify-between items-center font-bold text-slate-700">
+                                    <span>Produtos</span> 
+                                    <div className="flex gap-2">
+                                        {selectedCodes.size > 0 && <button onClick={() => setSelectedCodes(new Set())} className="text-xs bg-rose-100 hover:bg-rose-200 text-rose-700 px-3 py-1.5 rounded-lg font-bold shadow-sm">Desmarcar</button>}
+                                        <button onClick={() => setSelectedCodes(new Set(filtered.map(f=>f.code)))} className="text-xs bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold shadow-sm">Marcar Todos</button>
+                                    </div>
+                                </div>
+                                <div className="overflow-y-auto p-2 space-y-1">
+                                    {filtered.map(p => (
+                                        <label key={p.code} className={`flex items-start gap-3 p-4 rounded-xl cursor-pointer border-2 transition-all ${selectedCodes.has(p.code) ? 'border-rose-500 bg-rose-50 shadow-sm' : 'border-transparent hover:bg-slate-50'}`}>
+                                            <input type="checkbox" checked={selectedCodes.has(p.code)} onChange={()=>toggleCode(p.code)} className="mt-1 h-5 w-5 text-rose-700 rounded flex-shrink-0"/>
+                                            <div className="flex-1">
+                                                <span className="text-[10px] font-bold text-slate-500 bg-slate-200/50 px-2 py-0.5 rounded-full inline-block mb-1 border border-slate-200">Cód: {p.code}</span>
+                                                <p className="font-bold text-slate-800 text-sm leading-tight">{p.name}</p>
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="lg:col-span-8 bg-white rounded-3xl border border-slate-200 flex flex-col h-[600px] overflow-hidden">
+                                <div className="p-4 border-b bg-slate-50 flex justify-between items-center font-bold text-slate-700">
+                                    <span className="flex items-center gap-2"><div className="h-5 w-5 text-emerald-600"><IconWhatsApp/></div> Preview Zap</span>
+                                    <button onClick={() => { navigator.clipboard.writeText(generateText()); showMessage('Copiado para o Zap!', 'success'); }} className="bg-rose-700 hover:bg-rose-800 transition-colors text-white px-5 py-2.5 rounded-xl text-sm shadow-md">Copiar Orçamento</button>
+                                </div>
+                                <div className="p-6 bg-slate-100 flex-1 overflow-y-auto" style={{backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')", backgroundSize: 'cover', backgroundPosition: 'center'}}>
+                                    {selectedCodes.size > 0 ? (
+                                        <div className="bg-[#e1ffc7] p-5 rounded-2xl shadow-sm border border-[#d3f4b8] relative inline-block min-w-[300px] max-w-full">
+                                            <pre className="font-mono text-sm whitespace-pre-wrap text-slate-800 font-medium">{generateText()}</pre>
+                                        </div>
+                                    ) : (
+                                        <div className="h-full flex items-center justify-center text-center"><div className="bg-white/95 p-4 rounded-xl shadow-sm border border-slate-200"><p className="text-slate-600 font-medium">Selecione produtos na lista ao lado.</p></div></div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const LikertScale = ({ question, value, onChange }) => (
+            <div className="mb-4 bg-white p-4 rounded-xl border border-slate-200 hover:border-rose-300 transition-colors shadow-sm"><p className="font-semibold text-slate-700 mb-3 text-sm">{question}</p><div className="flex items-center justify-between gap-2"><span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase">1 - Não</span><div className="flex gap-1.5 sm:gap-3">{[1, 2, 3, 4, 5].map(num => (<button key={num} type="button" onClick={() => onChange(num)} className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm transition-all border-2 ${value === num ? 'bg-rose-700 border-rose-700 text-white shadow-md transform scale-110' : 'bg-slate-50 border-slate-300 text-slate-500 hover:border-rose-400 hover:bg-rose-50'}`}>{num}</button>))}</div><span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase">5 - Sim</span></div></div>
+        );
+
+        const ClientsScreen = ({ products, showMessage, setActiveRoute }) => {
+            const [clients, setClients] = useState([]);
+            const [isAdding, setIsAdding] = useState(false);
+            const [rawClientText, setRawClientText] = useState('');
+            const [selectedClient, setSelectedClient] = useState(null);
+            const [editForm, setEditForm] = useState({});
+            const [rawHistoryText, setRawHistoryText] = useState('');
+            const [isExtractingHistory, setIsExtractingHistory] = useState(false);
+            const [selectedHistoryCodes, setSelectedHistoryCodes] = useState(new Set());
+            const [rawProfileText, setRawProfileText] = useState('');
+
+            useEffect(() => {
+                const unsubscribe = db.collection('clients').onSnapshot(snap => setClients(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+                return () => unsubscribe();
+            }, []);
+
+            // Auto-abre perfil do cliente recém-criado vindo do Resumo de Pedido
+            useEffect(() => {
+                const pendingId = window.localStorage.getItem('friganso_open_client_id');
+                if (pendingId && clients.length > 0) {
+                    const found = clients.find(c => c.id === pendingId);
+                    if (found) {
+                        window.localStorage.removeItem('friganso_open_client_id');
+                        setSelectedClient(found);
+                    }
+                }
+            }, [clients]);
+
+            useEffect(() => {
+                if (selectedClient) {
+                    const current = clients.find(c => c.id === selectedClient.id);
+                    if (current) setEditForm(current);
+                }
+            }, [selectedClient, clients]);
+
+            useEffect(() => {
+                if (selectedClient) {
+                    const current = clients.find(c => c.id === selectedClient.id);
+                    if (current) setSelectedHistoryCodes(new Set(current.history || []));
+                } else {
+                    setSelectedHistoryCodes(new Set());
+                    setRawProfileText('');
+                }
+            }, [selectedClient ? selectedClient.id : null]);
+            
+            const questionsDefinition = [{ id: 'q1', text: '1. Possui açougue interno e desossa carnes?' }, { id: 'q2', text: '2. Compra peças inteiras no osso (Dianteiro/Banda)?' }, { id: 'q3', text: '3. Prefere caixarias já limpas/porcionadas?' }, { id: 'q4', text: '4. Alta demanda por carnes resfriadas (não congeladas)?' }, { id: 'q5', text: '5. Possui setor de frios fatiados na hora?' }, { id: 'q6', text: '6. Compra grande volume de embutidos (Mortadela)?' }, { id: 'q7', text: '7. Serve refeições prontas (Restaurante)?' }, { id: 'q8', text: '8. Preferência por laticínios (Mussarela, Prato)?' }, { id: 'q9', text: '9. Fatia bifes para exposição em balcão?' }, { id: 'q10', text: '10. Busca padronização extrema nos cortes?' }, { id: 'q11', text: '11. Processa carne moída no estabelecimento?' }, { id: 'q12', text: '12. Possui câmara fria para estocagem?' }, { id: 'q13', text: '13. Preferência por produtos de giro rápido/validade curta?' }, { id: 'q14', text: '14. Compra complementos (Pão de alho, Batata)?' }, { id: 'q15', text: '15. Variedade grande de itens (mix amplo)?' }, { id: 'q16', text: '16. Concentra pedidos em poucos itens de volume altíssimo?' }, { id: 'q17', text: '17. Forte foco em churrasco (Picanha, Costela)?' }, { id: 'q18', text: '18. Demanda constante por miúdos/ossos?' }, { id: 'q19', text: '19. Decide compra baseado no menor preço?' }, { id: 'q20', text: '20. Exige marcas específicas para prateleira?' }];
+            const initialFormState = { name: '', contactName: '', phone: '', code: '', cnpj: '', address: '' }; questionsDefinition.forEach(q => initialFormState[q.id] = 0);
+            const [formData, setFormData] = useState(initialFormState);
+
+            const calculateClientProfile = (data) => {
+                const acougueScore = data.q1 + data.q2 + data.q4 + data.q9 + data.q11 + data.q18; const mercadoScore = data.q5 + data.q6 + data.q8 + data.q12 + data.q13 + data.q15 + data.q20; const restauranteScore = data.q3 + data.q7 + data.q10 + data.q14 + data.q16;
+                const pAcougue = acougueScore / 30, pMercado = mercadoScore / 35, pRestaurante = restauranteScore / 25; const maxScore = Math.max(pAcougue, pMercado, pRestaurante);
+                if (maxScore === 0) return { title: "Cadastro Inicial", color: "bg-slate-100 text-slate-600" };
+                if (maxScore === pAcougue) return { title: data.q2 >= 4 ? "Açougue Bruto (Osso)" : "Açougue Padrão", color: "bg-red-100 text-red-800" };
+                if (maxScore === pMercado) return { title: "Mercado / Mercearia", color: "bg-blue-100 text-blue-800" };
+                return { title: "Restaurante / Food Service", color: "bg-orange-100 text-orange-800" };
+            };
+
+            const handleExtractClientData = () => {
+                if (!rawClientText.trim()) { showMessage('Cole o texto primeiro.', 'error'); return; }
+                try {
+                    let extracted = { ...formData };
+                    const clienteMatch = rawClientText.match(/CLIENTE\s*\[f\]\s*(\d+)/i) || rawClientText.match(/ID:\s*(\d+)/i);
+                    if (clienteMatch) extracted.code = clienteMatch[1].trim();
+                    const cnpjMatch = rawClientText.match(/CNPJ\s*\(\s*([\d.\-\/]+)\s*\)/i);
+                    if (cnpjMatch) extracted.cnpj = cnpjMatch[1].trim();
+                    const nameMatch = rawClientText.match(/(?:SUPERMERCADO|MERCADO|AÇOUGUE|RESTAURANTE)[\s\S]*?(?=\n|CNPJ)/i);
+                    if (nameMatch) {
+                        let cleanName = nameMatch[0].replace(/SUPERMERCADO OPCAO DO BAIRRO LTDA\/MERCADO OPCAO-\s*/i, '').trim();
+                        extracted.name = cleanName.substring(0, 40); 
+                    }
+                    const cepMatch = rawClientText.match(/\b\d{5}-\d{3}\b/);
+                    if (cepMatch) extracted.address = cepMatch[0];
+                    setFormData(extracted); showMessage('Dados extraídos com inteligência!', 'success');
+                } catch (e) { showMessage('Erro na extração dos dados.', 'error'); }
+            };
+
+            const handleSave = async (e) => {
+                e.preventDefault();
+                if(questionsDefinition.filter(q => formData[q.id] > 0).length < 5) { showMessage("Responda pelo menos 5 perguntas para mapeamento.", 'error'); return; }
+                const profileData = calculateClientProfile(formData);
+                try { await db.collection('clients').add({ ...formData, profile: profileData, history: [] }); showMessage("Cliente salvo na nuvem!", 'success'); setIsAdding(false); setFormData(initialFormState); setRawClientText(''); } catch(err) { showMessage("Erro ao salvar cliente", 'error'); }
+            };
+
+            const handleUpdateClient = async () => {
+                if(!editForm.code) { showMessage("O ID não pode ficar vazio.", "error"); return; }
+                try {
+                    await db.collection('clients').doc(selectedClient.id).update({ name: editForm.name, contactName: editForm.contactName || '', code: editForm.code, cnpj: editForm.cnpj || '', phone: editForm.phone || '', address: editForm.address || '' });
+                    showMessage("Alterações salvas!", "success");
+                } catch(e) { showMessage("Erro ao atualizar.", "error"); }
+            };
+
+            const handleExtractHistory = async () => {
+                if (!rawHistoryText.trim()) return;
+                setIsExtractingHistory(true);
+                try {
+                    const matches = [...rawHistoryText.matchAll(/\d*S(\d{4,7})/g)];
+                    let foundCodes = matches.map(m => m[1]);
+                    if (foundCodes.length === 0) {
+                        products.forEach(p => { if (rawHistoryText.includes(p.code)) foundCodes.push(p.code); });
+                    }
+                    const validCodes = [...new Set(foundCodes)].filter(code => products.some(p => p.code === code));
+                    if (validCodes.length === 0) { showMessage('Nenhum código reconhecido.', 'error'); setIsExtractingHistory(false); return; }
+                    
+                    const currentHistory = editForm.history || [];
+                    const newHistory = [...new Set([...currentHistory, ...validCodes])];
+                    await db.collection('clients').doc(selectedClient.id).update({ history: newHistory });
+                    setRawHistoryText('');
+                    showMessage(`${validCodes.length} produtos adicionados ao histórico!`, 'success');
+                } catch (e) { showMessage('Erro ao salvar.', 'error'); } finally { setIsExtractingHistory(false); }
+            };
+
+            const handleExtractProfileData = () => {
+                if (!rawProfileText.trim()) { showMessage('Cole o texto primeiro.', 'error'); return; }
+                try {
+                    let updates = {};
+                    const clienteMatch = rawProfileText.match(/CLIENTE\s*\[f\]\s*(\d+)/i) || rawProfileText.match(/ID:\s*(\d+)/i);
+                    if (clienteMatch) updates.code = clienteMatch[1].trim();
+                    const cnpjMatch = rawProfileText.match(/CNPJ\s*\(\s*([\d.\-\/]+)\s*\)/i);
+                    if (cnpjMatch) updates.cnpj = cnpjMatch[1].trim();
+                    const nameMatch = rawProfileText.match(/(?:SUPERMERCADO|MERCADO|AÇOUGUE|RESTAURANTE|MERCEARIA)[\s\S]*?(?=\n|CNPJ)/i);
+                    if (nameMatch) { let n = nameMatch[0].trim(); updates.name = n.substring(0, 40); }
+                    const phoneMatch = rawProfileText.match(/(?:FONE|TEL|WHATSAPP|ZAP|CEL)[:\s]*(\(?\d{2}\)?\s*\d{4,5}[-\s]?\d{4})/i);
+                    if (phoneMatch) updates.phone = phoneMatch[1].trim();
+                    const cepMatch = rawProfileText.match(/\b\d{5}-\d{3}\b/);
+                    if (cepMatch) updates.address = cepMatch[0];
+                    setEditForm(prev => ({...prev, ...updates}));
+                    showMessage('Dados extraídos com sucesso!', 'success');
+                    setRawProfileText('');
+                } catch (e) { showMessage('Erro na extração dos dados.', 'error'); }
+            };
+
+            if (isAdding) return (
+                <div className="animate-in fade-in">
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800">Novo Cliente Inteligente</h2><button onClick={() => setIsAdding(false)} className="text-slate-500 font-medium px-4 py-2 bg-slate-200 rounded-lg">Voltar</button></div>
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 mb-6">
+                        <h3 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2"><div className="h-5 w-5 text-rose-600"><IconWand/></div> Leitor de Cadastro Inteligente</h3>
+                        <textarea value={rawClientText} onChange={e => setRawClientText(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-xs font-mono h-24 mb-3 resize-none" placeholder="Cole o bloco do ERP aqui..."></textarea>
+                        <button type="button" onClick={handleExtractClientData} className="bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 px-6 rounded-xl shadow-md transition-all text-sm">Extrair Dados</button>
+                    </div>
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <form onSubmit={handleSave}>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+                                <div><label className="block text-xs font-bold text-slate-500 mb-1">Nome Fantasia</label><input type="text" value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-lg focus:border-rose-500 outline-none"/></div>
+                                <div><label className="block text-xs font-bold text-slate-500 mb-1">Nome do Contato / Dono</label><input type="text" value={formData.contactName} onChange={e=>setFormData({...formData, contactName: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-lg focus:border-rose-500 outline-none"/></div>
+                                <div><label className="block text-xs font-bold text-slate-500 mb-1">ID Cliente (Obrigatório)*</label><input type="text" required value={formData.code} onChange={e=>setFormData({...formData, code: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-lg focus:border-rose-500 outline-none"/></div>
+                                <div><label className="block text-xs font-bold text-slate-500 mb-1">CNPJ</label><input type="text" value={formData.cnpj} onChange={e=>setFormData({...formData, cnpj: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-lg focus:border-rose-500 outline-none"/></div>
+                                <div><label className="block text-xs font-bold text-slate-500 mb-1">Telefone</label><input type="text" value={formData.phone} onChange={e=>setFormData({...formData, phone: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-lg focus:border-rose-500 outline-none"/></div>
+                                <div><label className="block text-xs font-bold text-slate-500 mb-1">Endereço</label><input type="text" value={formData.address} onChange={e=>setFormData({...formData, address: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-lg focus:border-rose-500 outline-none"/></div>
+                            </div>
+                            <div className="bg-rose-50 rounded-xl p-4 mb-6 border border-rose-100"><h3 className="text-lg font-bold text-rose-800">Mapeamento de Perfil (CRM)</h3></div>
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-6">{questionsDefinition.map((q) => (<LikertScale key={q.id} question={q.text} value={formData[q.id]} onChange={(val) => setFormData({...formData, [q.id]: val})} />))}</div>
+                            <div className="mt-8 flex justify-end"><button type="submit" className="bg-rose-700 text-white font-bold py-4 px-10 rounded-xl shadow-lg">Salvar Cliente</button></div>
+                        </form>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="animate-in fade-in relative">
+                    {selectedClient && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                            <div className="bg-slate-50 rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95">
+                                <div className="p-6 border-b border-slate-200 bg-white flex justify-between items-center shadow-sm z-10">
+                                    <div className="flex items-center gap-4">
+                                        <div className="h-14 w-14 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold text-xl">{editForm.name ? editForm.name.charAt(0) : 'C'}</div>
+                                        <div>
+                                            <h2 className="text-2xl font-bold text-slate-800 leading-none">{editForm.name || 'Empresa'}</h2>
+                                            {editForm.contactName && <p className="text-xs font-bold text-slate-400 mt-1 uppercase">Contato: <span className="text-slate-600">{editForm.contactName}</span></p>}
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setSelectedClient(null)} className="h-10 w-10 bg-slate-100 hover:bg-slate-200 rounded-full flex items-center justify-center text-slate-500 transition-colors"><IconX/></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                                            <h3 className="font-bold text-slate-800 border-b border-slate-100 pb-2 flex items-center gap-2"><div className="h-5 w-5 text-blue-500"><IconUser/></div> Dados Cadastrais</h3>
+                                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                                <label className="block text-xs font-bold text-slate-600 mb-1 flex items-center gap-1"><div className="h-3.5 w-3.5 text-rose-600 inline-block"><IconWand/></div> Leitor de Cadastro Inteligente</label>
+                                                <textarea value={rawProfileText} onChange={e => setRawProfileText(e.target.value)} placeholder="Cole o bloco do ERP para extrair dados..." className="w-full h-14 p-2 bg-white border rounded-lg outline-none text-xs font-mono resize-none mb-2"/>
+                                                <button type="button" onClick={handleExtractProfileData} className="text-xs bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded-lg font-bold transition-colors">Extrair Dados</button>
+                                            </div>
+                                            <div className="space-y-3">
+                                                <div><label className="text-xs font-bold text-slate-500">Nome Fantasia</label><input type="text" value={editForm.name || ''} onChange={e => setEditForm({...editForm, name: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm font-bold outline-none focus:border-rose-500"/></div>
+                                                <div><label className="text-xs font-bold text-slate-500">Contato / Proprietário</label><input type="text" value={editForm.contactName || ''} onChange={e => setEditForm({...editForm, contactName: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm outline-none focus:border-rose-500"/></div>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div><label className="text-xs font-bold text-slate-500">ID Cliente</label><input type="text" value={editForm.code || ''} onChange={e => setEditForm({...editForm, code: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm outline-none focus:border-rose-500"/></div>
+                                                    <div><label className="text-xs font-bold text-slate-500">CNPJ</label><input type="text" value={editForm.cnpj || ''} onChange={e => setEditForm({...editForm, cnpj: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm outline-none focus:border-rose-500"/></div>
+                                                </div>
+                                                <div><label className="text-xs font-bold text-slate-500">WhatsApp</label><input type="text" value={editForm.phone || ''} onChange={e => setEditForm({...editForm, phone: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm outline-none focus:border-rose-500"/></div>
+                                                <div><label className="text-xs font-bold text-slate-500">Endereço</label><textarea value={editForm.address || ''} onChange={e => setEditForm({...editForm, address: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm resize-none outline-none focus:border-rose-500" rows="2"></textarea></div>
+                                                <button onClick={handleUpdateClient} className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-bold shadow-md transition-colors">Salvar Alterações</button>
+                                            </div>
+                                        </div>
+                                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col">
+                                            <h3 className="font-bold text-slate-800 border-b border-slate-100 pb-2 mb-4 flex items-center gap-2"><div className="h-5 w-5 text-rose-600"><IconHistory/></div> Histórico de Compras</h3>
+                                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 mb-4">
+                                                <label className="block text-xs font-bold text-slate-600 mb-2">Colar Tabela ERP para atualizar</label>
+                                                <textarea value={rawHistoryText} onChange={e => setRawHistoryText(e.target.value)} placeholder="Cole o histórico daqui..." className="w-full h-16 p-2 bg-white border rounded-lg outline-none text-xs font-mono resize-none"></textarea>
+                                                <div className="mt-2 flex justify-end">
+                                                    <button onClick={handleExtractHistory} disabled={isExtractingHistory} className="bg-rose-700 hover:bg-rose-800 text-white px-4 py-1.5 rounded-lg font-bold text-xs shadow-sm transition-all flex items-center gap-1">
+                                                        {isExtractingHistory ? <IconLoader2/> : <IconPlus/>} Adicionar ao Histórico
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="flex-1 overflow-y-auto pr-1">
+                                                {(!editForm.history || editForm.history.length === 0) ? (
+                                                    <div className="h-full flex items-center justify-center text-slate-400 text-sm font-medium italic">Nenhum histórico registrado.</div>
+                                                ) : (
+                                                    <div className="space-y-2 relative">
+                                                        <div className="flex justify-between items-center mb-2 sticky top-0 bg-white pb-2 z-10">
+                                                            <div className="flex gap-1.5">
+                                                                <button onClick={() => setSelectedHistoryCodes(new Set(editForm.history || []))} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded-lg font-bold transition-colors">Todos</button>
+                                                                <button onClick={() => setSelectedHistoryCodes(new Set())} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded-lg font-bold transition-colors">Nenhum</button>
+                                                            </div>
+                                                            <button
+                                                                disabled={selectedHistoryCodes.size === 0}
+                                                                onClick={() => { window.localStorage.setItem('friganso_offer_codes', JSON.stringify([...selectedHistoryCodes])); setSelectedClient(null); setActiveRoute('orcamentos'); }}
+                                                                className="bg-emerald-100 hover:bg-emerald-200 disabled:opacity-40 text-emerald-800 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5">
+                                                                <div className="h-3 w-3"><IconWhatsApp/></div> Enviar Oferta ({selectedHistoryCodes.size})
+                                                            </button>
+                                                        </div>
+                                                        {editForm.history.map(code => {
+                                                            const p = products.find(prod => prod.code === code);
+                                                            const isChecked = selectedHistoryCodes.has(code);
+                                                            return (
+                                                                <label key={code} className={`p-2.5 rounded-lg flex items-center gap-3 shadow-sm transition-colors cursor-pointer border ${isChecked ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-100 hover:border-rose-200'}`}>
+                                                                    <input type="checkbox" checked={isChecked} onChange={() => { const s = new Set(selectedHistoryCodes); s.has(code) ? s.delete(code) : s.add(code); setSelectedHistoryCodes(s); }} className="h-4 w-4 rounded text-emerald-600 flex-shrink-0 cursor-pointer"/>
+                                                                    <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-xs font-black">{code}</span>
+                                                                    <span className="text-xs font-medium text-slate-700 leading-tight flex-1">{p ? p.name : 'Produto Arquivado'}</span>
+                                                                </label>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex justify-between items-center mb-6"><div><h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><div className="h-6 w-6 text-rose-700"><IconUsers/></div>CRM & Rotas</h2><p className="text-slate-500 text-sm">Base de dados classificada pela IA.</p></div><button onClick={() => setIsAdding(true)} className="bg-rose-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-md flex items-center gap-2"><div className="h-5 w-5"><IconPlus/></div> Novo Cliente</button></div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                        {clients.map(c => (
+                            <div key={c.id} onClick={() => setSelectedClient(c)} className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 relative overflow-hidden flex flex-col hover:shadow-md hover:border-rose-400 hover:scale-[1.02] transition-all cursor-pointer group">
+                                <div className="absolute top-0 left-0 w-2 h-full bg-rose-700 group-hover:bg-rose-500 transition-colors"></div>
+                                <div className="ml-2 flex-1">
+                                    <h4 className="font-bold text-lg text-slate-800 leading-tight truncate">{c.name || 'Empresa S/ Nome'}</h4>
+                                    {c.contactName && <p className="text-xs font-bold text-slate-400 mb-2 truncate uppercase">Contato: <span className="text-slate-600">{c.contactName}</span></p>}
+                                    <span className={`inline-block px-3 py-1 rounded-full text-[10px] font-bold mt-1 mb-4 ${c.profile?.color || 'bg-slate-100 text-slate-600'}`}>{c.profile?.title || 'Perfil Base'}</span>
+                                    <div className="space-y-1.5 text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                        <p><b className="text-slate-400">ID:</b> <span className="font-mono font-bold">{c.code}</span></p>
+                                        {c.cnpj && <p><b className="text-slate-400">CNPJ:</b> {c.cnpj}</p>}
+                                        <p className="truncate"><b className="text-slate-400">END:</b> {c.address || '-'}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        const SupportScreen = ({ user }) => {
+            const [submitted, setSubmitted] = useState(false);
+            const [subject, setSubject] = useState('Reportar Erro no Sistema');
+            const [message, setMessage] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const body = `Solicitante: ${user.name}\nID Vendedor: ${user.code}\nE-mail Contato: ${user.email}\n\nAssunto: ${subject}\n\n--- Mensagem ---\n${message}`;
+                window.location.href = `mailto:bruno.moura.f.silva@gmail.com?subject=Suporte Friganso ERP - ${subject}&body=${encodeURIComponent(body)}`;
+                setSubmitted(true); setTimeout(() => { setSubmitted(false); setMessage(''); }, 5000); 
+            };
+
+            return (
+                <div className="animate-in fade-in max-w-3xl mx-auto">
+                    <div className="text-center mb-8"><div className="h-16 w-16 bg-rose-100 text-rose-700 rounded-full flex items-center justify-center mx-auto mb-4"><div className="h-8 w-8"><IconSupport/></div></div><h2 className="text-3xl font-bold text-slate-800">Suporte Técnico</h2><p className="text-slate-500 mt-2">Sua solicitação será enviada diretamente para a Administração.</p></div>
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-8">
+                        {submitted ? (
+                            <div className="text-center py-12"><div className="h-16 w-16 text-emerald-500 mx-auto mb-4"><IconCheck/></div><h3 className="text-2xl font-bold text-slate-800 mb-2">Preparando E-mail!</h3><p className="text-slate-500">Seu aplicativo de e-mail foi aberto com os dados preenchidos.</p></div>
+                        ) : (
+                            <form onSubmit={handleSubmit} className="space-y-6">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div><label className="block text-sm font-bold text-slate-700 mb-1">Solicitante</label><input type="text" value={`${user.name} (ID: ${user.code})`} disabled className="w-full p-3 bg-slate-100 border border-slate-200 rounded-xl text-slate-500"/></div>
+                                    <div><label className="block text-sm font-bold text-slate-700 mb-1">E-mail Cadastrado</label><input type="email" value={user.email} disabled className="w-full p-3 bg-slate-100 border border-slate-200 rounded-xl text-slate-500"/></div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-slate-700 mb-1">Qual é a sua solicitação?</label>
+                                    <select value={subject} onChange={(e) => setSubject(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 font-medium">
+                                        <option value="Reportar Erro no Sistema">Reportar um Erro no Sistema</option>
+                                        <option value="Solicitar Troca de Senha">Esqueci / Solicitar Troca de Senha</option>
+                                        <option value="Solicitar Troca de E-mail">Solicitar Atualização de E-mail</option>
+                                        <option value="Solicitar Mudança de ID">Solicitar Correção do meu Código (ID)</option>
+                                        <option value="Dúvida de Uso">Dúvida sobre o Aplicativo</option>
+                                        <option value="Outros">Outros Assuntos</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-slate-700 mb-1">Mensagem ou Justificativa</label>
+                                    <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows="4" required placeholder="Escreva os detalhes da sua solicitação aqui..." className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 resize-none"></textarea>
+                                </div>
+                                <button type="submit" className="w-full bg-rose-700 hover:bg-rose-800 text-white font-bold py-4 rounded-xl shadow-lg transition-all flex justify-center items-center gap-2">
+                                    <div className="h-5 w-5"><IconMail/></div> Abrir E-mail e Enviar
+                                </button>
+                            </form>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const CreditsScreen = () => (
+            <div className="animate-in fade-in flex items-center justify-center min-h-[70vh]">
+                <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden max-w-lg w-full text-center relative">
+                    <div className="h-32 bg-slate-900 relative overflow-hidden"><img src={BG_IMAGE} className="absolute inset-0 w-full h-full object-cover opacity-30 mix-blend-overlay" /></div>
+                    <div className="px-8 pb-8 relative">
+                        <div className="w-24 h-24 bg-white rounded-2xl shadow-lg border-4 border-white mx-auto -mt-12 mb-4 overflow-hidden relative z-10 flex items-center justify-center"><FrigansoLogo className="w-16 h-16 object-contain" /></div>
+                        <h2 className="text-2xl font-black text-slate-800 mb-1">Sistema Friganso Premium ERP</h2>
+                        <p className="text-slate-500 font-medium mb-6">Versão Cloud - Inteligência & CRM</p>
+                        <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100 text-left mb-6">
+                            <p className="text-sm text-slate-500 mb-1 uppercase tracking-wider font-bold">Desenvolvedor Oficial e CEO</p>
+                            <p className="text-xl font-bold text-rose-800 mb-4 flex items-center flex-wrap gap-2">
+                                Bruno Moura 
+                                <span className="bg-rose-100 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-md text-[10px] uppercase tracking-widest font-black">ID Admin Oficial: 99206</span>
+                            </p>
+                            <p className="text-sm text-slate-500 mb-1 uppercase tracking-wider font-bold">Contato Direto</p>
+                            <a href="mailto:bruno.moura.f.silva@gmail.com" className="text-blue-600 font-medium flex items-center gap-2 hover:underline"><div className="h-4 w-4"><IconMail/></div> bruno.moura.f.silva@gmail.com</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const App = () => {
+            const [user, setUser] = useState(() => { const s = window.localStorage.getItem('friganso_loggedUser'); return s ? JSON.parse(s) : null; });
+            const [activeRoute, setActiveRoute] = useState(() => {
+                const r = window.sessionStorage.getItem('friganso_initial_route');
+                if (r) { window.sessionStorage.removeItem('friganso_initial_route'); return r; }
+                return 'dashboard';
+            });
+            const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+            const [messageBox, setMessageBox] = useState(null);
+            const [clients, setClients] = useState([]);
+            
+            useEffect(() => {
+                const unsubscribe = db.collection('clients').onSnapshot(snap => setClients(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+                return () => unsubscribe();
+            }, []);
+            
+            const [products, setProductsState] = useState(() => {
+                const savedProds = window.localStorage.getItem('friganso_products');
+                return savedProds ? JSON.parse(savedProds) : [];
+            });
+
+            const setProducts = (newProducts) => {
+                setProductsState(newProducts);
+                window.localStorage.setItem('friganso_products', JSON.stringify(newProducts));
+            };
+
+            const handleSetUser = (userData) => {
+                if (userData) window.localStorage.setItem('friganso_loggedUser', JSON.stringify(userData));
+                else { window.localStorage.removeItem('friganso_loggedUser'); auth.signOut(); }
+                setUser(userData);
+            };
+
+            const showMessage = (message, type = 'info') => setMessageBox({ message, type });
+
+            if (!user) {
+                return (
+                    <>
+                        <LoginScreen onLogin={handleSetUser} showMessage={showMessage} />
+                        {messageBox && <CustomMessageBox {...messageBox} onClose={() => setMessageBox(null)} />}
+                    </>
+                );
+            }
+
+            const renderContent = () => {
+                switch(activeRoute) {
+                    case 'dashboard': return <DashboardScreen user={user} />;
+                    case 'clients': return <ClientsScreen products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
+                    case 'support': return <SupportScreen user={user} />;
+                    case 'credits': return <CreditsScreen />;
+                    case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} />;
+                    case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} />;
+                    case 'resumo': return <ResumoScreen products={products} showMessage={showMessage} clients={clients} setActiveRoute={setActiveRoute} />;
+                    case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
+                    default: return <DashboardScreen user={user} />;
+                }
+            };
+
+            const NavButton = ({ route, icon: Icon, label }) => (
+                <button onClick={() => { setActiveRoute(route); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold transition-all duration-200 ${activeRoute === route ? 'bg-rose-800 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}>
+                    <div className="h-5 w-5"><Icon /></div> {label}
+                </button>
+            );
+
+            return (
+                <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
+                    {messageBox && <CustomMessageBox {...messageBox} onClose={() => setMessageBox(null)} />}
+
+                    <button className="md:hidden fixed top-4 left-4 z-50 p-2 bg-slate-900 text-white rounded-lg shadow-lg" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
+                        <div className="h-6 w-6"><IconMenu/></div>
+                    </button>
+
+                    <div className={`fixed inset-y-0 left-0 z-40 w-72 bg-slate-950 text-slate-300 transform transition-transform duration-300 ease-in-out flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static border-r border-slate-800 shadow-2xl`}>
+                        <div className="p-6 border-b border-slate-800 flex items-center gap-4 bg-slate-900/50">
+                            <FrigansoLogo className="h-12 w-12 rounded-xl bg-black/50 p-1.5 shadow-inner border border-slate-700" />
+                            <div>
+                                <h1 className="text-xl font-black text-white tracking-tight">FRIGANSO</h1>
+                                <p className="text-[10px] text-rose-500 tracking-widest uppercase font-bold">Premium ERP</p>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-1 scrollbar-hide">
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-2 ml-2">Gestão Principal</p>
+                            <NavButton route="dashboard" icon={IconDashboard} label="Painel (Dashboard)" />
+                            <NavButton route="clients" icon={IconUsers} label="CRM & Rotas" />
+                            <NavButton route="profile" icon={IconSettings} label="Meu Perfil / Admin" />
+                            
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Vendas Diárias</p>
+                            <NavButton route="pdf" icon={IconFileText} label="Tabela do Dia (PDF)" />
+                            <NavButton route="resumo" icon={IconReceipt} label="Resumo de Pedido" />
+                            <NavButton route="orcamentos" icon={IconWhatsApp} label="Gerador de Zap" />
+                            
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Sistema & Ajuda</p>
+                            <NavButton route="support" icon={IconSupport} label="Suporte Técnico" />
+                            <NavButton route="credits" icon={IconCode} label="Sobre o Desenvolvedor" />
+                        </div>
+
+                        <div className="p-4 border-t border-slate-800 bg-slate-900/50">
+                            <div className="p-3 rounded-xl mb-2 flex items-center gap-3 bg-slate-900 border border-slate-800 cursor-pointer hover:border-rose-700/50 transition-colors" onClick={() => setActiveRoute('profile')}>
+                                <div className="h-10 w-10 rounded-xl bg-rose-800 text-white flex items-center justify-center font-bold text-sm shadow-md overflow-hidden border border-rose-600">
+                                    {user.avatar ? <img src={user.avatar} className="w-full h-full object-cover"/> : user.name.charAt(0)}
+                                </div>
+                                <div className="flex-1 overflow-hidden">
+                                    <p className="text-sm font-bold text-white truncate">{user.name}</p>
+                                    <p className="text-[10px] text-slate-400 truncate uppercase tracking-wider font-bold">CÓD: {user.code} • {user.role}</p>
+                                </div>
+                            </div>
+                            <button onClick={() => handleSetUser(null)} className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-bold text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-lg transition-colors border border-transparent hover:border-red-400/20">
+                                <div className="h-4 w-4"><IconLogOut/></div> Sair da Conta
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto relative z-0 p-4 pt-20 md:p-8 bg-slate-100">
+                        <div className="absolute inset-0 pointer-events-none opacity-[0.02]" style={{ backgroundImage: `url('${BG_IMAGE}')`, backgroundSize: 'cover', backgroundPosition: 'center' }}></div>
+                        <div className="relative z-10 max-w-7xl mx-auto">
+                            {renderContent()}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+
+    <!-- PWA: Service Worker + Deep Link -->
+    <script>
+        // Captura ?route= dos atalhos do manifest antes do React inicializar
+        (function() {
+            const p = new URLSearchParams(window.location.search);
+            const r = p.get('route');
+            if (r) window.sessionStorage.setItem('friganso_initial_route', r);
+        })();
+
+        // Registra o Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('[SW] Registrado:', reg.scope))
+                    .catch(err => console.warn('[SW] Falhou:', err));
+            });
+        }
+    </script>
+</body>
+</html>

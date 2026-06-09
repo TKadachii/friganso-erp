@@ -1,0 +1,35 @@
+{
+  "name": "Friganso ERP",
+  "short_name": "FrigansoERP",
+  "description": "Sistema de Gestão de Vendas Friganso — CRM, Tabela do Dia e Resumo de Pedidos",
+  "start_url": "/friganso-erp/",
+  "scope": "/friganso-erp/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#e11d48",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Resumo de Pedido",
+      "short_name": "Resumo",
+      "url": "/friganso-erp/?route=resumo",
+      "icons": [{ "src": "icon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "CRM & Rotas",
+      "short_name": "CRM",
+      "url": "/friganso-erp/?route=clients",
+      "icons": [{ "src": "icon.svg", "sizes": "any" }]
+    }
+  ],
+  "categories": ["business", "productivity"]
+}
