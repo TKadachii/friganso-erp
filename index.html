@@ -38,6 +38,8 @@
         .glass-dark { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(16px); }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        /* Electron: impede que style tags apareçam como texto visível */
+        style { display: none !important; visibility: hidden !important; }
     </style>
 </head>
 <body>
@@ -73,6 +75,13 @@
                     console.warn('[Firestore] Persistência offline não suportada neste navegador.');
                 }
             });
+
+        // Electron Desktop Bridge — recebe token do browser e dispara evento no React
+        if (window.electronBridge) {
+            window.electronBridge.onAuthResult(({ idToken, accessToken, action }) => {
+                window.dispatchEvent(new CustomEvent('electronAuthResult', { detail: { idToken, accessToken, action } }));
+            });
+        }
 
         const hashPassword = async (password) => {
             if (!password) return '';
@@ -167,6 +176,36 @@
             const [pendingGoogleUser, setPendingGoogleUser] = useState(null);
             const [googleCode, setGoogleCode] = useState('');
 
+            // Electron: recebe resultado da autenticação feita no browser externo
+            useEffect(() => {
+                if (!window.electronBridge) return;
+                const handler = async (e) => {
+                    const { idToken, accessToken, action } = e.detail;
+                    setIsLoading(true);
+                    try {
+                        const credential = firebase.auth.GoogleAuthProvider.credential(idToken, accessToken);
+                        const result = await auth.signInWithCredential(credential);
+                        if (action === 'register') {
+                            const snapshot = await db.collection('users').where('email', '==', result.user.email).get();
+                            if (!snapshot.empty) { showMessage('Google já cadastrado. Faça login.', 'error'); auth.signOut(); }
+                            else { setPendingGoogleUser(result.user); }
+                        } else {
+                            const snapshot = await db.collection('users').where('email', '==', result.user.email).get();
+                            if (!snapshot.empty) {
+                                onLogin({ ...snapshot.docs[0].data(), id: snapshot.docs[0].id });
+                            } else {
+                                showMessage('Conta não encontrada. Crie seu cadastro primeiro.', 'error');
+                                auth.signOut();
+                            }
+                        }
+                    } catch(error) { showMessage(`Erro: ${error.message}`, 'error'); }
+                    finally { setIsLoading(false); }
+                };
+                window.addEventListener('electronAuthResult', handler);
+                return () => window.removeEventListener('electronAuthResult', handler);
+            }, []);
+
+
             const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@$!%*#?&.])[A-Za-z\d@$!%*#?&.]{6,}$/;
 
             const handleLogin = async (e) => {
@@ -192,6 +231,13 @@
             };
 
             const handleGoogleLoginOnly = async () => {
+                // Electron: abre o browser do sistema para fazer login (evita verificações extras do Google)
+                if (window.electronBridge) {
+                    const port = window.location.port;
+                    window.electronBridge.openBrowserAuth(`http://localhost:${port}/login?action=login`);
+                    showMessage('Browser aberto! Faça login lá e volte ao app.', 'info');
+                    return;
+                }
                 setIsLoading(true);
                 try {
                     const provider = new firebase.auth.GoogleAuthProvider();
@@ -225,12 +271,19 @@
             };
 
             const handleGoogleRegisterInit = async () => {
+                // Electron: abre o browser do sistema para cadastro com Google
+                if (window.electronBridge) {
+                    const port = window.location.port;
+                    window.electronBridge.openBrowserAuth(`http://localhost:${port}/login?action=register`);
+                    showMessage('Browser aberto! Faça login com Google lá e volte ao app.', 'info');
+                    return;
+                }
                 setIsLoading(true);
                 try {
                     const provider = new firebase.auth.GoogleAuthProvider();
                     const result = await auth.signInWithPopup(provider);
                     const snapshot = await db.collection('users').where('email', '==', result.user.email).get();
-                    if (!snapshot.empty) { showMessage('Google já cadastrado. Faça login.', 'error'); auth.signOut(); } 
+                    if (!snapshot.empty) { showMessage('Google já cadastrado. Faça login.', 'error'); auth.signOut(); }
                     else { setPendingGoogleUser(result.user); }
                 } catch (error) { showMessage(`Erro: ${error.message}`, 'error'); } finally { setIsLoading(false); }
             };
@@ -667,6 +720,9 @@
             const [detectedClientName, setDetectedClientName] = useState('');
             const [isProcessing, setIsProcessing] = useState(false);
             const [wantCreateProfile, setWantCreateProfile] = useState(true);
+            const [showManualHistory, setShowManualHistory] = useState(false);
+            const [manualSearch, setManualSearch] = useState('');
+            const [manualSelected, setManualSelected] = useState(null);
 
             const handleProcessText = (forcedText) => {
                 const txt = typeof forcedText === 'string' ? forcedText : orderText;
@@ -730,6 +786,7 @@
                 setEditedPrices({});
                 setOrderSummary({ customerCode: pendingCustomer, spamov: pendingSpamov, items: processed, totalDiscounted: processed.reduce((acc, c) => acc + c.discountedPrice, 0) });
                 setShowModal(false);
+                setShowManualHistory(false); setManualSearch(''); setManualSelected(null);
 
                 if (pendingCustomer) {
                     const existingClient = clients.find(c => c.code === pendingCustomer);
@@ -777,6 +834,41 @@
                     }
                     setShowHistoryPrompt(false);
                 } catch (err) { showMessage('Erro ao salvar no histórico.', 'error'); }
+            };
+
+            // Clientes filtrados para busca manual
+            const clientesParaHistorico = useMemo(() => {
+                if (!manualSearch.trim()) return clients.slice(0, 8);
+                const s = manualSearch.toLowerCase();
+                return clients.filter(c =>
+                    (c.name || '').toLowerCase().includes(s) || (c.code || '').includes(s)
+                ).slice(0, 8);
+            }, [clients, manualSearch]);
+
+            const handleManualSave = async () => {
+                if (!manualSelected || !orderSummary) return;
+                const newCodes = orderSummary.items.map(i => i.code);
+                try {
+                    if (manualSelected.isNew) {
+                        const docRef = await db.collection('clients').add({
+                            name: `Cliente ${manualSelected.code}`, code: manualSelected.code,
+                            phone: '', cnpj: '', address: '', contactName: '',
+                            history: newCodes, rawData: orderText,
+                            profile: { title: "Cadastro Automático", color: "bg-slate-100 text-slate-600" }
+                        });
+                        window.localStorage.setItem('friganso_open_client_id', docRef.id);
+                        showMessage('Cliente criado! Abrindo perfil no CRM...', 'success');
+                        setTimeout(() => setActiveRoute('clients'), 900);
+                    } else {
+                        const currentHistory = manualSelected.history || [];
+                        const updatedHistory = [...new Set([...currentHistory, ...newCodes])];
+                        await db.collection('clients').doc(manualSelected.id).update({ history: updatedHistory });
+                        showMessage(`Histórico de ${manualSelected.name} atualizado!`, 'success');
+                        setShowManualHistory(false);
+                        setManualSelected(null);
+                        setManualSearch('');
+                    }
+                } catch(err) { showMessage('Erro ao salvar no histórico.', 'error'); }
             };
 
             const generateWhatsAppText = () => {
@@ -954,6 +1046,64 @@
                                             <button onClick={handleSaveToHistory} className="px-3 py-1.5 text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 rounded-lg shadow-sm transition-colors">Sim, Salvar</button>
                                          </div>
                                      </div>
+                                )}
+
+                                {/* Botão SEMPRE visível para salvar manualmente no histórico */}
+                                {orderSummary && !showHistoryPrompt && (
+                                    <div className="mt-4">
+                                        {!showManualHistory ? (
+                                            <button onClick={() => setShowManualHistory(true)} className="w-full py-2.5 px-4 text-sm font-bold text-slate-500 hover:text-blue-700 hover:bg-blue-50 border border-dashed border-slate-300 hover:border-blue-300 rounded-xl transition-all flex items-center justify-center gap-2">
+                                                <span>💾</span> Salvar no histórico do cliente
+                                            </button>
+                                        ) : (
+                                            <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl animate-in fade-in slide-in-from-bottom-2">
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <p className="text-sm font-bold text-blue-800">💾 Salvar no histórico</p>
+                                                    <button onClick={() => { setShowManualHistory(false); setManualSearch(''); setManualSelected(null); }} className="text-slate-400 hover:text-slate-600 text-xl leading-none font-bold">×</button>
+                                                </div>
+                                                {manualSelected ? (
+                                                    <div className="flex items-center justify-between bg-white rounded-xl px-4 py-3 border border-blue-200">
+                                                        <div>
+                                                            <p className="text-sm font-bold text-slate-800">{manualSelected.isNew ? `Novo cliente` : manualSelected.name}</p>
+                                                            <p className="text-xs text-slate-500 font-mono mt-0.5">Cód. {manualSelected.code}</p>
+                                                        </div>
+                                                        <div className="flex gap-2 items-center">
+                                                            <button onClick={() => { setManualSelected(null); setManualSearch(''); }} className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1.5 rounded-lg hover:bg-slate-100 transition-colors">Trocar</button>
+                                                            <button onClick={handleManualSave} className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg shadow-sm transition-colors">Salvar</button>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <>
+                                                        <input
+                                                            type="text"
+                                                            autoFocus
+                                                            placeholder="Buscar por nome ou código do cliente..."
+                                                            value={manualSearch}
+                                                            onChange={e => setManualSearch(e.target.value)}
+                                                            className="w-full px-3 py-2.5 bg-white border border-blue-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-400 mb-2"
+                                                        />
+                                                        <div className="space-y-1 max-h-48 overflow-y-auto">
+                                                            {clientesParaHistorico.map(c => (
+                                                                <button key={c.id} onClick={() => setManualSelected(c)} className="w-full text-left px-3 py-2.5 bg-white hover:bg-blue-100 rounded-xl text-sm transition-colors border border-transparent hover:border-blue-200 flex items-center justify-between">
+                                                                    <span className="font-semibold text-slate-700">{c.name}</span>
+                                                                    <span className="text-xs text-slate-400 font-mono">Cód. {c.code}</span>
+                                                                </button>
+                                                            ))}
+                                                            {manualSearch.trim() && clientesParaHistorico.length === 0 && (
+                                                                <button onClick={() => setManualSelected({ code: manualSearch.trim(), isNew: true })} className="w-full text-left px-3 py-2.5 bg-emerald-50 hover:bg-emerald-100 rounded-xl text-sm border border-emerald-200 flex items-center gap-2 transition-colors">
+                                                                    <span className="text-emerald-700 font-bold">+ Criar cliente</span>
+                                                                    <span className="text-slate-500">com código "{manualSearch.trim()}"</span>
+                                                                </button>
+                                                            )}
+                                                            {!manualSearch.trim() && clients.length === 0 && (
+                                                                <p className="text-xs text-slate-400 text-center py-2">Nenhum cliente no CRM ainda.</p>
+                                                            )}
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
                             </div>
                             
