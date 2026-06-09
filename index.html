@@ -1350,12 +1350,23 @@
 
                         let headerIdx = rows.findIndex(r => r.some(c => /id|nome|produto/i.test(String(c))));
                         if (headerIdx < 0) headerIdx = 0;
-                        const header = rows[headerIdx].map(c => String(c).toLowerCase());
-                        const col = (re) => header.findIndex(h => re.test(h));
-                        const idxId = col(/id|c[oó]d/);
-                        const idxNome = col(/nome|cliente/);
-                        const idxProd = col(/produto|compr|item/);
-                        if (idxId < 0 || idxProd < 0) { showMessage('Não encontrei colunas de ID e Produto.', 'error'); return; }
+                        const header = rows[headerIdx].map(c => String(c).toLowerCase().trim());
+                        // Escolhe a coluna pela 1ª regex que casar (em ordem de prioridade)
+                        const pick = (...res) => { for (const re of res) { const i = header.findIndex(h => re.test(h)); if (i >= 0) return i; } return -1; };
+                        const idxId = pick(/id.*cliente/, /c[oó]d.*cliente/, /^id\b/, /\bid\b/);
+                        const idxNome = pick(/nome.*(fantasia|raz[aã]o|cliente)/, /raz[aã]o\s*social/, /nome\s*do\s*cliente/, /^nome/);
+                        // Coluna de CÓDIGO do produto (separada) tem prioridade
+                        const idxProdCode = pick(/c[oó]d.*produto/, /c[oó]d.*item/, /^c[oó]digo$/, /^cod\b/);
+                        // Coluna combinada "código - nome" (formato antigo)
+                        const idxProdComb = pick(/produto\s*comprad/, /produto\s*adquir/, /^produto$/, /item\s*comprad/, /produto/);
+                        if (idxId < 0 || (idxProdCode < 0 && idxProdComb < 0)) { showMessage('Não encontrei colunas de ID e Produto na planilha.', 'error'); return; }
+
+                        // Mapa de produtos (por código exato e normalizado) para recuperar o código oficial
+                        const prodExact = new Map();
+                        const prodNorm = new Map();
+                        (products || []).forEach(p => { prodExact.set(String(p.code).trim(), p.code); prodNorm.set(normCode(p.code), p.code); });
+                        // Resolve o código bruto da planilha para o código oficial da tabela (corrige zeros à esquerda)
+                        const resolveCode = (raw) => prodExact.get(raw) || prodNorm.get(normCode(raw)) || raw;
 
                         // Agrupa códigos de produto por ID de cliente
                         const grupos = new Map(); // id -> { id, nome, codes:Set }
@@ -1365,12 +1376,24 @@
                             if (typeof rawId === 'number') rawId = String(Math.round(rawId));
                             rawId = String(rawId || '').trim();
                             if (!rawId) continue;
-                            const prod = String(r[idxProd] || '').trim();
                             const nome = idxNome >= 0 ? String(r[idxNome] || '').trim() : '';
-                            // extrai o código do produto: "12062 - COSTELA..." -> "12062"
-                            const pm = prod.match(/^\s*([0-9A-Za-z]+)\s*-/);
-                            const prodCode = pm ? pm[1] : '';
+
+                            // Extrai o código do produto, lidando com os dois formatos:
+                            let prodCode = '';
+                            if (idxProdCode >= 0) {
+                                let v = r[idxProdCode];
+                                if (typeof v === 'number') v = String(Math.round(v)); // 12062.0 -> "12062"
+                                prodCode = String(v || '').trim();
+                                const pm = prodCode.match(/^\s*([0-9A-Za-z]+)\s*-/); // caso venha "12062 - NOME"
+                                if (pm) prodCode = pm[1];
+                            } else if (idxProdComb >= 0) {
+                                const prod = String(r[idxProdComb] || '').trim();
+                                const pm = prod.match(/^\s*([0-9A-Za-z]+)\s*-/);
+                                prodCode = pm ? pm[1] : (typeof r[idxProdComb] === 'number' ? String(Math.round(r[idxProdComb])) : '');
+                            }
                             if (!prodCode) continue;
+
+                            prodCode = resolveCode(prodCode); // recupera código oficial com zeros à esquerda
                             if (!grupos.has(rawId)) grupos.set(rawId, { id: rawId, nome, codes: new Set() });
                             grupos.get(rawId).codes.add(prodCode);
                         }
