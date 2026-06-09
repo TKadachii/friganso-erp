@@ -22,6 +22,8 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <!-- PDF.js para leitura de PDFs offline -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- SheetJS para importar planilhas Excel/CSV de clientes -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     
     <!-- FIREBASE (Banco de Dados e Auth) -->
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
@@ -1213,11 +1215,120 @@
             const [isExtractingHistory, setIsExtractingHistory] = useState(false);
             const [selectedHistoryCodes, setSelectedHistoryCodes] = useState(new Set());
             const [rawProfileText, setRawProfileText] = useState('');
+            const [importPreview, setImportPreview] = useState(null);
+            const [importBusy, setImportBusy] = useState(false);
+            const fileInputRef = useRef(null);
 
             useEffect(() => {
                 const unsubscribe = db.collection('clients').onSnapshot(snap => setClients(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
                 return () => unsubscribe();
             }, []);
+
+            // Detecta o tipo de negócio pelo nome para classificar o perfil automaticamente
+            const inferProfileFromName = (name) => {
+                const n = (name || '').toLowerCase();
+                if (/(supermerc|mercad|mercear|minimerc|atacad|distribuidora|bebidas|aliment)/.test(n)) return { title: "Mercado / Mercearia", color: "bg-blue-100 text-blue-800" };
+                if (/(restaurante|churrasc|lanchonete|petiscaria|espeto|gril|gourmet|confeitaria|bar |butecou|suisso|espa[cç]o)/.test(n)) return { title: "Restaurante / Food Service", color: "bg-orange-100 text-orange-800" };
+                if (/(a[cç]ougue|carne|frigor)/.test(n)) return { title: "Açougue", color: "bg-red-100 text-red-800" };
+                return { title: "Importado da Planilha", color: "bg-slate-100 text-slate-600" };
+            };
+
+            // Lê a planilha selecionada e monta o preview de importação
+            const handleFileSelected = (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                if (typeof XLSX === 'undefined') { showMessage('Biblioteca de planilha não carregou. Verifique a internet.', 'error'); return; }
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false });
+                        if (!rows.length) { showMessage('Planilha vazia.', 'error'); return; }
+
+                        // Localiza a linha de cabeçalho e mapeia colunas por nome
+                        let headerIdx = rows.findIndex(r => r.some(c => /c[oó]d|nome|raz[aã]o/i.test(String(c))));
+                        if (headerIdx < 0) headerIdx = 0;
+                        const header = rows[headerIdx].map(c => String(c).toLowerCase());
+                        const col = (re) => header.findIndex(h => re.test(h));
+                        const idxCidade = col(/cidade|munic/);
+                        const idxCod = col(/c[oó]d|tipo/);
+                        const idxNome = col(/nome|raz[aã]o/);
+                        const idxBairro = col(/bairro/);
+                        const idxEnd = col(/endere|rua|logra/);
+                        const idxCep = col(/cep/);
+
+                        const existingCodes = new Set(clients.map(c => String(c.code).trim()));
+                        const parsed = [];
+                        const seen = new Set();
+
+                        for (let i = headerIdx + 1; i < rows.length; i++) {
+                            const r = rows[i];
+                            const rawCod = idxCod >= 0 ? String(r[idxCod] || '').trim() : '';
+                            const nome = idxNome >= 0 ? String(r[idxNome] || '').trim() : '';
+                            if (!rawCod && !nome) continue;
+
+                            // "[j] 85777" -> tipo "j", code "85777"
+                            const tipoMatch = rawCod.match(/\[([a-z])\]/i);
+                            const tipo = tipoMatch ? tipoMatch[1].toLowerCase() : '';
+                            const code = rawCod.replace(/^\s*\[[a-z]\]\s*/i, '').trim() || rawCod;
+                            if (!code) continue;
+                            if (seen.has(code)) continue;
+                            seen.add(code);
+
+                            const cidade = idxCidade >= 0 ? String(r[idxCidade] || '').trim() : '';
+                            const bairro = idxBairro >= 0 ? String(r[idxBairro] || '').trim() : '';
+                            const endereco = idxEnd >= 0 ? String(r[idxEnd] || '').trim() : '';
+                            const cep = idxCep >= 0 ? String(r[idxCep] || '').trim() : '';
+                            const addressFull = [endereco, bairro, cidade, cep].filter(Boolean).join(' - ');
+
+                            parsed.push({
+                                code,
+                                name: nome || `Cliente ${code}`,
+                                address: addressFull,
+                                tipo: tipo === 'j' ? 'Pessoa Jurídica' : (tipo === 'f' ? 'Pessoa Física' : ''),
+                                profile: inferProfileFromName(nome),
+                                exists: existingCodes.has(code)
+                            });
+                        }
+
+                        if (!parsed.length) { showMessage('Nenhum cliente reconhecido na planilha.', 'error'); return; }
+                        setImportPreview(parsed);
+                    } catch (err) {
+                        showMessage('Erro ao ler a planilha: ' + err.message, 'error');
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+                e.target.value = ''; // permite reimportar o mesmo arquivo
+            };
+
+            // Grava os clientes novos no Firestore em lote
+            const handleConfirmImport = async () => {
+                if (!importPreview) return;
+                const novos = importPreview.filter(p => !p.exists);
+                if (!novos.length) { showMessage('Todos os clientes já estão cadastrados.', 'info'); setImportPreview(null); return; }
+                setImportBusy(true);
+                try {
+                    let batch = db.batch();
+                    let count = 0;
+                    for (const c of novos) {
+                        const ref = db.collection('clients').doc();
+                        batch.set(ref, {
+                            name: c.name, code: c.code, phone: '', cnpj: '',
+                            address: c.address, contactName: '', history: [],
+                            tipo: c.tipo || '', profile: c.profile
+                        });
+                        count++;
+                        // Firestore limita 500 operações por lote
+                        if (count % 450 === 0) { await batch.commit(); batch = db.batch(); }
+                    }
+                    await batch.commit();
+                    showMessage(`${novos.length} cliente(s) importado(s) com sucesso!`, 'success');
+                    setImportPreview(null);
+                } catch (err) {
+                    showMessage('Erro ao salvar: ' + err.message, 'error');
+                } finally { setImportBusy(false); }
+            };
 
             // Auto-abre perfil do cliente recém-criado vindo do Resumo de Pedido
             useEffect(() => {
@@ -1446,7 +1557,53 @@
                         </div>
                     )}
 
-                    <div className="flex justify-between items-center mb-6"><div><h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><div className="h-6 w-6 text-rose-700"><IconUsers/></div>CRM & Rotas</h2><p className="text-slate-500 text-sm">Base de dados classificada pela IA.</p></div><button onClick={() => setIsAdding(true)} className="bg-rose-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-md flex items-center gap-2"><div className="h-5 w-5"><IconPlus/></div> Novo Cliente</button></div>
+                    <div className="flex justify-between items-center mb-6 flex-wrap gap-3"><div><h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><div className="h-6 w-6 text-rose-700"><IconUsers/></div>CRM & Rotas</h2><p className="text-slate-500 text-sm">Base de dados classificada pela IA.</p></div>
+                        <div className="flex gap-2">
+                            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFileSelected} className="hidden" />
+                            <button onClick={() => fileInputRef.current && fileInputRef.current.click()} className="bg-white border-2 border-slate-200 hover:border-emerald-400 text-slate-700 font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center gap-2 transition-colors"><span className="text-lg">📊</span> Importar Planilha</button>
+                            <button onClick={() => setIsAdding(true)} className="bg-rose-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-md flex items-center gap-2"><div className="h-5 w-5"><IconPlus/></div> Novo Cliente</button>
+                        </div>
+                    </div>
+
+                    {importPreview && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => !importBusy && setImportPreview(null)}>
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                                <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2"><span>📊</span> Importar Clientes da Planilha</h2>
+                                        <p className="text-sm text-slate-500 mt-1">
+                                            <span className="font-bold text-emerald-600">{importPreview.filter(p => !p.exists).length} novos</span>
+                                            {importPreview.some(p => p.exists) && <span className="text-slate-400"> · {importPreview.filter(p => p.exists).length} já cadastrados (serão ignorados)</span>}
+                                        </p>
+                                    </div>
+                                    <button onClick={() => !importBusy && setImportPreview(null)} className="h-9 w-9 bg-slate-100 hover:bg-slate-200 rounded-full flex items-center justify-center text-slate-500"><IconX/></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                                    {importPreview.map((p, i) => (
+                                        <div key={i} className={`flex items-center justify-between p-3 rounded-xl border ${p.exists ? 'bg-slate-50 border-slate-200 opacity-60' : 'bg-white border-slate-200'}`}>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="font-bold text-slate-800 text-sm truncate">{p.name}</p>
+                                                <p className="text-xs text-slate-500 truncate">{p.address || 'Sem endereço'}</p>
+                                            </div>
+                                            <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                                                <span className="text-xs font-mono text-slate-400">Cód. {p.code}</span>
+                                                {p.exists
+                                                    ? <span className="text-[10px] font-bold bg-slate-200 text-slate-500 px-2 py-1 rounded-full">já existe</span>
+                                                    : <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${p.profile.color}`}>{p.profile.title}</span>}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="p-4 border-t border-slate-200 flex gap-3 justify-end bg-slate-50">
+                                    <button onClick={() => setImportPreview(null)} disabled={importBusy} className="px-5 py-2.5 font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors">Cancelar</button>
+                                    <button onClick={handleConfirmImport} disabled={importBusy || importPreview.filter(p => !p.exists).length === 0} className="px-5 py-2.5 font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md transition-colors flex items-center gap-2 disabled:opacity-50">
+                                        {importBusy ? <div className="h-5 w-5"><IconLoader2/></div> : null}
+                                        {importBusy ? 'Importando...' : `Importar ${importPreview.filter(p => !p.exists).length} clientes`}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
                         {clients.map(c => (
                             <div key={c.id} onClick={() => setSelectedClient(c)} className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 relative overflow-hidden flex flex-col hover:shadow-md hover:border-rose-400 hover:scale-[1.02] transition-all cursor-pointer group">
