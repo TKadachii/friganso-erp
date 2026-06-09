@@ -1930,6 +1930,176 @@
             </div>
         );
 
+        // ===== RADAR DE CLIENTES: controle situacional + recomendações diárias =====
+        const RadarScreen = ({ clients, products, setActiveRoute, showMessage }) => {
+            // Categoria do produto por palavras-chave do nome
+            const CAT_RE = {
+                acougue: /costela|alcatra|patinho|cox[aã]o|ac[eé]m|contra.?fil|dianteiro|traseiro|banda|pernil|barriga|toucinho|f[ií]gado|mocot|bucho|rabada|carne|fraldinha|maminha|picanha|cupim|lagarto|m[uú]sculo|peito\s*resf|carr[eé]|suin|bovin/i,
+                mercado: /mussarela|queijo|presunto|pres\.|mortadela|mort\.|salsich|lingui|ling\.|bacon|margarina|hamburg|frios|requeij|leite|manteiga|nuggets|empanad|pres\s|coxa|asa|frango|salsich[aã]o/i,
+                restaurante: /p[aã]o de alho|fil[eé] de peito|file de peito|frango temp|coalho|batata|grill|churrasc|espeto|picanha|alcatra|costela.*grill|pizza/i
+            };
+            const profileCat = (title) => {
+                const t = (title || '').toLowerCase();
+                if (/a[cç]ougue/.test(t)) return 'acougue';
+                if (/mercad|mercear/.test(t)) return 'mercado';
+                if (/restaurante|food/.test(t)) return 'restaurante';
+                return '';
+            };
+            const nameCat = (name) => {
+                const n = (name || '').toLowerCase();
+                if (/supermerc|mercad|mercear|minimerc|atacad|distribuidora|bebidas/.test(n)) return 'mercado';
+                if (/restaurante|churrasc|lanchonete|petiscaria|espeto|gril|pizza|confeitaria|bar\b|butecou/.test(n)) return 'restaurante';
+                if (/a[cç]ougue|carne/.test(n)) return 'acougue';
+                return '';
+            };
+            const categoryForClient = (c) => profileCat(c.profile && c.profile.title) || nameCat(c.name) || 'geral';
+            const matchesCategory = (name, cat) => cat === 'geral' ? true : (CAT_RE[cat] ? CAT_RE[cat].test(name || '') : true);
+            const hashStr = (s) => { let h = 0; const str = String(s || ''); for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h; };
+
+            const catLabel = { acougue: '🥩 Açougue', mercado: '🛒 Mercado', restaurante: '🍽️ Restaurante', geral: '📦 Geral' };
+
+            // Classificação situacional por nº de produtos diferentes já comprados
+            const stats = useMemo(() => {
+                const lvl = (c) => (c.history || []).length;
+                const inativos = clients.filter(c => lvl(c) === 0);
+                const atencao = clients.filter(c => lvl(c) >= 1 && lvl(c) <= 3);
+                const medios = clients.filter(c => lvl(c) >= 4 && lvl(c) <= 8);
+                const top = clients.filter(c => lvl(c) >= 9);
+                const ranking = [...clients].sort((a, b) => lvl(b) - lvl(a));
+                return { inativos, atencao, medios, top, ranking, total: clients.length };
+            }, [clients]);
+
+            // Recomendações do dia (rotaciona pela data, prioriza quem precisa de atenção)
+            const recs = useMemo(() => {
+                if (!clients.length || !products.length) return [];
+                const today = new Date();
+                const daySeed = Number(`${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`);
+                const out = [];
+                clients.forEach(c => {
+                    const cat = categoryForClient(c);
+                    const bought = new Set((c.history || []).map(String));
+                    let cands = products.filter(p => !bought.has(String(p.code)) && matchesCategory(p.name, cat));
+                    if (!cands.length) cands = products.filter(p => !bought.has(String(p.code)));
+                    if (!cands.length) return;
+                    const idx = (daySeed + hashStr(c.code)) % cands.length;
+                    out.push({ client: c, product: cands[idx], cat, hist: (c.history || []).length });
+                });
+                // prioriza menos histórico (atenção); desempate rotativo pelo dia
+                out.sort((a, b) => (a.hist - b.hist) || ((hashStr(a.client.code) + daySeed) % 100) - ((hashStr(b.client.code) + daySeed) % 100));
+                return out;
+            }, [clients, products]);
+
+            const abrirCliente = (c) => { window.localStorage.setItem('friganso_open_client_id', c.id); setActiveRoute('clients'); };
+            const gerarOferta = (productCode) => {
+                window.localStorage.setItem('friganso_offer_codes', JSON.stringify([String(productCode)]));
+                setActiveRoute('orcamentos');
+            };
+
+            const StatCard = ({ emoji, label, value, sub, color }) => (
+                <div className={`bg-white rounded-2xl p-5 border shadow-sm ${color}`}>
+                    <div className="flex items-center justify-between"><span className="text-2xl">{emoji}</span><span className="text-3xl font-black text-slate-800">{value}</span></div>
+                    <p className="text-sm font-bold text-slate-700 mt-2">{label}</p>
+                    <p className="text-xs text-slate-400">{sub}</p>
+                </div>
+            );
+
+            const destaque = recs[0];
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🎯</span> Radar de Clientes</h2>
+                        <p className="text-slate-500 text-sm">Controle situacional e recomendações inteligentes por perfil.</p>
+                    </div>
+
+                    {products.length === 0 && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-medium">
+                            ⚠️ Carregue a <b>Tabela do Dia (PDF)</b> para liberar as recomendações de produtos.
+                        </div>
+                    )}
+
+                    {/* Cards de situação */}
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                        <StatCard emoji="🔥" label="Top Compradores" value={stats.top.length} sub="9+ produtos diferentes" color="border-emerald-200" />
+                        <StatCard emoji="🙂" label="Compradores Médios" value={stats.medios.length} sub="4 a 8 produtos" color="border-blue-200" />
+                        <StatCard emoji="⚠️" label="Precisam de Atenção" value={stats.atencao.length} sub="1 a 3 produtos" color="border-amber-200" />
+                        <StatCard emoji="🚨" label="Inativos (não compraram)" value={stats.inativos.length} sub="sem histórico" color="border-rose-200" />
+                    </div>
+
+                    {/* Destaque do dia */}
+                    {destaque && (
+                        <div className="bg-gradient-to-br from-rose-700 to-rose-900 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
+                            <div className="absolute top-0 right-0 text-[120px] opacity-10 leading-none -mt-4 -mr-2">🎯</div>
+                            <p className="text-xs font-bold uppercase tracking-widest text-rose-200">Recomendação do Dia</p>
+                            <h3 className="text-2xl font-extrabold mt-1">{destaque.client.name}</h3>
+                            <p className="text-rose-200 text-sm">{catLabel[destaque.cat]} · {destaque.hist === 0 ? 'ainda não comprou nada' : `${destaque.hist} produto(s) no histórico`}</p>
+                            <div className="bg-white/15 backdrop-blur rounded-2xl p-4 mt-4 border border-white/20">
+                                <p className="text-xs text-rose-100">Ofereça hoje:</p>
+                                <p className="text-lg font-bold leading-tight mt-0.5">{destaque.product.code} — {destaque.product.name}</p>
+                            </div>
+                            <div className="flex gap-2 mt-4">
+                                <button onClick={() => gerarOferta(destaque.product.code)} className="bg-white text-rose-800 font-bold px-4 py-2.5 rounded-xl text-sm shadow hover:bg-rose-50 transition-colors flex items-center gap-2"><div className="h-4 w-4"><IconWhatsApp/></div> Gerar Oferta no Zap</button>
+                                <button onClick={() => abrirCliente(destaque.client)} className="bg-white/20 hover:bg-white/30 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition-colors">Ver Perfil</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Lista de recomendações */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-5 border-b border-slate-100"><h3 className="font-bold text-slate-800 flex items-center gap-2"><div className="h-5 w-5 text-rose-600"><IconWand/></div> Quem abordar hoje (por prioridade)</h3></div>
+                        <div className="divide-y divide-slate-100 max-h-[420px] overflow-y-auto">
+                            {recs.slice(1, 16).map((r, i) => (
+                                <div key={i} className="p-4 flex items-center justify-between gap-3 hover:bg-slate-50 transition-colors">
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-2">
+                                            <p className="font-bold text-slate-800 text-sm truncate">{r.client.name}</p>
+                                            <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full flex-shrink-0">{catLabel[r.cat]}</span>
+                                            {r.hist === 0 && <span className="text-[10px] font-bold bg-rose-100 text-rose-600 px-2 py-0.5 rounded-full flex-shrink-0">inativo</span>}
+                                        </div>
+                                        <p className="text-xs text-slate-500 truncate mt-0.5">Sugestão: <b className="text-slate-700">{r.product.code}</b> — {r.product.name}</p>
+                                    </div>
+                                    <div className="flex gap-1.5 flex-shrink-0">
+                                        <button onClick={() => gerarOferta(r.product.code)} title="Gerar oferta" className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 h-9 w-9 rounded-lg flex items-center justify-center transition-colors"><div className="h-4 w-4"><IconWhatsApp/></div></button>
+                                        <button onClick={() => abrirCliente(r.client)} title="Ver perfil" className="bg-slate-100 hover:bg-slate-200 text-slate-600 h-9 w-9 rounded-lg flex items-center justify-center transition-colors"><div className="h-4 w-4"><IconUser/></div></button>
+                                    </div>
+                                </div>
+                            ))}
+                            {recs.length === 0 && <div className="p-8 text-center text-slate-400 text-sm">Cadastre clientes e carregue a tabela de produtos para ver recomendações.</div>}
+                        </div>
+                    </div>
+
+                    {/* Ranking + listas situacionais */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="p-5 border-b border-slate-100"><h3 className="font-bold text-slate-800">🏆 Ranking de Compradores</h3></div>
+                            <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto">
+                                {stats.ranking.slice(0, 20).map((c, i) => (
+                                    <button key={c.id} onClick={() => abrirCliente(c)} className="w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors text-left">
+                                        <span className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 ${i < 3 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>{i + 1}</span>
+                                        <span className="font-bold text-sm text-slate-700 truncate flex-1">{c.name}</span>
+                                        <span className="text-xs font-bold text-slate-400">{(c.history || []).length} itens</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="p-5 border-b border-slate-100"><h3 className="font-bold text-slate-800">🚨 Clientes para resgatar</h3><p className="text-xs text-slate-400">Inativos e de baixa compra — foco de atenção</p></div>
+                            <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto">
+                                {[...stats.inativos, ...stats.atencao].slice(0, 20).map(c => (
+                                    <button key={c.id} onClick={() => abrirCliente(c)} className="w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors text-left">
+                                        <span className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${(c.history || []).length === 0 ? 'bg-rose-500' : 'bg-amber-400'}`}></span>
+                                        <span className="font-bold text-sm text-slate-700 truncate flex-1">{c.name}</span>
+                                        <span className="text-xs font-bold text-slate-400">{(c.history || []).length === 0 ? 'nunca comprou' : `${(c.history || []).length} itens`}</span>
+                                    </button>
+                                ))}
+                                {stats.inativos.length === 0 && stats.atencao.length === 0 && <div className="p-8 text-center text-slate-400 text-sm">Nenhum cliente precisando de atenção. 🎉</div>}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         const App = () => {
             const [user, setUser] = useState(() => { const s = window.localStorage.getItem('friganso_loggedUser'); return s ? JSON.parse(s) : null; });
             const [activeRoute, setActiveRoute] = useState(() => {
@@ -1977,6 +2147,7 @@
                 switch(activeRoute) {
                     case 'dashboard': return <DashboardScreen user={user} />;
                     case 'clients': return <ClientsScreen products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
+                    case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
                     case 'credits': return <CreditsScreen />;
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} />;
@@ -2014,6 +2185,7 @@
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-2 ml-2">Gestão Principal</p>
                             <NavButton route="dashboard" icon={IconDashboard} label="Painel (Dashboard)" />
                             <NavButton route="clients" icon={IconUsers} label="CRM & Rotas" />
+                            <NavButton route="radar" icon={IconDashboard} label="Radar de Clientes" />
                             <NavButton route="profile" icon={IconSettings} label="Meu Perfil / Admin" />
                             
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Vendas Diárias</p>
