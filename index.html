@@ -1220,6 +1220,18 @@
             const fileInputRef = useRef(null);
             const [historyPreview, setHistoryPreview] = useState(null);
             const histInputRef = useRef(null);
+            const [clientSearch, setClientSearch] = useState('');
+
+            // Filtra clientes por nome ou ID conforme a busca
+            const filteredClients = useMemo(() => {
+                const q = clientSearch.trim().toLowerCase();
+                if (!q) return clients;
+                return clients.filter(c =>
+                    (c.name || '').toLowerCase().includes(q) ||
+                    String(c.code || '').toLowerCase().includes(q) ||
+                    (c.contactName || '').toLowerCase().includes(q)
+                );
+            }, [clients, clientSearch]);
 
             useEffect(() => {
                 const unsubscribe = db.collection('clients').onSnapshot(snap => setClients(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
@@ -1838,8 +1850,29 @@
                             </div>
                         </div>
                     )}
+                    <div className="relative mb-6">
+                        <div className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 pointer-events-none"><IconSearch/></div>
+                        <input
+                            type="text"
+                            value={clientSearch}
+                            onChange={e => setClientSearch(e.target.value)}
+                            placeholder="Buscar cliente por nome ou ID..."
+                            className="w-full pl-12 pr-10 py-3.5 bg-white border border-slate-200 rounded-2xl shadow-sm text-sm outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500 transition-all"
+                        />
+                        {clientSearch && (
+                            <button onClick={() => setClientSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 h-6 w-6 bg-slate-100 hover:bg-slate-200 rounded-full flex items-center justify-center text-slate-500 transition-colors"><div className="h-3.5 w-3.5"><IconX/></div></button>
+                        )}
+                    </div>
+                    {clientSearch && (
+                        <p className="text-xs text-slate-400 mb-3 -mt-2 ml-1">{filteredClients.length} cliente(s) encontrado(s) para "{clientSearch}"</p>
+                    )}
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                        {clients.map(c => (
+                        {filteredClients.length === 0 ? (
+                            <div className="col-span-full text-center py-16 text-slate-400">
+                                <div className="text-4xl mb-3">🔍</div>
+                                <p className="font-medium">{clients.length === 0 ? 'Nenhum cliente cadastrado ainda.' : 'Nenhum cliente encontrado com esse termo.'}</p>
+                            </div>
+                        ) : filteredClients.map(c => (
                             <div key={c.id} onClick={() => setSelectedClient(c)} className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 relative overflow-hidden flex flex-col hover:shadow-md hover:border-rose-400 hover:scale-[1.02] transition-all cursor-pointer group">
                                 <div className="absolute top-0 left-0 w-2 h-full bg-rose-700 group-hover:bg-rose-500 transition-colors"></div>
                                 <div className="ml-2 flex-1">
