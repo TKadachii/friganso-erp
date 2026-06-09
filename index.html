@@ -1218,6 +1218,8 @@
             const [importPreview, setImportPreview] = useState(null);
             const [importBusy, setImportBusy] = useState(false);
             const fileInputRef = useRef(null);
+            const [historyPreview, setHistoryPreview] = useState(null);
+            const histInputRef = useRef(null);
 
             useEffect(() => {
                 const unsubscribe = db.collection('clients').onSnapshot(snap => setClients(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
@@ -1325,6 +1327,115 @@
                     await batch.commit();
                     showMessage(`${novos.length} cliente(s) importado(s) com sucesso!`, 'success');
                     setImportPreview(null);
+                } catch (err) {
+                    showMessage('Erro ao salvar: ' + err.message, 'error');
+                } finally { setImportBusy(false); }
+            };
+
+            // Normaliza um código para comparação (só dígitos, sem zeros à esquerda)
+            const normCode = (v) => String(v).replace(/[^0-9a-z]/gi, '').replace(/^0+/, '').toLowerCase();
+
+            // Lê a planilha de histórico de compras e monta o preview
+            const handleHistoryFileSelected = (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                if (typeof XLSX === 'undefined') { showMessage('Biblioteca de planilha não carregou. Verifique a internet.', 'error'); return; }
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false });
+                        if (!rows.length) { showMessage('Planilha vazia.', 'error'); return; }
+
+                        let headerIdx = rows.findIndex(r => r.some(c => /id|nome|produto/i.test(String(c))));
+                        if (headerIdx < 0) headerIdx = 0;
+                        const header = rows[headerIdx].map(c => String(c).toLowerCase());
+                        const col = (re) => header.findIndex(h => re.test(h));
+                        const idxId = col(/id|c[oó]d/);
+                        const idxNome = col(/nome|cliente/);
+                        const idxProd = col(/produto|compr|item/);
+                        if (idxId < 0 || idxProd < 0) { showMessage('Não encontrei colunas de ID e Produto.', 'error'); return; }
+
+                        // Agrupa códigos de produto por ID de cliente
+                        const grupos = new Map(); // id -> { id, nome, codes:Set }
+                        for (let i = headerIdx + 1; i < rows.length; i++) {
+                            const r = rows[i];
+                            let rawId = r[idxId];
+                            if (typeof rawId === 'number') rawId = String(Math.round(rawId));
+                            rawId = String(rawId || '').trim();
+                            if (!rawId) continue;
+                            const prod = String(r[idxProd] || '').trim();
+                            const nome = idxNome >= 0 ? String(r[idxNome] || '').trim() : '';
+                            // extrai o código do produto: "12062 - COSTELA..." -> "12062"
+                            const pm = prod.match(/^\s*([0-9A-Za-z]+)\s*-/);
+                            const prodCode = pm ? pm[1] : '';
+                            if (!prodCode) continue;
+                            if (!grupos.has(rawId)) grupos.set(rawId, { id: rawId, nome, codes: new Set() });
+                            grupos.get(rawId).codes.add(prodCode);
+                        }
+
+                        if (!grupos.size) { showMessage('Nenhum produto reconhecido na planilha.', 'error'); return; }
+
+                        // Mapa de clientes por código (exato e normalizado) para casar os IDs
+                        const byExact = new Map();
+                        const byNorm = new Map();
+                        clients.forEach(c => {
+                            byExact.set(String(c.code).trim(), c);
+                            byNorm.set(normCode(c.code), c);
+                        });
+
+                        const preview = [];
+                        grupos.forEach(g => {
+                            const cli = byExact.get(g.id) || byNorm.get(normCode(g.id)) || null;
+                            const codesArr = Array.from(g.codes);
+                            let novos = codesArr;
+                            if (cli) {
+                                const atual = new Set((cli.history || []).map(String));
+                                novos = codesArr.filter(c => !atual.has(String(c)));
+                            }
+                            preview.push({
+                                id: g.id,
+                                nome: cli ? cli.name : (g.nome || `Cliente ${g.id}`),
+                                clientId: cli ? cli.id : null,
+                                matched: !!cli,
+                                totalCodes: codesArr.length,
+                                novosCodes: novos,
+                                novosCount: cli ? novos.length : codesArr.length,
+                                allCodes: codesArr
+                            });
+                        });
+
+                        preview.sort((a, b) => (a.matched === b.matched) ? 0 : (a.matched ? -1 : 1));
+                        setHistoryPreview(preview);
+                    } catch (err) {
+                        showMessage('Erro ao ler a planilha: ' + err.message, 'error');
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+                e.target.value = '';
+            };
+
+            // Grava o histórico nos clientes correspondentes
+            const handleConfirmHistoryImport = async () => {
+                if (!historyPreview) return;
+                const aplicar = historyPreview.filter(p => p.matched && p.novosCount > 0);
+                if (!aplicar.length) { showMessage('Nada novo para adicionar ao histórico.', 'info'); setHistoryPreview(null); return; }
+                setImportBusy(true);
+                try {
+                    let batch = db.batch();
+                    let count = 0;
+                    for (const p of aplicar) {
+                        const cli = clients.find(c => c.id === p.clientId);
+                        const atual = (cli && cli.history) ? cli.history : [];
+                        const merged = [...new Set([...atual.map(String), ...p.allCodes.map(String)])];
+                        batch.update(db.collection('clients').doc(p.clientId), { history: merged });
+                        count++;
+                        if (count % 450 === 0) { await batch.commit(); batch = db.batch(); }
+                    }
+                    await batch.commit();
+                    showMessage(`Histórico atualizado em ${aplicar.length} cliente(s)!`, 'success');
+                    setHistoryPreview(null);
                 } catch (err) {
                     showMessage('Erro ao salvar: ' + err.message, 'error');
                 } finally { setImportBusy(false); }
@@ -1560,7 +1671,9 @@
                     <div className="flex justify-between items-center mb-6 flex-wrap gap-3"><div><h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><div className="h-6 w-6 text-rose-700"><IconUsers/></div>CRM & Rotas</h2><p className="text-slate-500 text-sm">Base de dados classificada pela IA.</p></div>
                         <div className="flex gap-2">
                             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFileSelected} className="hidden" />
-                            <button onClick={() => fileInputRef.current && fileInputRef.current.click()} className="bg-white border-2 border-slate-200 hover:border-emerald-400 text-slate-700 font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center gap-2 transition-colors"><span className="text-lg">📊</span> Importar Planilha</button>
+                            <input ref={histInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleHistoryFileSelected} className="hidden" />
+                            <button onClick={() => fileInputRef.current && fileInputRef.current.click()} className="bg-white border-2 border-slate-200 hover:border-emerald-400 text-slate-700 font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center gap-2 transition-colors"><span className="text-lg">📊</span> Importar Clientes</button>
+                            <button onClick={() => histInputRef.current && histInputRef.current.click()} className="bg-white border-2 border-slate-200 hover:border-rose-400 text-slate-700 font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center gap-2 transition-colors"><span className="text-lg">🛒</span> Importar Histórico</button>
                             <button onClick={() => setIsAdding(true)} className="bg-rose-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-md flex items-center gap-2"><div className="h-5 w-5"><IconPlus/></div> Novo Cliente</button>
                         </div>
                     </div>
@@ -1600,6 +1713,52 @@
                                         {importBusy ? <div className="h-5 w-5"><IconLoader2/></div> : null}
                                         {importBusy ? 'Importando...' : `Importar ${importPreview.filter(p => !p.exists).length} clientes`}
                                     </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {historyPreview && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => !importBusy && setHistoryPreview(null)}>
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                                <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2"><span>🛒</span> Importar Histórico de Compras</h2>
+                                        <p className="text-sm text-slate-500 mt-1">
+                                            <span className="font-bold text-emerald-600">{historyPreview.filter(p => p.matched).length} clientes encontrados</span>
+                                            {historyPreview.some(p => !p.matched) && <span className="text-amber-600"> · {historyPreview.filter(p => !p.matched).length} não cadastrados (ignorados)</span>}
+                                        </p>
+                                    </div>
+                                    <button onClick={() => !importBusy && setHistoryPreview(null)} className="h-9 w-9 bg-slate-100 hover:bg-slate-200 rounded-full flex items-center justify-center text-slate-500"><IconX/></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                                    {historyPreview.map((p, i) => (
+                                        <div key={i} className={`flex items-center justify-between p-3 rounded-xl border ${!p.matched ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'}`}>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="font-bold text-slate-800 text-sm truncate">{p.nome}</p>
+                                                <p className="text-xs text-slate-500">ID {p.id} · {p.totalCodes} produto(s) na planilha</p>
+                                            </div>
+                                            <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                                                {!p.matched
+                                                    ? <span className="text-[10px] font-bold bg-amber-200 text-amber-800 px-2 py-1 rounded-full">cliente não encontrado</span>
+                                                    : p.novosCount > 0
+                                                        ? <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full">+{p.novosCount} novos</span>
+                                                        : <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded-full">já no histórico</span>}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="p-4 border-t border-slate-200 flex flex-col gap-2 bg-slate-50">
+                                    {historyPreview.some(p => !p.matched) && (
+                                        <p className="text-xs text-amber-600 text-center">⚠️ Clientes "não encontrados" precisam ser importados primeiro em "Importar Clientes".</p>
+                                    )}
+                                    <div className="flex gap-3 justify-end">
+                                        <button onClick={() => setHistoryPreview(null)} disabled={importBusy} className="px-5 py-2.5 font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors">Cancelar</button>
+                                        <button onClick={handleConfirmHistoryImport} disabled={importBusy || historyPreview.filter(p => p.matched && p.novosCount > 0).length === 0} className="px-5 py-2.5 font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-xl shadow-md transition-colors flex items-center gap-2 disabled:opacity-50">
+                                            {importBusy ? <div className="h-5 w-5"><IconLoader2/></div> : null}
+                                            {importBusy ? 'Salvando...' : `Atualizar ${historyPreview.filter(p => p.matched && p.novosCount > 0).length} clientes`}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
