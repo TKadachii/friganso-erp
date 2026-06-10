@@ -115,6 +115,32 @@
         }
         return function (msg) { box.textContent = "🦢 " + msg; };
     }
+
+    // ---- Painel de LOG (mostra o passo a passo e PERSISTE entre os recarregamentos) ----
+    function renderLog(linhas) {
+        let p = document.getElementById("friganso-log");
+        if (!p) {
+            p = document.createElement("div"); p.id = "friganso-log";
+            Object.assign(p.style, { position: "fixed", left: "10px", bottom: "10px", width: "380px", maxWidth: "48vw", maxHeight: "240px", overflowY: "auto", background: "rgba(2,6,23,0.92)", color: "#cbd5e1", fontFamily: "monospace", fontSize: "11px", lineHeight: "1.5", padding: "8px 10px", borderRadius: "10px", zIndex: "2147483647", border: "1px solid #334155", whiteSpace: "pre-wrap" });
+            document.body.appendChild(p);
+        }
+        p.textContent = (linhas || []).join("\n");
+        p.scrollTop = p.scrollHeight;
+    }
+    function dlog(msg) {
+        const linha = new Date().toLocaleTimeString() + "  " + msg;
+        try {
+            chrome.storage.local.get(["friganso_log"], function (r) {
+                const arr = (r && r.friganso_log) || [];
+                arr.push(linha); while (arr.length > 80) arr.shift();
+                chrome.storage.local.set({ friganso_log: arr });
+                renderLog(arr);
+            });
+        } catch (e) { renderLog([linha]); }
+    }
+    function limparLog() { try { chrome.storage.local.set({ friganso_log: [] }); } catch (e) {} renderLog([]); }
+    function mostrarLogSalvo() { try { chrome.storage.local.get(["friganso_log"], function (r) { const a = (r && r.friganso_log) || []; if (a.length) renderLog(a); }); } catch (e) {} }
+
     function setInput(el, v) { el.focus(); el.value = String(v); ["input", "change", "keyup", "blur"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true }))); }
     // Digitação ROBUSTA: usa o setter nativo (burla controles que revertem o valor) +
     // tenta document.execCommand("insertText") (digitação real, como um teclado).
@@ -317,13 +343,15 @@
     // Processa UM item por carregamento da página. O clique no verde recarrega o site
     // e, no próximo load, esta função retoma sozinha do próximo item.
     async function processarRun() {
+      try {
         const run = await getRun();
-        if (!run || !run.ativo) return;
-        if (!ehFrameItens()) return;                                   // só o frame de itens age
-        if (Date.now() - (run.ts || 0) > 120 * 1000) { await clearRun(); return; } // expira em 2min sem progresso
+        if (!run || !run.ativo) { return; }
+        if (!ehFramePrincipal()) { dlog("(frame ignorado — sem UI do SPAmov)"); return; }
+        if (Date.now() - (run.ts || 0) > 120 * 1000) { await clearRun(); dlog("⏰ expirou (2min sem progresso) — limpei"); return; }
 
         const status = statusBox();
         const stage = run.stage || "itens";
+        dlog("➡ etapa=" + stage + " idx=" + run.idx + " aguardando=" + run.aguardando);
         const nomeEtapa = stage === "novo" ? "abrir Novo" : (stage === "cliente" ? "preencher Cliente" : "lançar Itens");
         status("🔄 Retomando — etapa: " + nomeEtapa + "...");
         await sleep(1800); // deixa a página assentar após o "pisca"/navegação
@@ -332,7 +360,8 @@
         if (stage === "novo") {
             let btn = acharBotaoNovo(), t = 0;
             while (!btn && t < 8) { await sleep(500); btn = acharBotaoNovo(); t++; }
-            if (!btn) { if (ehFramePrincipal()) status("❌ Não achei o botão 'Novo'. Manda um print do botão que eu ajusto a mira."); return; }
+            if (!btn) { dlog("❌ botão Novo NÃO achado"); if (ehFramePrincipal()) status("❌ Não achei o botão 'Novo'."); return; }
+            dlog("✓ botão Novo achado — clicando");
             status("Abrindo novo pedido...");
             await setRun({ pedido: run.pedido, stage: "cliente", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             clicar(btn);
@@ -345,17 +374,21 @@
             await sleep(2000); // ⏱️ folga após o "Novo" (a tela termina de abrir e foca o campo)
             // O site JÁ deixa o campo do cliente focado — digita direto no campo focado.
             let cli = document.activeElement;
+            const focado = cli && cli.tagName === "INPUT";
             if (!cli || cli.tagName !== "INPUT" || cli.type === "checkbox" || cli.type === "radio") cli = acharCampoCliente();
-            if (!cli) { if (ehFramePrincipal()) status("❌ Não achei o campo do Cliente. Manda um print que eu ajusto."); return; }
+            dlog("campo cliente: " + (cli ? ("achado (" + (focado ? "focado" : "por busca") + ")") : "NÃO achado"));
+            if (!cli) { if (ehFramePrincipal()) status("❌ Não achei o campo do Cliente."); return; }
             status("Digitando cliente " + run.pedido.cliente + "...");
             typeInto(cli, run.pedido.cliente);   // digitação robusta (native setter + execCommand)
             enter(cli);
             await sleep(800);
-            status("Cliente no campo: " + ((cli.value || "(vazio)")) + " — aguardando antes do Enviar...");
+            dlog("valor no campo após digitar: '" + (cli.value || "") + "'");
+            status("Cliente no campo: " + ((cli.value || "(vazio)")) + " — aguardando...");
             await sleep(2000); // ⏱️ folga antes do Enviar (deixa o cliente resolver)
             await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             let env = acharBotaoEnviar(), te = 0;
             while (!env && te < 6) { await sleep(400); env = acharBotaoEnviar(); te++; }
+            dlog("botão Enviar: " + (env ? "achado — clicando" : "NÃO achado (tento Enter)"));
             if (env) { status("Clicando em Enviar..."); clicar(env); }
             else { status("Botão Enviar não achado — tentando Enter..."); enter(cli); }
             return; // recarrega -> a etapa "itens" continua sozinha no próximo load
@@ -387,6 +420,7 @@
         if (!info || !info.code || !info.qty) { await clearRun(); status("❌ Não achei os campos (inputs: " + (info ? info.n : 0) + "). Cancelei — manda um print."); return; }
 
         const it = run.pedido.itens[run.idx];
+        dlog("item " + (run.idx + 1) + "/" + total + ": " + it.code + " x" + it.qty);
         status("Lançando " + (run.idx + 1) + "/" + total + ":  " + it.code + "  x" + it.qty);
 
         // 1) código -> resolve o produto
@@ -407,10 +441,12 @@
 
         // 4) clica no ✓ verde -> o site recarrega e o próximo item continua sozinho
         const check = acharCheckVerde(info ? info.rect : linhaEntradaRect());
+        dlog("✓ verde: " + (check ? "achado — clicando" : "NÃO achado (Enter)"));
         if (check) clicar(check);
         else if (info && info.qty) enter(info.qty);
         status("✓ " + it.code + " enviado — aguardando o site recarregar...");
         // a página recarrega ("pisca") e o próximo item continua sozinho no próximo load
+      } catch (e) { dlog("❌ ERRO: " + (e && e.message ? e.message : e)); }
     }
 
     function removerDaFila(id) {
@@ -421,6 +457,8 @@
     }
     function lancarDaFila(p) {
         // NÃO remove da fila — fica salvo pra você reusar/reenviar (remova manualmente com ✕)
+        limparLog();
+        dlog("▶ INÍCIO — cliente " + (p.cliente || "?") + ", " + (p.itens ? p.itens.length : 0) + " itens");
         statusBox()("Iniciando lançamento do cliente " + (p.cliente || "?") + "...");
         clearRun().then(function () {
             setRun({ pedido: { cliente: p.cliente, itens: p.itens }, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
@@ -480,6 +518,8 @@
     }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
 
+    // Mostra o log salvo (passo a passo que sobrevive aos recarregamentos)
+    if (ehFramePrincipal()) mostrarLogSalvo();
     // Retoma automaticamente um lançamento em andamento (após cada reload do site)
     if (ehFramePrincipal()) processarRun();
 })();
