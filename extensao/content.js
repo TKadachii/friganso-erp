@@ -123,18 +123,20 @@
         }
         return null;
     }
-    // Y (posição vertical) da linha de entrada de itens
-    function entradaY() {
+    // Retângulo EXATO da linha de entrada (a do seletor PRODUTOS / "novo orçamento")
+    function linhaEntradaRect() {
         const selects = document.querySelectorAll("select");
         for (let i = 0; i < selects.length; i++) {
             const s = selects[i];
             const txt = Array.from(s.options || []).map(o => o.text).join(" ");
-            if (/PRODUTOS/i.test(txt)) { const r = s.getBoundingClientRect(); if (r.width) return r.top + r.height / 2; }
+            if (/PRODUTOS/i.test(txt)) { const tr = s.closest("tr"); const r = (tr || s).getBoundingClientRect(); if (r.height) return r; }
         }
         const tds = document.querySelectorAll("td");
-        for (let i = 0; i < tds.length; i++) { if (/novo or[çc]amento/i.test(tds[i].innerText || "")) { const r = tds[i].getBoundingClientRect(); if (r.height) return r.top + r.height / 2; } }
+        for (let i = 0; i < tds.length; i++) { if (/novo or[çc]amento/i.test(tds[i].innerText || "")) { const tr = tds[i].closest("tr"); const r = (tr || tds[i]).getBoundingClientRect(); if (r.height) return r; } }
         return null;
     }
+    // verdadeiro se o centro vertical do elemento está dentro da faixa da linha de entrada
+    function naFaixa(r, el) { const b = el.getBoundingClientRect(); const cy = b.top + b.height / 2; return cy >= r.top - 3 && cy <= r.bottom + 3; }
     function inputsVisiveis() {
         return Array.prototype.slice.call(document.querySelectorAll("input")).filter(function (i) {
             const t = (i.type || "").toLowerCase();
@@ -142,21 +144,21 @@
             const r = i.getBoundingClientRect(); return r.width > 10 && r.height > 5;
         });
     }
-    // Acha os campos de código e quantidade da linha de entrada PELA POSIÇÃO na tela
+    // Acha código e quantidade SÓ na linha de entrada (ignora a linha do item já lançado)
     function camposEntrada() {
-        const y = entradaY(); if (y == null) return null;
+        const r = linhaEntradaRect(); if (!r) return null;
         const colX = colXQuant();
-        const naLinha = inputsVisiveis().filter(function (i) { const r = i.getBoundingClientRect(); return Math.abs((r.top + r.height / 2) - y) < 24; });
+        const naLinha = inputsVisiveis().filter(function (i) { return naFaixa(r, i); });
         const porX = naLinha.slice().sort(function (a, b) { return a.getBoundingClientRect().left - b.getBoundingClientRect().left; });
         const code = porX[0] || null; // mais à esquerda = código
         let qty = null, bd = 1e9;
         naLinha.forEach(function (i) {
             if (i === code) return;
-            const r = i.getBoundingClientRect(); const x = r.left + r.width / 2;
+            const b = i.getBoundingClientRect(); const x = b.left + b.width / 2;
             const d = (colX != null) ? Math.abs(x - colX) : x;
             if (d < bd) { bd = d; qty = i; } // mais próximo da coluna "Quant. Mov." = quantidade
         });
-        return { y: y, n: naLinha.length, code: code, qty: qty };
+        return { rect: r, n: naLinha.length, code: code, qty: qty };
     }
 
     // Detecta se um elemento é "verde" (pela cor ou pelo nome do ícone)
@@ -174,14 +176,15 @@
         return false;
     }
     // Acha o ✓ verde da linha de entrada (clica pra lançar o item)
-    function acharCheckVerde(y) {
-        if (y == null) return null;
+    function acharCheckVerde(faixa) {
+        if (!faixa) return null;
         const cands = [];
         const els = document.querySelectorAll("img, a, input[type=image], button, span, div, td");
         els.forEach(function (el) {
             const r = el.getBoundingClientRect();
             if (!r.width || !r.height) return;
-            if (Math.abs((r.top + r.height / 2) - y) > 24) return; // mesma linha da entrada
+            const cy = r.top + r.height / 2;
+            if (cy < faixa.top - 3 || cy > faixa.bottom + 3) return; // só na linha de entrada
             const txt = ((el.innerText || el.value || "") + "").trim();
             if (/todos/i.test(txt)) return;            // ignora botão "Todos"
             if (txt.length > 6) return;                // ignora textos longos (não é ícone)
@@ -200,7 +203,7 @@
         const status = statusBox();
         try {
             let info = camposEntrada();
-            if (!info || info.y == null) { status("❌ Não achei a linha de entrada. Abra o pedido até a tela amarela de itens e clique de novo."); return; }
+            if (!info || !info.rect) { status("❌ Não achei a linha de entrada. Abra o pedido até a tela amarela de itens e clique de novo."); return; }
             const total = pedido.itens.length;
             for (let k = 0; k < total; k++) {
                 const it = pedido.itens[k];
@@ -225,7 +228,7 @@
 
                 // 4) clica no ✓ VERDE pra lançar o item
                 const antesAdd = bodyText();
-                const check = acharCheckVerde(info ? info.y : entradaY());
+                const check = acharCheckVerde(info ? info.rect : linhaEntradaRect());
                 if (check) check.click();
                 else if (info && info.qty) enter(info.qty); // fallback
 
@@ -276,7 +279,7 @@
         document.body.appendChild(b);
     }
 
-    const temEntrada = !!acharLinhaEntrada() || entradaY() != null;
+    const temEntrada = !!acharLinhaEntrada() || linhaEntradaRect() != null;
     const temLeitura = temPedidoLeitura(montarPedidoLeitura());
 
     // Botão de LANÇAR aparece na tela de itens (linha amarela de entrada)
