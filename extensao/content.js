@@ -234,7 +234,7 @@
 
                 // 2) espera o PRODUTO carregar (a tela muda quando reconhece)
                 await esperar(function () { return bodyText() !== antesCod; }, 5000);
-                await sleep(600);
+                await sleep(900);
 
                 // 3) QUANTIDADE (re-localiza os campos; ignora o campo de valor)
                 info = camposEntrada();
@@ -259,9 +259,10 @@
                 }
                 status("✓ " + it.code + " ok");
 
-                // 6) espera a linha de entrada RESETAR (código vazio) antes do próximo item
+                // 6) espera a linha de entrada RESETAR (código vazio) + folga de 2s antes do próximo item
                 await esperar(function () { const f = camposEntrada(); return f && f.code && !((f.code.value || "").trim()); }, 4000);
-                await sleep(500);
+                status("✓ " + it.code + " ok — aguardando o SPAmov...");
+                await sleep(2000);
             }
             status("✅ " + total + " item(ns) lançados! Confira tudo e finalize na mão: DS → SP → PA.");
             try { chrome.storage.local.remove("friganso_pedido"); } catch (e) {}
