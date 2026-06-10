@@ -116,18 +116,27 @@
         return function (msg) { box.textContent = "🦢 " + msg; };
     }
     function setInput(el, v) { el.focus(); el.value = String(v); ["input", "change", "keyup", "blur"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true }))); }
-    // Digita caractere por caractere (campos legados às vezes exigem eventos de tecla)
-    function digitar(el, texto) {
-        try { el.focus(); } catch (e) {}
-        try { el.value = ""; } catch (e) {}
+    // Digitação ROBUSTA: usa o setter nativo (burla controles que revertem o valor) +
+    // tenta document.execCommand("insertText") (digitação real, como um teclado).
+    function typeInto(el, texto) {
         const s = String(texto);
-        for (let i = 0; i < s.length; i++) {
-            const ch = s[i];
-            el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: ch }));
-            el.dispatchEvent(new KeyboardEvent("keypress", { bubbles: true, key: ch }));
-            try { el.value = s.slice(0, i + 1); } catch (e) {}
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: ch }));
+        try { el.focus(); el.click(); } catch (e) {}
+        const setter = (function () { try { return Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; } catch (e) { return null; } })();
+        const setVal = function (v) { try { if (setter) setter.call(el, v); else el.value = v; } catch (e) { try { el.value = v; } catch (e2) {} } };
+        setVal("");
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        let ok = false;
+        try { ok = document.execCommand && document.execCommand("insertText", false, s); } catch (e) {}
+        if (!ok || (el.value || "") !== s) {
+            setVal("");
+            for (let i = 0; i < s.length; i++) {
+                const ch = s[i];
+                el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: ch }));
+                el.dispatchEvent(new KeyboardEvent("keypress", { bubbles: true, key: ch }));
+                setVal(s.slice(0, i + 1));
+                try { el.dispatchEvent(new InputEvent("input", { bubbles: true, data: ch, inputType: "insertText" })); } catch (e) { el.dispatchEvent(new Event("input", { bubbles: true })); }
+                el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: ch }));
+            }
         }
         el.dispatchEvent(new Event("change", { bubbles: true }));
     }
@@ -335,15 +344,12 @@
         if (stage === "cliente") {
             status("Aguardando a tela do cliente...");
             await sleep(2000); // ⏱️ folga após o "Novo" (a tela termina de abrir e foca o campo)
-            let cli = acharCampoCliente(), t = 0;
-            while (!cli && t < 10) { await sleep(500); cli = acharCampoCliente(); t++; }
-            // o site já deixa o campo focado depois do Novo — usa o campo focado como reforço
-            if (!cli) { const ae = document.activeElement; if (ae && ae.tagName === "INPUT") cli = ae; }
+            // O site JÁ deixa o campo do cliente focado — digita direto no campo focado.
+            let cli = document.activeElement;
+            if (!cli || cli.tagName !== "INPUT" || cli.type === "checkbox" || cli.type === "radio") cli = acharCampoCliente();
             if (!cli) { if (ehFramePrincipal()) status("❌ Não achei o campo do Cliente. Manda um print que eu ajusto."); return; }
             status("Digitando cliente " + run.pedido.cliente + "...");
-            try { cli.focus(); } catch (e) {}
-            digitar(cli, run.pedido.cliente);          // digita o ID caractere a caractere
-            setInput(cli, run.pedido.cliente);         // reforço: garante o valor final + change/blur
+            typeInto(cli, run.pedido.cliente);   // digitação robusta (native setter + execCommand)
             enter(cli);
             await sleep(2000); // ⏱️ folga antes do Enviar (deixa o cliente resolver)
             await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });

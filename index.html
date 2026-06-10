@@ -2478,11 +2478,18 @@
                 const validos = itens.filter(i => Number(i.qty) > 0);
                 if (!validos.length) { showMessage('Adicione ao menos 1 item com quantidade.', 'error'); return; }
                 const pedido = { cliente: clienteId.trim(), itens: validos.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
-                // Envia para a extensão (que está ouvindo nesta página)
+                // Envia para a extensão (que está ouvindo nesta página) — NÃO mexe no histórico
                 window.postMessage({ source: 'friganso-app', type: 'LANCAR_PEDIDO', pedido: pedido }, '*');
-                addHistorico(clienteId.trim(), validos); // guarda no histórico do dia
                 setEnviado(true);
                 showMessage('Pedido enviado para a extensão! Abra a aba do SPAmov e clique em "🚀 Lançar pedido".', 'success');
+            };
+
+            const salvarHist = () => {
+                if (!clienteId.trim()) { showMessage('Informe o ID do cliente.', 'error'); return; }
+                const validos = itens.filter(i => Number(i.qty) > 0);
+                if (!validos.length) { showMessage('Adicione ao menos 1 item com quantidade.', 'error'); return; }
+                addHistorico(clienteId.trim(), validos);
+                showMessage('Pedido salvo no histórico do dia! 📋', 'success');
             };
 
             return (
@@ -2547,10 +2554,15 @@
                         )}
                     </div>
 
-                    {/* Lançar */}
-                    <button onClick={lancar} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="w-full bg-rose-700 hover:bg-rose-800 disabled:opacity-40 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 text-lg">
-                        <span>🚀</span> Mandar pra Extensão
-                    </button>
+                    {/* Ações */}
+                    <div className="flex flex-col sm:flex-row gap-2">
+                        <button onClick={lancar} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="flex-1 bg-rose-700 hover:bg-rose-800 disabled:opacity-40 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 text-lg">
+                            <span>🚀</span> Mandar pra Extensão
+                        </button>
+                        <button onClick={salvarHist} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="bg-white border-2 border-slate-200 hover:border-rose-400 disabled:opacity-40 text-slate-700 font-bold py-4 px-5 rounded-2xl transition-colors flex items-center justify-center gap-2">
+                            <span>💾</span> Salvar no Histórico
+                        </button>
+                    </div>
 
                     <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs text-slate-500 space-y-1">
                         <p className="font-bold text-slate-600">Como funciona:</p>
