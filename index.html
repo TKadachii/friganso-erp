@@ -2437,8 +2437,27 @@
             const [busca, setBusca] = useState('');
             const [itens, setItens] = useState([]); // {code, name, qty}
             const [enviado, setEnviado] = useState(false);
+            const [historico, setHistorico] = useState(() => {
+                try { const raw = window.localStorage.getItem('friganso_pedidos_hist'); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
+            });
 
             const clienteInfo = useMemo(() => clients.find(c => String(c.code) === clienteId.trim()), [clients, clienteId]);
+
+            const ehHoje = (ts) => { const d = new Date(ts), n = new Date(); return d.getDate() === n.getDate() && d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear(); };
+            const hora = (ts) => { const d = new Date(ts); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); };
+            const histHoje = useMemo(() => historico.filter(h => ehHoje(h.ts)), [historico]);
+
+            const salvarHistorico = (lista) => { try { window.localStorage.setItem('friganso_pedidos_hist', JSON.stringify(lista)); } catch (e) {} setHistorico(lista); };
+            const addHistorico = (cliente, itensValidos) => {
+                const entry = { id: Date.now() + '_' + Math.random().toString(36).slice(2, 6), cliente: cliente, itens: itensValidos.map(i => ({ code: String(i.code), name: i.name, qty: Number(i.qty) })), ts: Date.now() };
+                salvarHistorico([entry, ...historico].slice(0, 60));
+            };
+            const puxarHistorico = (h) => {
+                setClienteId(h.cliente || '');
+                setItens(h.itens.map(i => ({ code: String(i.code), name: i.name || ('Produto ' + i.code), qty: Number(i.qty) || 1 })));
+                showMessage('Pedido carregado! Confira e mande de novo.', 'success');
+            };
+            const removerHistorico = (id) => salvarHistorico(historico.filter(h => h.id !== id));
 
             const resultados = useMemo(() => {
                 const q = busca.trim();
@@ -2461,16 +2480,20 @@
                 const pedido = { cliente: clienteId.trim(), itens: validos.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
                 // Envia para a extensão (que está ouvindo nesta página)
                 window.postMessage({ source: 'friganso-app', type: 'LANCAR_PEDIDO', pedido: pedido }, '*');
+                addHistorico(clienteId.trim(), validos); // guarda no histórico do dia
                 setEnviado(true);
                 showMessage('Pedido enviado para a extensão! Abra a aba do SPAmov e clique em "🚀 Lançar pedido".', 'success');
             };
 
             return (
-                <div className="animate-in fade-in max-w-3xl mx-auto space-y-5">
-                    <div>
+                <div className="animate-in fade-in max-w-5xl mx-auto">
+                    <div className="mb-5">
                         <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🛒</span> Fazer Pedido</h2>
                         <p className="text-slate-500 text-sm">Monte o pedido aqui e a extensão lança no SPAmov pra você.</p>
                     </div>
+
+                    <div className="lg:grid lg:grid-cols-3 lg:gap-5 space-y-5 lg:space-y-0">
+                    <div className="lg:col-span-2 space-y-5">
 
                     {products.length === 0 && (
                         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-medium">⚠️ Carregue a <b>Tabela do Dia (PDF)</b> para buscar os produtos.</div>
@@ -2537,6 +2560,38 @@
                         <p>4. A extensão lança os itens e <b>para se algum der erro</b> (saldo, estoque...).</p>
                         <p className="text-rose-600 font-bold pt-1">⚠️ A confirmação final (DS → SP → PA) você faz na mão, conferindo tudo.</p>
                     </div>
+                    </div>{/* fim coluna do formulário */}
+
+                    {/* Histórico de pedidos do dia */}
+                    <div className="lg:col-span-1">
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden lg:sticky lg:top-4">
+                            <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>📋</span> Histórico do dia</h3>
+                                <span className="text-xs font-bold text-slate-400">{histHoje.length}</span>
+                            </div>
+                            <div className="divide-y divide-slate-100 max-h-[70vh] overflow-y-auto">
+                                {histHoje.length === 0 ? (
+                                    <div className="p-6 text-center text-slate-400 text-sm">Os pedidos que você mandar hoje aparecem aqui pra reusar com 1 clique. 🔁</div>
+                                ) : histHoje.map(h => (
+                                    <div key={h.id} className="p-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-sm flex items-center gap-1.5"><span className="bg-rose-700 text-white px-1.5 py-0.5 rounded font-mono font-black text-[10px] flex-shrink-0">{h.cliente || '?'}</span></p>
+                                                <p className="text-[11px] text-slate-400 mt-1">{hora(h.ts)} · {h.itens.length} item(ns)</p>
+                                            </div>
+                                            <div className="flex gap-1 flex-shrink-0">
+                                                <button onClick={() => puxarHistorico(h)} className="text-xs font-bold bg-rose-100 text-rose-700 hover:bg-rose-200 px-3 py-1.5 rounded-lg transition-colors">Puxar</button>
+                                                <button onClick={() => removerHistorico(h.id)} title="Remover" className="text-slate-300 hover:text-red-500 h-8 w-8 flex items-center justify-center transition-colors"><div className="h-3.5 w-3.5"><IconX /></div></button>
+                                            </div>
+                                        </div>
+                                        <p className="text-[11px] text-slate-500 mt-1 truncate">{h.itens.map(i => i.code + '×' + i.qty).join(', ')}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    </div>{/* fim grid */}
                 </div>
             );
         };
