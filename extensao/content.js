@@ -255,7 +255,7 @@
         const cells = document.querySelectorAll("td, th, label, span, div, b");
         for (let i = 0; i < cells.length; i++) {
             const t = (cells[i].innerText || "").trim();
-            if (/^cliente$/i.test(t)) { const r = cells[i].getBoundingClientRect(); if (r.width && r.height) { labelRect = r; break; } }
+            if (/^cliente\b/i.test(t) && t.length < 12) { const r = cells[i].getBoundingClientRect(); if (r.width && r.height) { labelRect = r; break; } }
         }
         if (!labelRect) return null;
         const cy = labelRect.top + labelRect.height / 2;
@@ -278,9 +278,10 @@
         if (Date.now() - (run.ts || 0) > 15 * 60 * 1000) { await clearRun(); return; } // expira em 15min
 
         const status = statusBox();
-        await sleep(1500); // deixa a página assentar após o "pisca"
-
         const stage = run.stage || "itens";
+        const nomeEtapa = stage === "novo" ? "abrir Novo" : (stage === "cliente" ? "preencher Cliente" : "lançar Itens");
+        status("🔄 Retomando — etapa: " + nomeEtapa + "...");
+        await sleep(1800); // deixa a página assentar após o "pisca"/navegação
 
         // ETAPA 1: clicar em "Novo"
         if (stage === "novo") {
