@@ -446,7 +446,7 @@
         // ETAPA 2: preencher o cliente e clicar em "Enviar"
         if (stage === "cliente") {
             status("Aguardando a tela do cliente...");
-            await sleep(2000); // ⏱️ folga após o "Novo" (a tela termina de abrir e foca o campo)
+            await sleep(1000); // ⏱️ folga após o "Novo" (a tela termina de abrir e foca o campo)
             // O site JÁ deixa o campo do cliente focado — digita direto no campo focado.
             let cli = document.activeElement;
             const focado = cli && cli.tagName === "INPUT";
@@ -459,7 +459,7 @@
             await sleep(800);
             dlog("valor no campo após digitar: '" + (cli.value || "") + "'");
             status("Cliente no campo: " + ((cli.value || "(vazio)")) + " — aguardando...");
-            await sleep(2000); // ⏱️ folga antes do Enviar (deixa o cliente resolver)
+            await sleep(1000); // ⏱️ folga antes do Enviar (deixa o cliente resolver)
             await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             let env = acharBotaoEnviar(), te = 0;
             while (!env && te < 6) { await sleep(400); env = acharBotaoEnviar(); te++; }
