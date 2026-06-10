@@ -349,19 +349,36 @@
         // no estado PA aparece a linha expandida: PCP OE PDE OP PDP CP NF DP FIN
         return /\bPCP\b/.test(t) && /\bPDE\b/.test(t) && /\bFIN\b/.test(t);
     }
-    // Acha o botão circular "DS/SP/PA Mov"
+    // Acha um elemento clicável (link/imagem/onclick) PERTO de uma referência (o "Mov")
+    function clicavelPerto(ref, raio) {
+        const rr = ref.getBoundingClientRect(); const cx = rr.left + rr.width / 2, cy = rr.top + rr.height / 2;
+        const cands = document.querySelectorAll("a, img, input[type=image], [onclick]");
+        let best = null, bd = 1e9;
+        for (let i = 0; i < cands.length; i++) {
+            const c = cands[i]; if (c === ref) continue;
+            const r = c.getBoundingClientRect(); if (!r.width || !r.height) continue;
+            const x = r.left + r.width / 2, y = r.top + r.height / 2;
+            const d = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+            if (d < (raio || 80) && d < bd) { bd = d; best = c; }
+        }
+        return best;
+    }
+    // Acha o botão circular "DS/SP/PA Mov" — retorna o ELEMENTO CLICÁVEL (o círculo), não o texto
     function acharMovBotao() {
         const els = document.querySelectorAll("a, td, div, span, img, button");
-        let cand = null;
+        let labelExato = null, labelMov = null;
         for (let i = 0; i < els.length; i++) {
             const e = els[i];
             const t = ((e.innerText || e.alt || e.title || "") + "").replace(/\s+/g, " ").trim();
             const r = e.getBoundingClientRect();
             if (!r.width || !r.height) continue;
-            if (/^(DS|SP|PA)\s*Mov$/i.test(t)) return e;
-            if (!cand && /\bMov$/i.test(t) && t.length <= 10) cand = e;
+            if (/^(DS|SP|PA)\s*Mov$/i.test(t) && !labelExato) labelExato = e;
+            if (/^Mov$/i.test(t) && !labelMov) labelMov = e;
         }
-        return cand;
+        const ref = labelExato || labelMov;
+        if (!ref) return null;
+        // o clicável de verdade (círculo/imagem/link) fica coladinho no "Mov"
+        return clicavelPerto(ref, 90) || ref;
     }
     // Um passo da finalização: se já está em PA, termina; senão clica no DS/SP/PA
     async function finalizarPasso() {
@@ -372,7 +389,7 @@
         const cliques = run.finalCliques || 0;
         if (cliques >= 6) { await clearRun(); dlog("⚠️ 6 cliques sem chegar em PA — parei"); status("⚠️ Não cheguei em PA sozinho. Clique no DS até virar PA na mão."); return; }
         const btn = acharMovBotao();
-        dlog("finalizar: botão DS/SP/PA " + (btn ? "achado" : "NÃO achado") + " (clique " + (cliques + 1) + ")");
+        dlog("finalizar: DS/SP/PA " + (btn ? ("clicando <" + btn.tagName + " " + ((btn.className || "") + "").slice(0, 30) + " src=" + ((btn.getAttribute && btn.getAttribute("src")) || "-").slice(-20) + ">") : "NÃO achado") + " (clique " + (cliques + 1) + ")");
         if (!btn) { await clearRun(); status("Itens lançados! Não achei o botão DS — clique nele até virar PA na mão."); return; }
         status("Confirmando (DS → SP → PA): clique " + (cliques + 1) + "...");
         await setRun({ pedido: run.pedido, stage: "finalizar", idx: run.idx, ativo: true, aguardando: false, ultimoCode: "", finalCliques: cliques + 1, ts: Date.now() });
