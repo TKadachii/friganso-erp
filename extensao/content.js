@@ -116,6 +116,21 @@
         return function (msg) { box.textContent = "🦢 " + msg; };
     }
     function setInput(el, v) { el.focus(); el.value = String(v); ["input", "change", "keyup", "blur"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true }))); }
+    // Digita caractere por caractere (campos legados às vezes exigem eventos de tecla)
+    function digitar(el, texto) {
+        try { el.focus(); } catch (e) {}
+        try { el.value = ""; } catch (e) {}
+        const s = String(texto);
+        for (let i = 0; i < s.length; i++) {
+            const ch = s[i];
+            el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: ch }));
+            el.dispatchEvent(new KeyboardEvent("keypress", { bubbles: true, key: ch }));
+            try { el.value = s.slice(0, i + 1); } catch (e) {}
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: ch }));
+        }
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     function enter(el) { ["keydown", "keypress", "keyup"].forEach(t => el.dispatchEvent(new KeyboardEvent(t, { bubbles: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 }))); }
     // Clique robusto: sobe até o elemento realmente clicável e dispara eventos de mouse + click nativo
     function clicar(el) {
@@ -312,21 +327,27 @@
             status("Abrindo novo pedido...");
             await setRun({ pedido: run.pedido, stage: "cliente", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             clicar(btn);
+            await sleep(2800); processarRun(); // se NÃO recarregar, continua sozinho; se recarregar, este código é descartado
             return;
         }
 
         // ETAPA 2: preencher o cliente e clicar em "Enviar"
         if (stage === "cliente") {
             let cli = acharCampoCliente(), t = 0;
-            while (!cli && t < 8) { await sleep(500); cli = acharCampoCliente(); t++; }
+            while (!cli && t < 10) { await sleep(500); cli = acharCampoCliente(); t++; }
+            // o site já deixa o campo focado depois do Novo — usa o campo focado como reforço
+            if (!cli) { const ae = document.activeElement; if (ae && ae.tagName === "INPUT") cli = ae; }
             if (!cli) { if (ehFramePrincipal()) status("❌ Não achei o campo do Cliente. Manda um print que eu ajusto."); return; }
-            status("Selecionando cliente " + run.pedido.cliente + "...");
-            setInput(cli, run.pedido.cliente);
+            status("Digitando cliente " + run.pedido.cliente + "...");
+            digitar(cli, run.pedido.cliente);   // digita o ID
             enter(cli);
-            await sleep(1300); // deixa o cliente resolver
+            await sleep(1500); // deixa o cliente resolver
             await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
-            const env = acharBotaoEnviar();
-            if (env) clicar(env); else enter(cli);
+            let env = acharBotaoEnviar(), te = 0;
+            while (!env && te < 6) { await sleep(400); env = acharBotaoEnviar(); te++; }
+            if (env) { status("Clicando em Enviar..."); clicar(env); }
+            else { status("Botão Enviar não achado — tentando Enter..."); enter(cli); }
+            await sleep(2800); processarRun(); // continua sozinho se não recarregar
             return;
         }
 
