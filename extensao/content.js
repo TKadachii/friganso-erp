@@ -255,7 +255,24 @@
         return null;
     }
     function acharCampoCliente() {
-        // acha o rótulo "CLIENTE"
+        // 1) MELHOR PISTA: o seletor "1. Jurídica / 2. Física" — o campo do ID fica logo à direita dele
+        const selects = document.querySelectorAll("select");
+        for (let i = 0; i < selects.length; i++) {
+            const s = selects[i];
+            const txt = Array.from(s.options || []).map(o => o.text).join(" ");
+            if (/jur[ií]dica|f[ií]sica/i.test(txt)) {
+                const sr = s.getBoundingClientRect();
+                if (!sr.width) continue;
+                const cy = sr.top + sr.height / 2;
+                const inps = inputsVisiveis().filter(function (inp) {
+                    const r = inp.getBoundingClientRect();
+                    return Math.abs((r.top + r.height / 2) - cy) < 16 && r.left >= sr.right - 4;
+                });
+                inps.sort(function (a, b) { return a.getBoundingClientRect().left - b.getBoundingClientRect().left; });
+                if (inps[0]) return inps[0];
+            }
+        }
+        // 2) Fallback: pelo rótulo "CLIENTE"
         let labelRect = null;
         const cells = document.querySelectorAll("td, th, label, span, div, b");
         for (let i = 0; i < cells.length; i++) {
@@ -264,7 +281,6 @@
         }
         if (!labelRect) return null;
         const cy = labelRect.top + labelRect.height / 2;
-        // campos de texto na MESMA LINHA do rótulo e à DIREITA dele (o 1º é o ID do cliente)
         const inps = inputsVisiveis().filter(function (i) {
             const r = i.getBoundingClientRect();
             return Math.abs((r.top + r.height / 2) - cy) < 16 && r.left > labelRect.left;
