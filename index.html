@@ -2460,11 +2460,9 @@
             const removerHistorico = (id) => salvarHistorico(historico.filter(h => h.id !== id));
             const mandarTodosHist = () => {
                 if (!histHoje.length) { showMessage('Sem pedidos no histórico de hoje.', 'error'); return; }
-                histHoje.forEach(h => {
-                    const pedido = { cliente: h.cliente, itens: h.itens.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
-                    window.postMessage({ source: 'friganso-app', type: 'LANCAR_PEDIDO', pedido: pedido }, '*');
-                });
-                showMessage(`${histHoje.length} pedido(s) enviado(s) pra fila da extensão! No SPAmov, clique em 🚀 Lançar pedido.`, 'success');
+                const pedidos = histHoje.map(h => ({ cliente: h.cliente, itens: h.itens.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) }));
+                window.postMessage({ source: 'friganso-app', type: 'LANCAR_VARIOS', pedidos: pedidos }, '*');
+                showMessage(`${pedidos.length} pedido(s) enviado(s) pra fila da extensão! No SPAmov, clique em 🚀 Lançar pedido.`, 'success');
             };
 
             const resultados = useMemo(() => {

@@ -9,16 +9,21 @@
     if (host.indexOf("github.io") !== -1) {
         window.addEventListener("message", function (e) {
             const d = e.data;
-            if (d && d.source === "friganso-app" && d.type === "LANCAR_PEDIDO" && d.pedido) {
-                try {
-                    chrome.storage.local.get(["friganso_fila"], function (r) {
-                        const fila = (r && r.friganso_fila) || [];
-                        fila.push({ id: Date.now() + "_" + Math.floor(Math.random() * 1000), cliente: d.pedido.cliente, itens: d.pedido.itens, ts: Date.now() });
-                        while (fila.length > 12) fila.shift(); // guarda os últimos 12
-                        chrome.storage.local.set({ friganso_fila: fila });
+            if (!d || d.source !== "friganso-app") return;
+            let novos = [];
+            if (d.type === "LANCAR_PEDIDO" && d.pedido) novos = [d.pedido];
+            else if (d.type === "LANCAR_VARIOS" && Array.isArray(d.pedidos)) novos = d.pedidos;
+            else return;
+            try {
+                chrome.storage.local.get(["friganso_fila"], function (r) {
+                    const fila = (r && r.friganso_fila) || [];
+                    novos.forEach(function (p, i) {
+                        fila.push({ id: Date.now() + "_" + i + "_" + Math.floor(Math.random() * 100000), cliente: p.cliente, itens: p.itens, ts: Date.now() });
                     });
-                } catch (err) { /* ignore */ }
-            }
+                    while (fila.length > 30) fila.shift(); // guarda os últimos 30
+                    chrome.storage.local.set({ friganso_fila: fila });
+                });
+            } catch (err) { /* ignore */ }
         });
         return;
     }
