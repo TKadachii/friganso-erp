@@ -765,6 +765,8 @@
             const [showHistoryPrompt, setShowHistoryPrompt] = useState(false);
             const [clientToSave, setClientToSave] = useState(null);
             const [editedPrices, setEditedPrices] = useState({});
+            const [editedQty, setEditedQty] = useState({});
+            const getQty = (it) => (editedQty[it.code] !== undefined ? editedQty[it.code] : it.quantity);
             const [detectedClientName, setDetectedClientName] = useState('');
             const [isProcessing, setIsProcessing] = useState(false);
             const [wantCreateProfile, setWantCreateProfile] = useState(true);
@@ -871,7 +873,7 @@
                     const qty = Number(item.quantity);
                     return { ...item, quantity: qty, unitFinalPrice, discountedPrice: unitFinalPrice * qty, originalPrice: origPrice * qty, hasDiscount };
                 });
-                setEditedPrices({});
+                setEditedPrices({}); setEditedQty({});
                 setOrderSummary({ customerCode: pendingCustomer, spamov: pendingSpamov, items: processed, totalDiscounted: processed.reduce((acc, c) => acc + c.discountedPrice, 0) });
                 setShowModal(false);
                 setShowManualHistory(false); setManualSearch(''); setManualSelected(null);
@@ -967,7 +969,7 @@
                 if (txt !== '') txt += '\n';
                 orderSummary.items.forEach(item => {
                     const price = editedPrices[item.code] !== undefined ? editedPrices[item.code] : item.unitFinalPrice;
-                    txt += `${item.code} - ${item.quantity}x - ${formatPrice(price)}\n`;
+                    txt += `${item.code} - ${getQty(item)}x - ${formatPrice(price)}\n`;
                 });
                 return txt.trim();
             };
@@ -1105,7 +1107,18 @@
                                             {orderSummary.items.map((i, idx) => (
                                                 <tr key={idx} className="hover:bg-slate-50 border-b border-slate-50">
                                                     <td className="p-4 text-slate-500 font-bold">{i.code}</td>
-                                                    <td className="p-4 text-center text-slate-600 font-bold">{i.quantity}x</td>
+                                                    <td className="p-4 text-center">
+                                                        <div className="inline-flex items-center gap-1">
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                value={getQty(i)}
+                                                                onChange={e => { const v = e.target.value; const num = parseInt(v, 10); setEditedQty(prev => ({ ...prev, [i.code]: (v === '' || isNaN(num)) ? 0 : num })); }}
+                                                                className="w-16 text-center font-bold text-slate-700 bg-transparent border-b-2 border-slate-200 focus:border-rose-600 outline-none px-1 py-0.5"
+                                                            />
+                                                            <span className="text-slate-400 font-bold text-sm">x</span>
+                                                        </div>
+                                                    </td>
                                                     <td className="p-4 bg-rose-50/30 text-right">
                                                         <input
                                                             type="text"
