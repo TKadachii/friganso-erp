@@ -2133,6 +2133,193 @@
             );
         };
 
+        // ===== DISPAROS WHATSAPP: campanha clicar-e-enviar =====
+        const DisparosScreen = ({ clients, products, user, showMessage, setActiveRoute }) => {
+            const TEMPLATE_PADRAO = "Olá {contato}! {saudacao} 😊\n\nAqui é o {vendedor} da Friganso. Passando para te oferecer:\n\n🥩 {produto}\n\nQuer que eu reserve para você? Temos ótimas condições hoje!";
+            const [template, setTemplate] = useState(TEMPLATE_PADRAO);
+            const [incluirProduto, setIncluirProduto] = useState(true);
+            const [filtro, setFiltro] = useState('todos'); // todos | inativos | atencao | top
+            const [busca, setBusca] = useState('');
+            const [selecionados, setSelecionados] = useState(new Set());
+            const [emCampanha, setEmCampanha] = useState(false);
+            const [idx, setIdx] = useState(0);
+            const [enviados, setEnviados] = useState(new Set());
+
+            // --- helpers de categoria/recomendação (espelham o Radar) ---
+            const CAT_RE = {
+                acougue: /costela|alcatra|patinho|cox[aã]o|ac[eé]m|contra.?fil|dianteiro|traseiro|banda|pernil|barriga|toucinho|f[ií]gado|mocot|bucho|rabada|carne|fraldinha|maminha|picanha|cupim|lagarto|m[uú]sculo|peito\s*resf|carr[eé]|suin|bovin/i,
+                mercado: /mussarela|queijo|presunto|pres\.|mortadela|mort\.|salsich|lingui|ling\.|bacon|margarina|hamburg|frios|requeij|leite|manteiga|nuggets|empanad|coxa|asa|frango/i,
+                restaurante: /p[aã]o de alho|fil[eé] de peito|file de peito|frango temp|coalho|batata|grill|churrasc|espeto|picanha|alcatra|pizza/i
+            };
+            const profileCat = (title) => { const t = (title || '').toLowerCase(); if (/a[cç]ougue/.test(t)) return 'acougue'; if (/mercad|mercear/.test(t)) return 'mercado'; if (/restaurante|food/.test(t)) return 'restaurante'; return ''; };
+            const nameCat = (name) => { const n = (name || '').toLowerCase(); if (/supermerc|mercad|mercear|minimerc|atacad|distribuidora|bebidas/.test(n)) return 'mercado'; if (/restaurante|churrasc|lanchonete|petiscaria|espeto|gril|pizza|confeitaria|bar\b|butecou/.test(n)) return 'restaurante'; if (/a[cç]ougue|carne/.test(n)) return 'acougue'; return ''; };
+            const categoryForClient = (c) => profileCat(c.profile && c.profile.title) || nameCat(c.name) || 'geral';
+            const hashStr = (s) => { let h = 0; const str = String(s || ''); for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h; };
+            const recomendarProduto = (c) => {
+                if (!products.length) return null;
+                const cat = categoryForClient(c);
+                const bought = new Set((c.history || []).map(String));
+                let cands = products.filter(p => !bought.has(String(p.code)) && (cat === 'geral' || (CAT_RE[cat] && CAT_RE[cat].test(p.name || ''))));
+                if (!cands.length) cands = products.filter(p => !bought.has(String(p.code)));
+                if (!cands.length) return null;
+                const today = new Date();
+                const daySeed = Number(`${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`);
+                return cands[(daySeed + hashStr(c.code)) % cands.length];
+            };
+
+            const saudacao = () => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; };
+            const waNumber = (phone) => { let d = String(phone || '').replace(/\D/g, ''); if (!d) return ''; if (d.length <= 11) d = '55' + d; return d; };
+            const personalizar = (c) => {
+                const prod = incluirProduto ? recomendarProduto(c) : null;
+                return template
+                    .replace(/\{nome\}/gi, c.name || '')
+                    .replace(/\{contato\}/gi, c.contactName || c.name || 'tudo bem')
+                    .replace(/\{saudacao\}/gi, saudacao())
+                    .replace(/\{vendedor\}/gi, (user && user.name) ? user.name.split(' ')[0] : 'vendedor')
+                    .replace(/\{produto\}/gi, prod ? `${prod.code} - ${prod.name}` : 'nossos produtos');
+            };
+            const waLink = (c) => `https://wa.me/${waNumber(c.phone)}?text=${encodeURIComponent(personalizar(c))}`;
+
+            // --- audiência filtrada ---
+            const lista = useMemo(() => {
+                const lvl = (c) => (c.history || []).length;
+                let base = clients;
+                if (filtro === 'inativos') base = clients.filter(c => lvl(c) === 0);
+                else if (filtro === 'atencao') base = clients.filter(c => lvl(c) >= 1 && lvl(c) <= 3);
+                else if (filtro === 'top') base = clients.filter(c => lvl(c) >= 9);
+                const q = busca.trim().toLowerCase();
+                if (q) base = base.filter(c => (c.name || '').toLowerCase().includes(q) || String(c.code || '').toLowerCase().includes(q));
+                return base;
+            }, [clients, filtro, busca]);
+
+            const toggle = (id) => { const s = new Set(selecionados); s.has(id) ? s.delete(id) : s.add(id); setSelecionados(s); };
+            const marcarTodos = () => setSelecionados(new Set(lista.map(c => c.id)));
+            const limparSel = () => setSelecionados(new Set());
+
+            const alvos = clients.filter(c => selecionados.has(c.id));
+            const comTelefone = alvos.filter(c => waNumber(c.phone));
+            const semTelefone = alvos.filter(c => !waNumber(c.phone));
+
+            const iniciar = () => {
+                if (comTelefone.length === 0) { showMessage('Selecione ao menos 1 cliente com telefone cadastrado.', 'error'); return; }
+                setIdx(0); setEnviados(new Set()); setEmCampanha(true);
+            };
+            const atual = comTelefone[idx];
+            const avancar = (marcarEnviado) => {
+                if (marcarEnviado && atual) { const s = new Set(enviados); s.add(atual.id); setEnviados(s); }
+                if (idx + 1 >= comTelefone.length) { setEmCampanha(false); showMessage(`Campanha concluída! ${marcarEnviado ? enviados.size + 1 : enviados.size} enviada(s).`, 'success'); }
+                else setIdx(idx + 1);
+            };
+
+            // ===== MODO CAMPANHA (passo a passo) =====
+            if (emCampanha && atual) {
+                const prodRec = incluirProduto ? recomendarProduto(atual) : null;
+                return (
+                    <div className="animate-in fade-in max-w-2xl mx-auto">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><div className="h-6 w-6 text-emerald-600"><IconWhatsApp/></div> Campanha em andamento</h2>
+                            <button onClick={() => setEmCampanha(false)} className="text-slate-500 font-medium px-4 py-2 bg-slate-200 rounded-lg text-sm">Encerrar</button>
+                        </div>
+                        <div className="bg-slate-200 rounded-full h-2 mb-1 overflow-hidden"><div className="bg-emerald-500 h-full transition-all" style={{ width: `${((idx) / comTelefone.length) * 100}%` }}></div></div>
+                        <p className="text-xs text-slate-500 mb-4 text-center">Cliente {idx + 1} de {comTelefone.length} · {enviados.size} enviada(s)</p>
+
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="h-12 w-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-lg">{(atual.name || 'C').charAt(0)}</div>
+                                <div className="min-w-0">
+                                    <h3 className="font-bold text-slate-800 truncate">{atual.name}</h3>
+                                    <p className="text-xs text-slate-500">📱 {atual.phone} · ID {atual.code}</p>
+                                </div>
+                            </div>
+                            {prodRec && <div className="bg-rose-50 border border-rose-100 rounded-xl p-3 mb-3 text-sm"><span className="text-rose-700 font-bold">Produto sugerido:</span> {prodRec.code} - {prodRec.name}</div>}
+                            <div className="bg-[#e1ffc7] rounded-2xl p-4 border border-[#d3f4b8] mb-4">
+                                <pre className="font-sans text-sm whitespace-pre-wrap text-slate-800">{personalizar(atual)}</pre>
+                            </div>
+                            <a href={waLink(atual)} target="_blank" rel="noopener noreferrer" onClick={() => { const s = new Set(enviados); s.add(atual.id); setEnviados(s); }} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
+                                <div className="h-6 w-6"><IconWhatsApp/></div> Abrir WhatsApp e Enviar
+                            </a>
+                            <div className="flex gap-2">
+                                <button onClick={() => avancar(false)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-colors">Pular</button>
+                                <button onClick={() => avancar(true)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors">Próximo →</button>
+                            </div>
+                        </div>
+                        <p className="text-center text-xs text-slate-400 mt-4">Toque em "Abrir WhatsApp e Enviar", confirme o envio no app, e volte aqui para "Próximo".</p>
+                    </div>
+                );
+            }
+
+            // ===== MODO CONFIGURAÇÃO =====
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><div className="h-6 w-6 text-emerald-600"><IconWhatsApp/></div> Disparos WhatsApp</h2>
+                        <p className="text-slate-500 text-sm">Monte uma campanha e envie cliente por cliente pelo seu WhatsApp Business.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Composer */}
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+                            <h3 className="font-bold text-slate-800 flex items-center gap-2"><div className="h-5 w-5 text-rose-600"><IconWand/></div> Mensagem</h3>
+                            <textarea value={template} onChange={e => setTemplate(e.target.value)} rows="7" className="w-full p-3 bg-slate-50 border rounded-xl text-sm outline-none focus:border-emerald-500 resize-none"></textarea>
+                            <div className="flex flex-wrap gap-1.5">
+                                {['{contato}', '{nome}', '{saudacao}', '{produto}', '{vendedor}'].map(v => (
+                                    <button key={v} onClick={() => setTemplate(template + ' ' + v)} className="text-[11px] font-mono font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded-md transition-colors">{v}</button>
+                                ))}
+                            </div>
+                            <label className="flex items-center gap-3 cursor-pointer bg-rose-50 p-3 rounded-xl border border-rose-100">
+                                <div onClick={() => setIncluirProduto(!incluirProduto)} className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${incluirProduto ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                                    <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${incluirProduto ? 'left-5' : 'left-0.5'}`}></div>
+                                </div>
+                                <span className="text-sm font-bold text-slate-700">Sugerir produto do perfil de cada cliente em <code className="text-rose-600">{'{produto}'}</code></span>
+                            </label>
+                        </div>
+
+                        {/* Audiência */}
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex flex-col">
+                            <div className="flex justify-between items-center mb-3">
+                                <h3 className="font-bold text-slate-800">Quem vai receber</h3>
+                                <span className="text-xs font-bold text-emerald-600">{selecionados.size} selecionado(s)</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 mb-3">
+                                {[['todos', 'Todos'], ['inativos', '🚨 Inativos'], ['atencao', '⚠️ Atenção'], ['top', '🔥 Top']].map(([k, lbl]) => (
+                                    <button key={k} onClick={() => setFiltro(k)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${filtro === k ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{lbl}</button>
+                                ))}
+                            </div>
+                            <input type="text" value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar nome ou ID..." className="w-full px-3 py-2 bg-slate-50 border rounded-xl text-sm outline-none focus:border-emerald-500 mb-2"/>
+                            <div className="flex gap-2 mb-2">
+                                <button onClick={marcarTodos} className="text-xs font-bold text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded-lg">Selecionar todos ({lista.length})</button>
+                                <button onClick={limparSel} className="text-xs font-bold text-slate-500 hover:bg-slate-100 px-2 py-1 rounded-lg">Limpar</button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto max-h-72 space-y-1 pr-1">
+                                {lista.map(c => {
+                                    const semTel = !waNumber(c.phone);
+                                    return (
+                                        <label key={c.id} className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer border ${selecionados.has(c.id) ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-100 hover:border-slate-200'}`}>
+                                            <input type="checkbox" checked={selecionados.has(c.id)} onChange={() => toggle(c.id)} className="h-4 w-4 rounded text-emerald-600 flex-shrink-0"/>
+                                            <span className="text-sm font-bold text-slate-700 truncate flex-1">{c.name}</span>
+                                            {semTel ? <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full flex-shrink-0">sem telefone</span> : <span className="text-[10px] text-slate-400 font-mono flex-shrink-0">{c.code}</span>}
+                                        </label>
+                                    );
+                                })}
+                                {lista.length === 0 && <p className="text-center text-slate-400 text-sm py-6">Nenhum cliente neste filtro.</p>}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Resumo + iniciar */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                        <div className="text-sm text-slate-600">
+                            <p><b className="text-emerald-700">{comTelefone.length}</b> cliente(s) prontos para receber.</p>
+                            {semTelefone.length > 0 && <p className="text-amber-600 text-xs mt-1">⚠️ {semTelefone.length} selecionado(s) sem telefone serão pulados. Cadastre o WhatsApp no CRM.</p>}
+                        </div>
+                        <button onClick={iniciar} disabled={comTelefone.length === 0} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold py-3.5 px-8 rounded-2xl shadow-md transition-colors flex items-center gap-2 w-full sm:w-auto justify-center">
+                            <div className="h-5 w-5"><IconWhatsApp/></div> Iniciar Campanha ({comTelefone.length})
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
         const App = () => {
             const [user, setUser] = useState(() => { const s = window.localStorage.getItem('friganso_loggedUser'); return s ? JSON.parse(s) : null; });
             const [activeRoute, setActiveRoute] = useState(() => {
@@ -2187,6 +2374,7 @@
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} />;
                     case 'resumo': return <ResumoScreen products={products} showMessage={showMessage} clients={clients} setActiveRoute={setActiveRoute} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
+                    case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     default: return <DashboardScreen user={user} />;
                 }
             };
@@ -2225,6 +2413,7 @@
                             <NavButton route="pdf" icon={IconFileText} label="Tabela do Dia (PDF)" />
                             <NavButton route="resumo" icon={IconReceipt} label="Resumo de Pedido" />
                             <NavButton route="orcamentos" icon={IconWhatsApp} label="Gerador de Zap" />
+                            <NavButton route="disparos" icon={IconWhatsApp} label="Disparos WhatsApp" />
                             
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Sistema & Ajuda</p>
                             <NavButton route="support" icon={IconSupport} label="Suporte Técnico" />
