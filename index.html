@@ -781,7 +781,8 @@
                     let customerName = '', spamov = '', clienteName = '';
                     const spMatch = txt.match(/SPAmov[\s\t]*(\d+)/i);
                     if (spMatch) spamov = spMatch[1];
-                    const clienteMatch = txt.match(/CLIENTE\s*\[f\]\s*(\d+)\s*[-–]?\s*([^\n\r]+)?/i)
+                    const clienteMatch = txt.match(/CLIENTE\s*\[[fj]\]\s*(\d+[a-z]?)\s*[-–]?\s*([^\n\r]+)?/i)
+                        || txt.match(/\[[fj]\]\s*(\d+[a-z]?)\s*-\s*([^\n\r]+)/i)
                         || txt.match(/(?:cliente|código|codigo)[\s\t:\-]+(\d+)/i);
                     if (clienteMatch) {
                         customerName = clienteMatch[1].trim();
@@ -822,6 +823,16 @@
                     setShowModal(true);
                 } catch (err) { showMessage('Erro crítico ao ler pedido.', 'error'); setIsProcessing(false); }
             };
+
+            // Recebe o pedido enviado pela extensão do Chrome (lê o SPAmov) e processa automaticamente
+            useEffect(() => {
+                const ped = window.sessionStorage.getItem('friganso_pedido_texto');
+                if (ped) {
+                    window.sessionStorage.removeItem('friganso_pedido_texto');
+                    setOrderText(ped);
+                    setTimeout(() => handleProcessText(ped), 300);
+                }
+            }, []);
 
             const handleConfirmModal = async () => {
                 const validItems = pendingItems.filter(item => Number(item.quantity) > 0);
@@ -2818,6 +2829,19 @@
             const p = new URLSearchParams(window.location.search);
             const r = p.get('route');
             if (r) window.sessionStorage.setItem('friganso_initial_route', r);
+            // Pedido vindo da extensão do Chrome (lê a tela do SPAmov)
+            const ped = p.get('pedido');
+            if (ped) {
+                try {
+                    window.sessionStorage.setItem('friganso_pedido_texto', decodeURIComponent(escape(atob(ped))));
+                    window.sessionStorage.setItem('friganso_initial_route', 'resumo');
+                } catch (e) {
+                    window.sessionStorage.setItem('friganso_pedido_texto', ped);
+                    window.sessionStorage.setItem('friganso_initial_route', 'resumo');
+                }
+                // limpa a URL para não reimportar ao recarregar
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            }
         })();
 
         // Captura o prompt de instalação do PWA para usar no botão do Perfil
