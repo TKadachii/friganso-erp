@@ -123,41 +123,63 @@
         }
         return null;
     }
-    function acharInputCodigo(entrada) {
-        const inps = Array.from(entrada.querySelectorAll("input")).filter(i => { const t = (i.type || "").toLowerCase(); if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(t) !== -1) return false; const r = i.getBoundingClientRect(); return r.width > 20 && r.height > 0; });
-        if (!inps.length) return null;
-        inps.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-        return inps[0]; // mais à esquerda = campo de código do produto
+    // Y (posição vertical) da linha de entrada de itens
+    function entradaY() {
+        const selects = document.querySelectorAll("select");
+        for (let i = 0; i < selects.length; i++) {
+            const s = selects[i];
+            const txt = Array.from(s.options || []).map(o => o.text).join(" ");
+            if (/PRODUTOS/i.test(txt)) { const r = s.getBoundingClientRect(); if (r.width) return r.top + r.height / 2; }
+        }
+        const tds = document.querySelectorAll("td");
+        for (let i = 0; i < tds.length; i++) { if (/novo or[çc]amento/i.test(tds[i].innerText || "")) { const r = tds[i].getBoundingClientRect(); if (r.height) return r.top + r.height / 2; } }
+        return null;
     }
-    function acharInputQtd(entrada) {
+    function inputsVisiveis() {
+        return Array.prototype.slice.call(document.querySelectorAll("input")).filter(function (i) {
+            const t = (i.type || "").toLowerCase();
+            if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(t) !== -1) return false;
+            const r = i.getBoundingClientRect(); return r.width > 10 && r.height > 5;
+        });
+    }
+    // Acha os campos de código e quantidade da linha de entrada PELA POSIÇÃO na tela
+    function camposEntrada() {
+        const y = entradaY(); if (y == null) return null;
         const colX = colXQuant();
-        const inps = Array.from(entrada.querySelectorAll("input")).filter(i => { const t = (i.type || "").toLowerCase(); return ["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(t) === -1; });
-        let best = null, bd = 1e9;
-        inps.forEach(i => { const r = i.getBoundingClientRect(); if (!r.width) return; const x = r.left + r.width / 2; const d = colX != null ? Math.abs(x - colX) : 0; if (d < bd) { bd = d; best = i; } });
-        return best;
+        const naLinha = inputsVisiveis().filter(function (i) { const r = i.getBoundingClientRect(); return Math.abs((r.top + r.height / 2) - y) < 24; });
+        const porX = naLinha.slice().sort(function (a, b) { return a.getBoundingClientRect().left - b.getBoundingClientRect().left; });
+        const code = porX[0] || null; // mais à esquerda = código
+        let qty = null, bd = 1e9;
+        naLinha.forEach(function (i) {
+            if (i === code) return;
+            const r = i.getBoundingClientRect(); const x = r.left + r.width / 2;
+            const d = (colX != null) ? Math.abs(x - colX) : x;
+            if (d < bd) { bd = d; qty = i; } // mais próximo da coluna "Quant. Mov." = quantidade
+        });
+        return { y: y, n: naLinha.length, code: code, qty: qty };
     }
 
     async function lancarPedido(pedido) {
         const status = statusBox();
         try {
-            const entrada = acharLinhaEntrada();
-            if (!entrada) { status("❌ Abra o pedido até a tela amarela de itens (Novo + cliente + Enviar) e clique de novo."); return; }
+            let info = camposEntrada();
+            if (!info || info.y == null) { status("❌ Não achei a linha de entrada. Abra o pedido até a tela amarela de itens e clique de novo."); return; }
             const total = pedido.itens.length;
             for (let k = 0; k < total; k++) {
                 const it = pedido.itens[k];
                 status("Lançando " + (k + 1) + "/" + total + ":  " + it.code + "  x" + it.qty);
-                const ent = acharLinhaEntrada();
-                const codeInput = ent && acharInputCodigo(ent);
-                const qtyInput = ent && acharInputQtd(ent);
-                if (!codeInput || !qtyInput) { status("❌ Não achei os campos de código/quantidade. Me chame pra ajustar."); return; }
+                info = camposEntrada();
+                if (!info || !info.code || !info.qty) { status("❌ Não achei os campos (inputs na linha: " + (info ? info.n : 0) + "). Manda um print que eu ajusto."); return; }
 
                 const antes = bodyText();
-                setInput(codeInput, it.code);
-                enter(codeInput);
+                setInput(info.code, it.code);
+                enter(info.code);
                 await sleep(1300); // espera o produto carregar
-                setInput(qtyInput, it.qty);
-                enter(qtyInput); // confirma/lança o item
-                await esperar(() => bodyText() !== antes, 8000);
+                info = camposEntrada(); // a linha pode ter mudado
+                const q = (info && info.qty) ? info.qty : null;
+                if (q) { setInput(q, it.qty); enter(q); }
+                else { enter(info && info.code ? info.code : document.activeElement); }
+                await esperar(function () { return bodyText() !== antes; }, 8000);
                 await sleep(500);
 
                 const fim = bodyText().slice(-600);
@@ -199,7 +221,7 @@
         document.body.appendChild(b);
     }
 
-    const temEntrada = !!acharLinhaEntrada();
+    const temEntrada = !!acharLinhaEntrada() || entradaY() != null;
     const temLeitura = temPedidoLeitura(montarPedidoLeitura());
 
     // Botão de LANÇAR aparece na tela de itens (linha amarela de entrada)
