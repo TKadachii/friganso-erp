@@ -214,59 +214,74 @@
         return lista[0].el;
     }
 
-    async function lancarPedido(pedido) {
+    // ---------- Estado persistente (sobrevive ao reload "pisca" do site) ----------
+    function getRun() { return new Promise(function (res) { try { chrome.storage.local.get(["friganso_run"], function (r) { res((r && r.friganso_run) || null); }); } catch (e) { res(null); } }); }
+    function setRun(run) { return new Promise(function (res) { try { chrome.storage.local.set({ friganso_run: run }, function () { res(); }); } catch (e) { res(); } }); }
+    function clearRun() { return new Promise(function (res) { try { chrome.storage.local.remove("friganso_run", function () { res(); }); } catch (e) { res(); } }); }
+    function ehFrameItens() { return colXQuant() != null; } // frame que tem o cabeçalho "Quant. Mov."
+
+    // Processa UM item por carregamento da página. O clique no verde recarrega o site
+    // e, no próximo load, esta função retoma sozinha do próximo item.
+    async function processarRun() {
+        const run = await getRun();
+        if (!run || !run.ativo) return;
+        if (!ehFrameItens()) return;                                   // só o frame de itens age
+        if (Date.now() - (run.ts || 0) > 15 * 60 * 1000) { await clearRun(); return; } // expira em 15min
+
         const status = statusBox();
-        try {
-            let info = camposEntrada();
-            if (!info || !info.rect) { status("❌ Não achei a linha de entrada. Abra o pedido até a tela amarela de itens e clique de novo."); return; }
-            const total = pedido.itens.length;
-            for (let k = 0; k < total; k++) {
-                const it = pedido.itens[k];
-                status("Lançando " + (k + 1) + "/" + total + ":  " + it.code + "  x" + it.qty);
-                info = camposEntrada();
-                if (!info || !info.code || !info.qty) { status("❌ Não achei os campos (inputs na linha: " + (info ? info.n : 0) + "). Manda um print que eu ajusto."); return; }
+        const total = run.pedido.itens.length;
+        await sleep(1500); // deixa a página assentar após o "pisca"
 
-                // 1) CÓDIGO do produto
-                const antesCod = bodyText();
-                setInput(info.code, "");        // limpa qualquer valor antigo
-                setInput(info.code, it.code);   // digita o código
-                enter(info.code);               // confirma o código (resolve o produto)
-
-                // 2) espera o PRODUTO carregar (a tela muda quando reconhece)
-                await esperar(function () { return bodyText() !== antesCod; }, 5000);
-                await sleep(900);
-
-                // 3) QUANTIDADE (re-localiza os campos; ignora o campo de valor)
-                info = camposEntrada();
-                if (info && info.qty) setInput(info.qty, it.qty);
-                await sleep(350);
-
-                // 4) clica no ✓ VERDE pra lançar o item
-                const antesAdd = bodyText();
-                const check = acharCheckVerde(info ? info.rect : linhaEntradaRect());
-                if (check) check.click();
-                else if (info && info.qty) enter(info.qty); // fallback
-
-                // 5) espera o ITEM entrar
-                const mudou = await esperar(function () { return bodyText() !== antesAdd; }, 8000);
-                await sleep(700);
-
-                const fim = bodyText().slice(-700);
-                if (!mudou) { status("⚠️ Item " + it.code + " não entrou (✓ verde?). Manda um print que eu ajusto a mira."); return; }
-                if (/n[ãa]o\s+adicionado|saldo\s+n[ãa]o\s+suporta|n[ãa]o\s+suporta|estoque\s+insuficiente|bloquead/i.test(fim) && !/item\s+aceito/i.test(fim)) {
-                    status("🛑 PAROU no item " + it.code + ". O SPAmov recusou (veja a faixa azul). Os anteriores foram lançados.");
-                    return;
-                }
-                status("✓ " + it.code + " ok");
-
-                // 6) espera a linha de entrada RESETAR (código vazio) + folga de 2s antes do próximo item
-                await esperar(function () { const f = camposEntrada(); return f && f.code && !((f.code.value || "").trim()); }, 4000);
-                status("✓ " + it.code + " ok — aguardando o SPAmov...");
-                await sleep(2000);
+        // Confere o resultado do item anterior (a mensagem aparece na página recarregada)
+        if (run.aguardando) {
+            const msg = bodyText().slice(-900);
+            if (/n[ãa]o\s+adicionado|saldo\s+n[ãa]o\s+suporta|n[ãa]o\s+suporta|estoque\s+insuficiente|bloquead/i.test(msg) && !/item\s+aceito/i.test(msg)) {
+                await clearRun();
+                status("🛑 PAROU no item " + run.ultimoCode + ". O SPAmov recusou (veja a faixa azul). Os anteriores foram lançados.");
+                return;
             }
+        }
+
+        if (run.idx >= total) {
+            await clearRun();
             status("✅ " + total + " item(ns) lançados! Confira tudo e finalize na mão: DS → SP → PA.");
-            try { chrome.storage.local.remove("friganso_pedido"); } catch (e) {}
-        } catch (e) { status("❌ Erro: " + e.message); }
+            return;
+        }
+
+        // garante a linha de entrada pronta
+        let info = camposEntrada(), tent = 0;
+        while ((!info || !info.code || !info.qty) && tent < 12) { await sleep(500); info = camposEntrada(); tent++; }
+        if (!info || !info.code || !info.qty) { await clearRun(); status("❌ Não achei os campos (inputs: " + (info ? info.n : 0) + "). Cancelei — manda um print."); return; }
+
+        const it = run.pedido.itens[run.idx];
+        status("Lançando " + (run.idx + 1) + "/" + total + ":  " + it.code + "  x" + it.qty);
+
+        // 1) código -> resolve o produto
+        const antesCod = bodyText();
+        setInput(info.code, "");
+        setInput(info.code, it.code);
+        enter(info.code);
+        await esperar(function () { return bodyText() !== antesCod; }, 5000);
+        await sleep(900);
+
+        // 2) quantidade (ignora o campo de valor)
+        info = camposEntrada();
+        if (info && info.qty) setInput(info.qty, it.qty);
+        await sleep(400);
+
+        // 3) salva o avanço ANTES de clicar (a página vai recarregar)
+        await setRun({ pedido: run.pedido, idx: run.idx + 1, ativo: true, aguardando: true, ultimoCode: it.code, ts: Date.now() });
+
+        // 4) clica no ✓ verde -> o site recarrega e o próximo item continua sozinho
+        const check = acharCheckVerde(info ? info.rect : linhaEntradaRect());
+        if (check) check.click();
+        else if (info && info.qty) enter(info.qty);
+        status("✓ " + it.code + " enviado — aguardando o site recarregar...");
+
+        // Se o site NÃO recarregar (caso seja AJAX), continua sozinho após um tempo.
+        // Se recarregar, este código é descartado e o próximo load retoma.
+        await sleep(3000);
+        processarRun();
     }
 
     function iniciarLancamento() {
@@ -278,12 +293,12 @@
                     return;
                 }
                 const resumo = pedido.itens.map(i => "• " + i.code + "  x" + i.qty).join("\n");
-                if (confirm("Lançar este pedido no SPAmov?\n\nCliente: " + (pedido.cliente || "?") + "\n\n" + resumo + "\n\nVocê confere e finaliza (DS→SP→PA) na mão depois.")) {
-                    lancarPedido(pedido);
-                }
+                if (!confirm("Lançar este pedido no SPAmov?\n\nCliente: " + (pedido.cliente || "?") + "\n\n" + resumo + "\n\nA cada item o site recarrega e a extensão continua sozinha.\nVocê confere e finaliza (DS→SP→PA) na mão depois.")) return;
+                setRun({ pedido: pedido, idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
             });
         } catch (e) { alert("Erro ao ler o pedido: " + e.message); }
     }
+    function cancelarLancamento() { clearRun().then(function () { statusBox()("Lançamento cancelado."); }); }
 
     // ---------- BOTÕES ----------
     function botao(id, texto, cor, bottom, onClick) {
@@ -295,11 +310,15 @@
         document.body.appendChild(b);
     }
 
-    const temEntrada = !!acharLinhaEntrada() || linhaEntradaRect() != null;
+    const temEntrada = !!acharLinhaEntrada() || linhaEntradaRect() != null || ehFrameItens();
     const temLeitura = temPedidoLeitura(montarPedidoLeitura());
 
-    // Botão de LANÇAR aparece na tela de itens (linha amarela de entrada)
-    if (temEntrada) botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "70px", iniciarLancamento);
-    // Botão de LER/RESUMO aparece quando há um pedido já montado na tela
+    if (temEntrada) {
+        botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", iniciarLancamento);
+        botao("friganso-cancelar-btn", "⏹ Cancelar lançamento", "#64748b", "70px", cancelarLancamento);
+    }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
+
+    // Retoma automaticamente um lançamento em andamento (após o reload do site)
+    if (ehFrameItens()) processarRun();
 })();
