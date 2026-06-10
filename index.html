@@ -2145,7 +2145,10 @@
             const TEMPLATE_PADRAO = "🥩 *OFERTAS DO DIA*\n\n{ofertas}";
             const [template, setTemplate] = useState(TEMPLATE_PADRAO);
             const [incluirProduto, setIncluirProduto] = useState(true);
-            const [qtdProdutos, setQtdProdutos] = useState(3);
+            const [ofertaModo, setOfertaModo] = useState('historico'); // historico | novos
+            const [qtdProdutos, setQtdProdutos] = useState(3); // 2..5 ou 'todos'
+            const [saudacaoCustom, setSaudacaoCustom] = useState('');
+            const [vendedorCustom, setVendedorCustom] = useState('');
             const [filtro, setFiltro] = useState('todos'); // todos | inativos | atencao | top
             const [busca, setBusca] = useState('');
             const [selecionados, setSelecionados] = useState(new Set());
@@ -2179,20 +2182,39 @@
             const nameCat = (name) => { const n = (name || '').toLowerCase(); if (/supermerc|mercad|mercear|minimerc|atacad|distribuidora|bebidas/.test(n)) return 'mercado'; if (/restaurante|churrasc|lanchonete|petiscaria|espeto|gril|pizza|confeitaria|bar\b|butecou/.test(n)) return 'restaurante'; if (/a[cç]ougue|carne/.test(n)) return 'acougue'; return ''; };
             const categoryForClient = (c) => profileCat(c.profile && c.profile.title) || nameCat(c.name) || 'geral';
             const hashStr = (s) => { let h = 0; const str = String(s || ''); for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h; };
-            // Recomenda N produtos que o cliente JÁ COMPROU (re-oferta do histórico)
+            // Descobre a categoria de um produto pelo nome
+            const prodCategory = (name) => { for (const k of ['acougue', 'mercado', 'restaurante']) { if (CAT_RE[k].test(name || '')) return k; } return 'geral'; };
+
+            // Recomenda produtos conforme o modo (histórico = já comprou / novos = ainda não comprou)
             const recomendarProdutos = (c, n) => {
                 if (!products.length) return [];
                 const histCodes = (c.history || []).map(String);
-                // só produtos do histórico que ainda existem na tabela atual de preços
-                const histProds = histCodes.map(code => products.find(p => String(p.code) === code)).filter(Boolean);
-                if (!histProds.length) return [];
+                const histSet = new Set(histCodes);
+                let cands = [];
 
-                // rotaciona pela data para variar dia a dia
+                if (ofertaModo === 'novos') {
+                    // produtos que ele ainda NÃO comprou, alinhados ao que ele costuma comprar / perfil
+                    const histProds = histCodes.map(code => products.find(p => String(p.code) === code)).filter(Boolean);
+                    let cats = new Set(histProds.map(p => prodCategory(p.name)).filter(k => k && k !== 'geral'));
+                    if (!cats.size) { const pc = categoryForClient(c); if (pc !== 'geral') cats.add(pc); }
+                    const seen = new Set();
+                    const similares = products.filter(p => !histSet.has(String(p.code)) && cats.size && [...cats].some(cat => CAT_RE[cat] && CAT_RE[cat].test(p.name || '')));
+                    for (const p of similares) { const k = String(p.code); if (!seen.has(k)) { seen.add(k); cands.push(p); } }
+                    for (const p of products) { const k = String(p.code); if (!histSet.has(k) && !seen.has(k)) { seen.add(k); cands.push(p); } }
+                } else {
+                    // só o que ele JÁ comprou e ainda existe na tabela atual
+                    cands = histCodes.map(code => products.find(p => String(p.code) === code)).filter(Boolean);
+                }
+                if (!cands.length) return [];
+
+                // "todos" devolve a lista inteira; senão rotaciona uma janela de N pela data
+                if (n === 'todos' || Number(n) >= cands.length) return cands;
+                const num = Number(n);
                 const today = new Date();
                 const daySeed = Number(`${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`);
-                const start = (daySeed + hashStr(c.code)) % histProds.length;
+                const start = (daySeed + hashStr(c.code)) % cands.length;
                 const out = [];
-                for (let i = 0; i < Math.min(n, histProds.length); i++) out.push(histProds[(start + i) % histProds.length]);
+                for (let i = 0; i < num; i++) out.push(cands[(start + i) % cands.length]);
                 return out;
             };
 
@@ -2205,7 +2227,12 @@
                 return b;
             }).join('\n\n');
 
-            const saudacao = () => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; };
+            // Saudação: usa o texto personalizado se houver, senão Bom dia/tarde/noite pela hora
+            const saudacao = () => {
+                if (saudacaoCustom.trim()) return saudacaoCustom;
+                const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+            };
+            const nomeVendedor = () => vendedorCustom.trim() || ((user && user.name) ? user.name.split(' ')[0] : 'vendedor');
             const waNumber = (phone) => { let d = String(phone || '').replace(/\D/g, ''); if (!d) return ''; if (d.length <= 11) d = '55' + d; return d; };
             const personalizar = (c) => {
                 const prods = incluirProduto ? recomendarProdutos(c, qtdProdutos) : [];
@@ -2215,7 +2242,7 @@
                     .replace(/\{nome\}/gi, c.name || '')
                     .replace(/\{contato\}/gi, c.contactName || c.name || 'tudo bem')
                     .replace(/\{saudacao\}/gi, saudacao())
-                    .replace(/\{vendedor\}/gi, (user && user.name) ? user.name.split(' ')[0] : 'vendedor')
+                    .replace(/\{vendedor\}/gi, nomeVendedor())
                     .replace(/\{ofertas\}/gi, ofertas)
                     .replace(/\{produto\}/gi, primeiro);
             };
@@ -2311,20 +2338,43 @@
                                     <button key={v} onClick={() => setTemplate(template + (v === '{ofertas}' ? '\n\n' : ' ') + v)} className={`text-[11px] font-mono font-bold px-2 py-1 rounded-md transition-colors ${v === '{ofertas}' ? 'bg-rose-100 hover:bg-rose-200 text-rose-700' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}>{v}</button>
                                 ))}
                             </div>
+                            {/* Personalizar textos das variáveis */}
+                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+                                <p className="text-xs font-bold text-slate-500">✏️ Personalizar variáveis</p>
+                                <div>
+                                    <label className="text-[11px] font-bold text-slate-500">Texto de <code className="text-rose-600">{'{saudacao}'}</code></label>
+                                    <input type="text" value={saudacaoCustom} onChange={e => setSaudacaoCustom(e.target.value)} placeholder="Vazio = automático (Bom dia/Boa tarde/Boa noite)" className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-500"/>
+                                </div>
+                                <div>
+                                    <label className="text-[11px] font-bold text-slate-500">Texto de <code className="text-rose-600">{'{vendedor}'}</code></label>
+                                    <input type="text" value={vendedorCustom} onChange={e => setVendedorCustom(e.target.value)} placeholder={`Vazio = ${(user && user.name) ? user.name.split(' ')[0] : 'seu nome'}`} className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-500"/>
+                                </div>
+                            </div>
+
                             <div className="bg-rose-50 p-3 rounded-xl border border-rose-100 space-y-3">
                                 <label className="flex items-center gap-3 cursor-pointer">
                                     <div onClick={() => setIncluirProduto(!incluirProduto)} className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${incluirProduto ? 'bg-emerald-500' : 'bg-slate-300'}`}>
                                         <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${incluirProduto ? 'left-5' : 'left-0.5'}`}></div>
                                     </div>
-                                    <span className="text-sm font-bold text-slate-700">Ofertar só o que o cliente já comprou (histórico) em <code className="text-rose-600">{'{ofertas}'}</code></span>
+                                    <span className="text-sm font-bold text-slate-700">Incluir ofertas automáticas em <code className="text-rose-600">{'{ofertas}'}</code></span>
                                 </label>
                                 {incluirProduto && (
-                                    <div className="flex items-center gap-2 pl-1">
-                                        <span className="text-xs font-bold text-slate-500">Quantos produtos por mensagem:</span>
-                                        {[2, 3, 4, 5].map(n => (
-                                            <button key={n} onClick={() => setQtdProdutos(n)} className={`h-7 w-7 rounded-lg text-xs font-bold transition-colors ${qtdProdutos === n ? 'bg-rose-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>{n}</button>
-                                        ))}
-                                    </div>
+                                    <>
+                                        <div className="pl-1">
+                                            <span className="text-xs font-bold text-slate-500 block mb-1.5">O que ofertar:</span>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => setOfertaModo('historico')} className={`flex-1 text-xs font-bold px-3 py-2 rounded-lg transition-colors ${ofertaModo === 'historico' ? 'bg-rose-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>🔁 Só o que já comprou</button>
+                                                <button onClick={() => setOfertaModo('novos')} className={`flex-1 text-xs font-bold px-3 py-2 rounded-lg transition-colors ${ofertaModo === 'novos' ? 'bg-rose-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>✨ Novos produtos</button>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 pl-1 flex-wrap">
+                                            <span className="text-xs font-bold text-slate-500">Quantidade:</span>
+                                            {[2, 3, 4, 5].map(n => (
+                                                <button key={n} onClick={() => setQtdProdutos(n)} className={`h-7 w-7 rounded-lg text-xs font-bold transition-colors ${qtdProdutos === n ? 'bg-rose-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>{n}</button>
+                                            ))}
+                                            <button onClick={() => setQtdProdutos('todos')} className={`h-7 px-3 rounded-lg text-xs font-bold transition-colors ${qtdProdutos === 'todos' ? 'bg-rose-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>Todos</button>
+                                        </div>
+                                    </>
                                 )}
                             </div>
                             {/* Pré-visualização da mensagem */}
@@ -2365,10 +2415,10 @@
                                                 <input type="checkbox" checked={selecionados.has(c.id)} onChange={() => toggle(c.id)} className="h-4 w-4 rounded text-emerald-600 flex-shrink-0 cursor-pointer"/>
                                                 <span onClick={() => toggle(c.id)} className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0 cursor-pointer">{c.code || '—'}</span>
                                                 <span onClick={() => toggle(c.id)} className="text-sm font-bold text-slate-700 truncate flex-1 cursor-pointer">{c.name}</span>
-                                                {semHist && <span className="text-[10px] font-bold bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full flex-shrink-0" title="Cliente sem histórico de compras — não terá ofertas">sem histórico</span>}
+                                                {semHist && <span className="text-[10px] font-bold bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full flex-shrink-0" title="Sem produtos para ofertar">sem oferta</span>}
                                                 {semTel
                                                     ? (!editando && <button onClick={() => { setPhoneEditId(c.id); setPhoneInput(''); }} className="text-[10px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-700 px-2 py-1 rounded-full flex-shrink-0 transition-colors flex items-center gap-1">+ telefone</button>)
-                                                    : <span className="text-[10px] text-emerald-600 font-mono flex-shrink-0">📱 {c.phone}</span>}
+                                                    : (!editando && <button onClick={() => { setPhoneEditId(c.id); setPhoneInput(c.phone || ''); }} title="Clique para corrigir o número" className="text-[10px] text-emerald-600 font-mono flex-shrink-0 hover:bg-emerald-50 px-1.5 py-1 rounded transition-colors flex items-center gap-1">📱 {c.phone} <span className="text-emerald-400">✎</span></button>)}
                                             </div>
                                             {editando && (
                                                 <div className="flex gap-1.5 mt-2 pl-6">
