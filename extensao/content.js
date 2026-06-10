@@ -336,8 +336,7 @@
             status("Abrindo novo pedido...");
             await setRun({ pedido: run.pedido, stage: "cliente", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             clicar(btn);
-            await sleep(2800); processarRun(); // se NÃO recarregar, continua sozinho; se recarregar, este código é descartado
-            return;
+            return; // a página vai recarregar e a etapa "cliente" continua sozinha no próximo load
         }
 
         // ETAPA 2: preencher o cliente e clicar em "Enviar"
@@ -351,14 +350,15 @@
             status("Digitando cliente " + run.pedido.cliente + "...");
             typeInto(cli, run.pedido.cliente);   // digitação robusta (native setter + execCommand)
             enter(cli);
+            await sleep(800);
+            status("Cliente no campo: " + ((cli.value || "(vazio)")) + " — aguardando antes do Enviar...");
             await sleep(2000); // ⏱️ folga antes do Enviar (deixa o cliente resolver)
             await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             let env = acharBotaoEnviar(), te = 0;
             while (!env && te < 6) { await sleep(400); env = acharBotaoEnviar(); te++; }
             if (env) { status("Clicando em Enviar..."); clicar(env); }
             else { status("Botão Enviar não achado — tentando Enter..."); enter(cli); }
-            await sleep(2800); processarRun(); // continua sozinho se não recarregar
-            return;
+            return; // recarrega -> a etapa "itens" continua sozinha no próximo load
         }
 
         // ETAPA 3: itens
@@ -410,11 +410,7 @@
         if (check) clicar(check);
         else if (info && info.qty) enter(info.qty);
         status("✓ " + it.code + " enviado — aguardando o site recarregar...");
-
-        // Se o site NÃO recarregar (caso seja AJAX), continua sozinho após um tempo.
-        // Se recarregar, este código é descartado e o próximo load retoma.
-        await sleep(3000);
-        processarRun();
+        // a página recarrega ("pisca") e o próximo item continua sozinho no próximo load
     }
 
     function removerDaFila(id) {
@@ -424,7 +420,7 @@
         });
     }
     function lancarDaFila(p) {
-        removerDaFila(p.id);
+        // NÃO remove da fila — fica salvo pra você reusar/reenviar (remova manualmente com ✕)
         statusBox()("Iniciando lançamento do cliente " + (p.cliente || "?") + "...");
         clearRun().then(function () {
             setRun({ pedido: { cliente: p.cliente, itens: p.itens }, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
