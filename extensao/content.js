@@ -342,6 +342,44 @@
 
     // Processa UM item por carregamento da página. O clique no verde recarrega o site
     // e, no próximo load, esta função retoma sozinha do próximo item.
+    // Detecta se o pedido já está no estado PA (confirmado)
+    function estaEmPA() {
+        const t = bodyText();
+        if (/\bPA\b\s*Mov/i.test(t)) return true;
+        // no estado PA aparece a linha expandida: PCP OE PDE OP PDP CP NF DP FIN
+        return /\bPCP\b/.test(t) && /\bPDE\b/.test(t) && /\bFIN\b/.test(t);
+    }
+    // Acha o botão circular "DS/SP/PA Mov"
+    function acharMovBotao() {
+        const els = document.querySelectorAll("a, td, div, span, img, button");
+        let cand = null;
+        for (let i = 0; i < els.length; i++) {
+            const e = els[i];
+            const t = ((e.innerText || e.alt || e.title || "") + "").replace(/\s+/g, " ").trim();
+            const r = e.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            if (/^(DS|SP|PA)\s*Mov$/i.test(t)) return e;
+            if (!cand && /\bMov$/i.test(t) && t.length <= 10) cand = e;
+        }
+        return cand;
+    }
+    // Um passo da finalização: se já está em PA, termina; senão clica no DS/SP/PA
+    async function finalizarPasso() {
+        const run = await getRun();
+        if (!run || !run.ativo) return;
+        const status = statusBox();
+        if (estaEmPA()) { await clearRun(); dlog("✅ chegou em PA — pedido confirmado!"); status("✅ Pedido confirmado (PA)! Tudo pronto. 🎉"); return; }
+        const cliques = run.finalCliques || 0;
+        if (cliques >= 6) { await clearRun(); dlog("⚠️ 6 cliques sem chegar em PA — parei"); status("⚠️ Não cheguei em PA sozinho. Clique no DS até virar PA na mão."); return; }
+        const btn = acharMovBotao();
+        dlog("finalizar: botão DS/SP/PA " + (btn ? "achado" : "NÃO achado") + " (clique " + (cliques + 1) + ")");
+        if (!btn) { await clearRun(); status("Itens lançados! Não achei o botão DS — clique nele até virar PA na mão."); return; }
+        status("Confirmando (DS → SP → PA): clique " + (cliques + 1) + "...");
+        await setRun({ pedido: run.pedido, stage: "finalizar", idx: run.idx, ativo: true, aguardando: false, ultimoCode: "", finalCliques: cliques + 1, ts: Date.now() });
+        clicar(btn);
+        // a página recarrega; no próximo load o finalizar continua
+    }
+
     async function processarRun() {
       try {
         const run = await getRun();
@@ -352,9 +390,12 @@
         const status = statusBox();
         const stage = run.stage || "itens";
         dlog("➡ etapa=" + stage + " idx=" + run.idx + " aguardando=" + run.aguardando);
-        const nomeEtapa = stage === "novo" ? "abrir Novo" : (stage === "cliente" ? "preencher Cliente" : "lançar Itens");
+        const nomeEtapa = stage === "novo" ? "abrir Novo" : (stage === "cliente" ? "preencher Cliente" : (stage === "finalizar" ? "confirmar (DS→SP→PA)" : "lançar Itens"));
         status("🔄 Retomando — etapa: " + nomeEtapa + "...");
         await sleep(1800); // deixa a página assentar após o "pisca"/navegação
+
+        // ETAPA FINAL: clicar DS -> SP -> PA até confirmar o pedido
+        if (stage === "finalizar") { await finalizarPasso(); return; }
 
         // ETAPA 1: clicar em "Novo"
         if (stage === "novo") {
@@ -409,8 +450,11 @@
         }
 
         if (run.idx >= total) {
-            await clearRun();
-            status("✅ " + total + " item(ns) lançados! Confira tudo e finalize na mão: DS → SP → PA.");
+            dlog("✓ todos os " + total + " itens lançados — indo para finalizar (DS→SP→PA)");
+            await setRun({ pedido: run.pedido, stage: "finalizar", idx: total, ativo: true, aguardando: false, ultimoCode: "", finalCliques: 0, ts: Date.now() });
+            status("Itens ok! Confirmando (DS → SP → PA)...");
+            await sleep(800);
+            await finalizarPasso();
             return;
         }
 
