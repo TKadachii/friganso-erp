@@ -112,6 +112,20 @@
     }
     function setInput(el, v) { el.focus(); el.value = String(v); ["input", "change", "keyup", "blur"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true }))); }
     function enter(el) { ["keydown", "keypress", "keyup"].forEach(t => el.dispatchEvent(new KeyboardEvent(t, { bubbles: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 }))); }
+    // Clique robusto: sobe até o elemento realmente clicável e dispara eventos de mouse + click nativo
+    function clicar(el) {
+        if (!el) return false;
+        let alvo = el, p = el;
+        for (let i = 0; i < 5 && p; i++) {
+            const tem = p.onclick || (p.getAttribute && p.getAttribute("onclick")) || p.tagName === "A" || p.tagName === "BUTTON" || (p.getAttribute && p.getAttribute("href"));
+            if (tem) { alvo = p; break; }
+            p = p.parentElement;
+        }
+        try { if (alvo.focus) alvo.focus(); } catch (e) {}
+        ["mousedown", "mouseup", "click"].forEach(function (t) { try { alvo.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (e) {} });
+        try { if (alvo.click) alvo.click(); } catch (e) {}
+        return true;
+    }
     async function esperar(cond, ms) { const t = Date.now(); while (Date.now() - t < ms) { if (cond()) return true; await sleep(200); } return false; }
 
     function acharLinhaEntrada() {
@@ -221,9 +235,14 @@
     function ehFrameItens() { return colXQuant() != null; } // frame que tem o cabeçalho "Quant. Mov."
 
     function acharBotaoNovo() {
-        const els = document.querySelectorAll("a, td, button, span, img, div, input[type=button]");
-        for (let i = 0; i < els.length; i++) { const e = els[i]; const t = ((e.value || e.innerText || e.alt || "") + "").trim(); if (/^novo$/i.test(t)) { const r = e.getBoundingClientRect(); if (r.width && r.height) return e; } }
-        return null;
+        let best = null;
+        const els = document.querySelectorAll("a, td, button, span, img, div, input[type=button], input[type=image]");
+        for (let i = 0; i < els.length; i++) {
+            const e = els[i];
+            const t = ((e.value || e.alt || e.title || e.innerText || "") + "").trim();
+            if (/^novo$/i.test(t)) { const r = e.getBoundingClientRect(); if (r.width && r.height) { const tam = (e.innerText || "").length; if (!best || tam < best._tam) { best = e; best._tam = tam; } } }
+        }
+        return best;
     }
     function acharBotaoEnviar() {
         const els = document.querySelectorAll("input[type=button], input[type=submit], button, a, td, span");
@@ -259,25 +278,27 @@
 
         // ETAPA 1: clicar em "Novo"
         if (stage === "novo") {
-            const btn = acharBotaoNovo();
-            if (!btn) return; // tela/frame ainda não é a certa — espera o próximo load
+            let btn = acharBotaoNovo(), t = 0;
+            while (!btn && t < 8) { await sleep(500); btn = acharBotaoNovo(); t++; }
+            if (!btn) { if (ehFramePrincipal()) status("❌ Não achei o botão 'Novo'. Manda um print do botão que eu ajusto a mira."); return; }
             status("Abrindo novo pedido...");
             await setRun({ pedido: run.pedido, stage: "cliente", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
-            btn.click();
+            clicar(btn);
             return;
         }
 
         // ETAPA 2: preencher o cliente e clicar em "Enviar"
         if (stage === "cliente") {
-            const cli = acharCampoCliente();
-            if (!cli) return; // espera a tela de cabeçalho carregar
+            let cli = acharCampoCliente(), t = 0;
+            while (!cli && t < 8) { await sleep(500); cli = acharCampoCliente(); t++; }
+            if (!cli) { if (ehFramePrincipal()) status("❌ Não achei o campo do Cliente. Manda um print que eu ajusto."); return; }
             status("Selecionando cliente " + run.pedido.cliente + "...");
             setInput(cli, run.pedido.cliente);
             enter(cli);
             await sleep(1300); // deixa o cliente resolver
             await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             const env = acharBotaoEnviar();
-            if (env) env.click(); else enter(cli);
+            if (env) clicar(env); else enter(cli);
             return;
         }
 
@@ -327,7 +348,7 @@
 
         // 4) clica no ✓ verde -> o site recarrega e o próximo item continua sozinho
         const check = acharCheckVerde(info ? info.rect : linhaEntradaRect());
-        if (check) check.click();
+        if (check) clicar(check);
         else if (info && info.qty) enter(info.qty);
         status("✓ " + it.code + " enviado — aguardando o site recarregar...");
 
@@ -347,6 +368,7 @@
                 }
                 const resumo = pedido.itens.map(i => "• " + i.code + "  x" + i.qty).join("\n");
                 if (!confirm("Lançar pedido COMPLETO no SPAmov?\n\nVai clicar em NOVO, pôr o cliente " + (pedido.cliente || "?") + " e lançar:\n\n" + resumo + "\n\n⚠️ Clica em 'Novo' (começa um pedido novo). A cada passo o site recarrega e a extensão continua sozinha.\nVocê confere e finaliza (DS→SP→PA) na mão depois.")) return;
+                statusBox()("Iniciando lançamento...");
                 setRun({ pedido: pedido, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
             });
         } catch (e) { alert("Erro ao ler o pedido: " + e.message); }
