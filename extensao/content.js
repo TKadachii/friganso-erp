@@ -121,14 +121,26 @@
         return function (msg) { box.textContent = "🦢 " + msg; };
     }
 
-    // ---- Painel de LOG (mostra o passo a passo e PERSISTE entre os recarregamentos) ----
-    function renderLog(linhas) {
+    // ---- Painel de LOG: fica ESCONDIDO atrás de um ícone pequeno (clica pra abrir) ----
+    function ensureLogUI() {
+        let btn = document.getElementById("friganso-log-btn");
+        if (!btn) {
+            btn = document.createElement("button");
+            btn.id = "friganso-log-btn"; btn.type = "button"; btn.textContent = "🐞"; btn.title = "Log da extensão (clique para abrir/fechar)";
+            Object.assign(btn.style, { position: "fixed", left: "10px", bottom: "10px", width: "34px", height: "34px", borderRadius: "50%", border: "1px solid #334155", background: "#0f172a", color: "#fff", fontSize: "15px", cursor: "pointer", zIndex: "2147483647", boxShadow: "0 4px 12px rgba(0,0,0,.35)", padding: "0", lineHeight: "34px", textAlign: "center" });
+            btn.addEventListener("click", function () { const p = document.getElementById("friganso-log"); if (p) p.style.display = (p.style.display === "none" ? "block" : "none"); });
+            document.body.appendChild(btn);
+        }
         let p = document.getElementById("friganso-log");
         if (!p) {
             p = document.createElement("div"); p.id = "friganso-log";
-            Object.assign(p.style, { position: "fixed", left: "10px", bottom: "10px", width: "380px", maxWidth: "48vw", maxHeight: "240px", overflowY: "auto", background: "rgba(2,6,23,0.92)", color: "#cbd5e1", fontFamily: "monospace", fontSize: "11px", lineHeight: "1.5", padding: "8px 10px", borderRadius: "10px", zIndex: "2147483647", border: "1px solid #334155", whiteSpace: "pre-wrap" });
+            Object.assign(p.style, { position: "fixed", left: "10px", bottom: "52px", width: "380px", maxWidth: "48vw", maxHeight: "240px", overflowY: "auto", background: "rgba(2,6,23,0.95)", color: "#cbd5e1", fontFamily: "monospace", fontSize: "11px", lineHeight: "1.5", padding: "8px 10px", borderRadius: "10px", zIndex: "2147483647", border: "1px solid #334155", whiteSpace: "pre-wrap", display: "none" });
             document.body.appendChild(p);
         }
+        return p;
+    }
+    function renderLog(linhas) {
+        const p = ensureLogUI(); // garante o ícone; o painel começa escondido
         p.textContent = (linhas || []).join("\n");
         p.scrollTop = p.scrollHeight;
     }
