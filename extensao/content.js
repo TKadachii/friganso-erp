@@ -144,11 +144,26 @@
             const r = i.getBoundingClientRect(); return r.width > 10 && r.height > 5;
         });
     }
-    // Acha código e quantidade SÓ na linha de entrada (ignora a linha do item já lançado)
+    // Acha código e quantidade na LINHA DE ENTRADA = a primeira linha de inputs abaixo do
+    // cabeçalho "Quant. Mov." (os itens já lançados ficam ABAIXO dela, então são ignorados).
     function camposEntrada() {
-        const r = linhaEntradaRect(); if (!r) return null;
         const colX = colXQuant();
-        const naLinha = inputsVisiveis().filter(function (i) { return naFaixa(r, i); });
+        // pega o fim (bottom) do cabeçalho da coluna "Quant. Mov."
+        let headerBottom = null;
+        document.querySelectorAll("td, th").forEach(function (c) {
+            const t = (c.innerText || "").toLowerCase();
+            if (t.indexOf("quant") !== -1 && t.indexOf("mov") !== -1) { const r = c.getBoundingClientRect(); if (r.width && (headerBottom == null || r.bottom < headerBottom)) headerBottom = r.bottom; }
+        });
+        let cand = inputsVisiveis();
+        if (headerBottom != null) cand = cand.filter(function (i) { return i.getBoundingClientRect().top >= headerBottom - 4; });
+        if (!cand.length) return null;
+        // linha de entrada = inputs mais ao TOPO (itens lançados ficam abaixo)
+        let minC = Infinity;
+        cand.forEach(function (i) { const b = i.getBoundingClientRect(); const cy = b.top + b.height / 2; if (cy < minC) minC = cy; });
+        const naLinha = cand.filter(function (i) { const b = i.getBoundingClientRect(); return Math.abs((b.top + b.height / 2) - minC) < 16; });
+        if (!naLinha.length) return null;
+        let top = Infinity, bottom = -Infinity;
+        naLinha.forEach(function (i) { const b = i.getBoundingClientRect(); top = Math.min(top, b.top); bottom = Math.max(bottom, b.bottom); });
         const porX = naLinha.slice().sort(function (a, b) { return a.getBoundingClientRect().left - b.getBoundingClientRect().left; });
         const code = porX[0] || null; // mais à esquerda = código
         let qty = null, bd = 1e9;
@@ -158,7 +173,7 @@
             const d = (colX != null) ? Math.abs(x - colX) : x;
             if (d < bd) { bd = d; qty = i; } // mais próximo da coluna "Quant. Mov." = quantidade
         });
-        return { rect: r, n: naLinha.length, code: code, qty: qty };
+        return { rect: { top: top, bottom: bottom }, n: naLinha.length, code: code, qty: qty };
     }
 
     // Detecta se um elemento é "verde" (pela cor ou pelo nome do ícone)
