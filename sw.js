@@ -1,4 +1,4 @@
-const CACHE = 'friganso-v10';
+const CACHE = 'friganso-v11';
 const BASE = '/friganso-erp';
 const ASSETS = [
     BASE + '/',

@@ -2144,6 +2144,22 @@
             const [emCampanha, setEmCampanha] = useState(false);
             const [idx, setIdx] = useState(0);
             const [enviados, setEnviados] = useState(new Set());
+            const [phoneEditId, setPhoneEditId] = useState(null);
+            const [phoneInput, setPhoneInput] = useState('');
+            const [phoneSaving, setPhoneSaving] = useState(false);
+
+            // Salva o telefone do cliente direto no Firestore
+            const salvarTelefone = async (clientId) => {
+                const tel = phoneInput.trim();
+                if (!tel) { showMessage('Digite o telefone.', 'error'); return; }
+                setPhoneSaving(true);
+                try {
+                    await db.collection('clients').doc(clientId).update({ phone: tel });
+                    showMessage('Telefone salvo!', 'success');
+                    setPhoneEditId(null); setPhoneInput('');
+                } catch (e) { showMessage('Erro ao salvar telefone.', 'error'); }
+                finally { setPhoneSaving(false); }
+            };
 
             // --- helpers de categoria/recomendação (espelham o Radar) ---
             const CAT_RE = {
@@ -2293,12 +2309,24 @@
                             <div className="flex-1 overflow-y-auto max-h-72 space-y-1 pr-1">
                                 {lista.map(c => {
                                     const semTel = !waNumber(c.phone);
+                                    const editando = phoneEditId === c.id;
                                     return (
-                                        <label key={c.id} className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer border ${selecionados.has(c.id) ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-100 hover:border-slate-200'}`}>
-                                            <input type="checkbox" checked={selecionados.has(c.id)} onChange={() => toggle(c.id)} className="h-4 w-4 rounded text-emerald-600 flex-shrink-0"/>
-                                            <span className="text-sm font-bold text-slate-700 truncate flex-1">{c.name}</span>
-                                            {semTel ? <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full flex-shrink-0">sem telefone</span> : <span className="text-[10px] text-slate-400 font-mono flex-shrink-0">{c.code}</span>}
-                                        </label>
+                                        <div key={c.id} className={`p-2 rounded-lg border ${selecionados.has(c.id) ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-100 hover:border-slate-200'}`}>
+                                            <div className="flex items-center gap-2.5">
+                                                <input type="checkbox" checked={selecionados.has(c.id)} onChange={() => toggle(c.id)} className="h-4 w-4 rounded text-emerald-600 flex-shrink-0 cursor-pointer"/>
+                                                <span onClick={() => toggle(c.id)} className="text-sm font-bold text-slate-700 truncate flex-1 cursor-pointer">{c.name}</span>
+                                                {semTel
+                                                    ? (!editando && <button onClick={() => { setPhoneEditId(c.id); setPhoneInput(''); }} className="text-[10px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-700 px-2 py-1 rounded-full flex-shrink-0 transition-colors flex items-center gap-1">+ telefone</button>)
+                                                    : <span className="text-[10px] text-emerald-600 font-mono flex-shrink-0">📱 {c.phone}</span>}
+                                            </div>
+                                            {editando && (
+                                                <div className="flex gap-1.5 mt-2 pl-6">
+                                                    <input type="tel" autoFocus value={phoneInput} onChange={e => setPhoneInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') salvarTelefone(c.id); }} placeholder="DDD + número (ex: 22999998888)" className="flex-1 px-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs outline-none focus:ring-2 focus:ring-emerald-400"/>
+                                                    <button onClick={() => salvarTelefone(c.id)} disabled={phoneSaving} className="text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50">Salvar</button>
+                                                    <button onClick={() => { setPhoneEditId(null); setPhoneInput(''); }} className="text-xs font-bold text-slate-400 hover:bg-slate-100 px-2 py-1.5 rounded-lg">✕</button>
+                                                </div>
+                                            )}
+                                        </div>
                                     );
                                 })}
                                 {lista.length === 0 && <p className="text-center text-slate-400 text-sm py-6">Nenhum cliente neste filtro.</p>}
@@ -2310,7 +2338,7 @@
                     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
                         <div className="text-sm text-slate-600">
                             <p><b className="text-emerald-700">{comTelefone.length}</b> cliente(s) prontos para receber.</p>
-                            {semTelefone.length > 0 && <p className="text-amber-600 text-xs mt-1">⚠️ {semTelefone.length} selecionado(s) sem telefone serão pulados. Cadastre o WhatsApp no CRM.</p>}
+                            {semTelefone.length > 0 && <p className="text-amber-600 text-xs mt-1">⚠️ {semTelefone.length} selecionado(s) sem telefone serão pulados. Toque em "+ telefone" na lista para cadastrar na hora.</p>}
                         </div>
                         <button onClick={iniciar} disabled={comTelefone.length === 0} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold py-3.5 px-8 rounded-2xl shadow-md transition-colors flex items-center gap-2 w-full sm:w-auto justify-center">
                             <div className="h-5 w-5"><IconWhatsApp/></div> Iniciar Campanha ({comTelefone.length})
