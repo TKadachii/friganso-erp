@@ -1,12 +1,8 @@
-<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-  <rect width="200" height="200" rx="40" fill="#0f172a"/>
-  <defs>
-    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#e11d48"/>
-      <stop offset="100%" stop-color="#881337"/>
-    </linearGradient>
-  </defs>
-  <path d="M100 18 L172 55 L172 138 L100 178 L28 138 L28 55 Z" fill="url(#g)"/>
-  <path d="M100 36 L154 65 L154 130 L100 160 L46 130 L46 65 Z" fill="#0f172a"/>
-  <path d="M83 72 L122 72 L122 86 L97 86 L97 100 L118 100 L118 114 L97 114 L97 138 L83 138 Z" fill="#ffffff"/>
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="110" fill="#ffffff"/>
+  <g transform="translate(56 56) scale(2)" fill="#FB4B3A">
+    <g transform="rotate(0 100 100)"><g transform="translate(58 22) scale(0.7)"><path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z"/><path d="M89,19 L97,17 L91,24 Z"/></g></g>
+    <g transform="rotate(120 100 100)"><g transform="translate(58 22) scale(0.7)"><path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z"/><path d="M89,19 L97,17 L91,24 Z"/></g></g>
+    <g transform="rotate(240 100 100)"><g transform="translate(58 22) scale(0.7)"><path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z"/><path d="M89,19 L97,17 L91,24 Z"/></g></g>
+  </g>
 </svg>
