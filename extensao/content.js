@@ -110,7 +110,7 @@
         }
         return function (msg) { box.textContent = "🦢 " + msg; };
     }
-    function setInput(el, v) { el.focus(); el.value = String(v); ["input", "change", "keyup"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true }))); }
+    function setInput(el, v) { el.focus(); el.value = String(v); ["input", "change", "keyup", "blur"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true }))); }
     function enter(el) { ["keydown", "keypress", "keyup"].forEach(t => el.dispatchEvent(new KeyboardEvent(t, { bubbles: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 }))); }
     async function esperar(cond, ms) { const t = Date.now(); while (Date.now() - t < ms) { if (cond()) return true; await sleep(200); } return false; }
 
@@ -208,31 +208,42 @@
                 info = camposEntrada();
                 if (!info || !info.code || !info.qty) { status("❌ Não achei os campos (inputs na linha: " + (info ? info.n : 0) + "). Manda um print que eu ajusto."); return; }
 
-                const antes = bodyText();
-                setInput(info.code, it.code);
-                enter(info.code);
-                await sleep(1300); // espera o produto carregar
-                info = camposEntrada(); // a linha pode ter mudado
-                const q = (info && info.qty) ? info.qty : null;
-                if (q) setInput(q, it.qty);
-                await sleep(250);
+                // 1) CÓDIGO do produto
+                const antesCod = bodyText();
+                setInput(info.code, "");        // limpa qualquer valor antigo
+                setInput(info.code, it.code);   // digita o código
+                enter(info.code);               // confirma o código (resolve o produto)
 
-                // clica no ✓ verde pra lançar o item
+                // 2) espera o PRODUTO carregar (a tela muda quando reconhece)
+                await esperar(function () { return bodyText() !== antesCod; }, 5000);
+                await sleep(600);
+
+                // 3) QUANTIDADE (re-localiza os campos; ignora o campo de valor)
+                info = camposEntrada();
+                if (info && info.qty) setInput(info.qty, it.qty);
+                await sleep(350);
+
+                // 4) clica no ✓ VERDE pra lançar o item
+                const antesAdd = bodyText();
                 const check = acharCheckVerde(info ? info.y : entradaY());
-                if (check) { check.click(); }
-                else if (q) { enter(q); } // fallback: tenta Enter
+                if (check) check.click();
+                else if (info && info.qty) enter(info.qty); // fallback
 
-                const mudou = await esperar(function () { return bodyText() !== antes; }, 8000);
-                await sleep(500);
+                // 5) espera o ITEM entrar
+                const mudou = await esperar(function () { return bodyText() !== antesAdd; }, 8000);
+                await sleep(700);
 
                 const fim = bodyText().slice(-700);
-                if (!mudou) { status("⚠️ Item " + it.code + " não parece ter entrado (não achei/cliquei no ✓ certo). Manda um print que eu ajusto a mira."); return; }
+                if (!mudou) { status("⚠️ Item " + it.code + " não entrou (✓ verde?). Manda um print que eu ajusto a mira."); return; }
                 if (/n[ãa]o\s+adicionado|saldo\s+n[ãa]o\s+suporta|n[ãa]o\s+suporta|estoque\s+insuficiente|bloquead/i.test(fim) && !/item\s+aceito/i.test(fim)) {
                     status("🛑 PAROU no item " + it.code + ". O SPAmov recusou (veja a faixa azul). Os anteriores foram lançados.");
                     return;
                 }
                 status("✓ " + it.code + " ok");
-                await sleep(400);
+
+                // 6) espera a linha de entrada RESETAR (código vazio) antes do próximo item
+                await esperar(function () { const f = camposEntrada(); return f && f.code && !((f.code.value || "").trim()); }, 4000);
+                await sleep(500);
             }
             status("✅ " + total + " item(ns) lançados! Confira tudo e finalize na mão: DS → SP → PA.");
             try { chrome.storage.local.remove("friganso_pedido"); } catch (e) {}
