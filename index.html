@@ -2179,17 +2179,36 @@
             const nameCat = (name) => { const n = (name || '').toLowerCase(); if (/supermerc|mercad|mercear|minimerc|atacad|distribuidora|bebidas/.test(n)) return 'mercado'; if (/restaurante|churrasc|lanchonete|petiscaria|espeto|gril|pizza|confeitaria|bar\b|butecou/.test(n)) return 'restaurante'; if (/a[cç]ougue|carne/.test(n)) return 'acougue'; return ''; };
             const categoryForClient = (c) => profileCat(c.profile && c.profile.title) || nameCat(c.name) || 'geral';
             const hashStr = (s) => { let h = 0; const str = String(s || ''); for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h; };
-            // Recomenda N produtos do perfil do cliente que ele ainda não comprou
+            // Descobre a categoria de um produto pelo nome
+            const prodCategory = (name) => { for (const k of ['acougue', 'mercado', 'restaurante']) { if (CAT_RE[k].test(name || '')) return k; } return 'geral'; };
+
+            // Recomenda N produtos COM BASE NO HISTÓRICO de compra do cliente
             const recomendarProdutos = (c, n) => {
                 if (!products.length) return [];
-                const cat = categoryForClient(c);
-                const bought = new Set((c.history || []).map(String));
-                let cands = products.filter(p => !bought.has(String(p.code)) && (cat === 'geral' || (CAT_RE[cat] && CAT_RE[cat].test(p.name || ''))));
+                const histCodes = (c.history || []).map(String);
+                const histSet = new Set(histCodes);
+                // produtos que ele já comprou e ainda existem na tabela atual
+                const histProds = histCodes.map(code => products.find(p => String(p.code) === code)).filter(Boolean);
+
+                // categorias que o cliente realmente compra (vindas do histórico); senão, usa o perfil
+                let cats = new Set(histProds.map(p => prodCategory(p.name)).filter(k => k && k !== 'geral'));
+                if (!cats.size) { const pc = categoryForClient(c); if (pc !== 'geral') cats.add(pc); }
+
+                // novos produtos parecidos com o que ele compra (mesma categoria, ainda não comprados)
+                const similares = products.filter(p => !histSet.has(String(p.code)) && cats.size && [...cats].some(cat => CAT_RE[cat] && CAT_RE[cat].test(p.name || '')));
+
+                // prioridade: 1) itens que ele já compra (re-oferta)  2) novidades parecidas
+                const pool = [...histProds, ...similares];
+                const seen = new Set();
+                let cands = [];
+                for (const p of pool) { const k = String(p.code); if (!seen.has(k)) { seen.add(k); cands.push(p); } }
+                // completa com qualquer produto se faltar
                 if (cands.length < n) {
-                    const extra = products.filter(p => !bought.has(String(p.code)) && !cands.includes(p));
-                    cands = cands.concat(extra);
+                    for (const p of products) { const k = String(p.code); if (!seen.has(k)) { seen.add(k); cands.push(p); } }
                 }
                 if (!cands.length) return [];
+
+                // rotaciona pela data para variar dia a dia
                 const today = new Date();
                 const daySeed = Number(`${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`);
                 const start = (daySeed + hashStr(c.code)) % cands.length;
@@ -2314,7 +2333,7 @@
                                     <div onClick={() => setIncluirProduto(!incluirProduto)} className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${incluirProduto ? 'bg-emerald-500' : 'bg-slate-300'}`}>
                                         <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${incluirProduto ? 'left-5' : 'left-0.5'}`}></div>
                                     </div>
-                                    <span className="text-sm font-bold text-slate-700">Montar ofertas do perfil de cada cliente em <code className="text-rose-600">{'{ofertas}'}</code></span>
+                                    <span className="text-sm font-bold text-slate-700">Montar ofertas com base no histórico de cada cliente em <code className="text-rose-600">{'{ofertas}'}</code></span>
                                 </label>
                                 {incluirProduto && (
                                     <div className="flex items-center gap-2 pl-1">
