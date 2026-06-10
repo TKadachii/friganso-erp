@@ -220,6 +220,30 @@
     function clearRun() { return new Promise(function (res) { try { chrome.storage.local.remove("friganso_run", function () { res(); }); } catch (e) { res(); } }); }
     function ehFrameItens() { return colXQuant() != null; } // frame que tem o cabeçalho "Quant. Mov."
 
+    function acharBotaoNovo() {
+        const els = document.querySelectorAll("a, td, button, span, img, div, input[type=button]");
+        for (let i = 0; i < els.length; i++) { const e = els[i]; const t = ((e.value || e.innerText || e.alt || "") + "").trim(); if (/^novo$/i.test(t)) { const r = e.getBoundingClientRect(); if (r.width && r.height) return e; } }
+        return null;
+    }
+    function acharBotaoEnviar() {
+        const els = document.querySelectorAll("input[type=button], input[type=submit], button, a, td, span");
+        for (let i = 0; i < els.length; i++) { const e = els[i]; const t = ((e.value || e.innerText || "") + "").trim(); if (/^enviar$/i.test(t)) { const r = e.getBoundingClientRect(); if (r.width && r.height) return e; } }
+        return null;
+    }
+    function acharCampoCliente() {
+        const cells = document.querySelectorAll("td, th, label, span, div");
+        for (let i = 0; i < cells.length; i++) {
+            const c = cells[i];
+            if (/^\s*CLIENTE\b/i.test((c.innerText || "").trim())) {
+                const row = c.closest("tr") || c.parentElement;
+                const inps = (row || document).querySelectorAll("input[type=text], input:not([type])");
+                for (let j = 0; j < inps.length; j++) { const r = inps[j].getBoundingClientRect(); if (r.width > 20 && r.height > 5) return inps[j]; }
+            }
+        }
+        return null;
+    }
+    function ehFramePrincipal() { return ehFrameItens() || /CLIENTE/i.test(bodyText()) || !!acharBotaoNovo(); }
+
     // Processa UM item por carregamento da página. O clique no verde recarrega o site
     // e, no próximo load, esta função retoma sozinha do próximo item.
     async function processarRun() {
@@ -229,8 +253,37 @@
         if (Date.now() - (run.ts || 0) > 15 * 60 * 1000) { await clearRun(); return; } // expira em 15min
 
         const status = statusBox();
-        const total = run.pedido.itens.length;
         await sleep(1500); // deixa a página assentar após o "pisca"
+
+        const stage = run.stage || "itens";
+
+        // ETAPA 1: clicar em "Novo"
+        if (stage === "novo") {
+            const btn = acharBotaoNovo();
+            if (!btn) return; // tela/frame ainda não é a certa — espera o próximo load
+            status("Abrindo novo pedido...");
+            await setRun({ pedido: run.pedido, stage: "cliente", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
+            btn.click();
+            return;
+        }
+
+        // ETAPA 2: preencher o cliente e clicar em "Enviar"
+        if (stage === "cliente") {
+            const cli = acharCampoCliente();
+            if (!cli) return; // espera a tela de cabeçalho carregar
+            status("Selecionando cliente " + run.pedido.cliente + "...");
+            setInput(cli, run.pedido.cliente);
+            enter(cli);
+            await sleep(1300); // deixa o cliente resolver
+            await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
+            const env = acharBotaoEnviar();
+            if (env) env.click(); else enter(cli);
+            return;
+        }
+
+        // ETAPA 3: itens
+        if (!ehFrameItens()) return; // só o frame de itens age aqui
+        const total = run.pedido.itens.length;
 
         // Confere o resultado do item anterior (a mensagem aparece na página recarregada)
         if (run.aguardando) {
@@ -270,7 +323,7 @@
         await sleep(400);
 
         // 3) salva o avanço ANTES de clicar (a página vai recarregar)
-        await setRun({ pedido: run.pedido, idx: run.idx + 1, ativo: true, aguardando: true, ultimoCode: it.code, ts: Date.now() });
+        await setRun({ pedido: run.pedido, stage: "itens", idx: run.idx + 1, ativo: true, aguardando: true, ultimoCode: it.code, ts: Date.now() });
 
         // 4) clica no ✓ verde -> o site recarrega e o próximo item continua sozinho
         const check = acharCheckVerde(info ? info.rect : linhaEntradaRect());
@@ -293,8 +346,8 @@
                     return;
                 }
                 const resumo = pedido.itens.map(i => "• " + i.code + "  x" + i.qty).join("\n");
-                if (!confirm("Lançar este pedido no SPAmov?\n\nCliente: " + (pedido.cliente || "?") + "\n\n" + resumo + "\n\nA cada item o site recarrega e a extensão continua sozinha.\nVocê confere e finaliza (DS→SP→PA) na mão depois.")) return;
-                setRun({ pedido: pedido, idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
+                if (!confirm("Lançar pedido COMPLETO no SPAmov?\n\nVai clicar em NOVO, pôr o cliente " + (pedido.cliente || "?") + " e lançar:\n\n" + resumo + "\n\n⚠️ Clica em 'Novo' (começa um pedido novo). A cada passo o site recarrega e a extensão continua sozinha.\nVocê confere e finaliza (DS→SP→PA) na mão depois.")) return;
+                setRun({ pedido: pedido, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
             });
         } catch (e) { alert("Erro ao ler o pedido: " + e.message); }
     }
@@ -310,15 +363,14 @@
         document.body.appendChild(b);
     }
 
-    const temEntrada = !!acharLinhaEntrada() || linhaEntradaRect() != null || ehFrameItens();
     const temLeitura = temPedidoLeitura(montarPedidoLeitura());
 
-    if (temEntrada) {
+    if (ehFramePrincipal()) {
         botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", iniciarLancamento);
         botao("friganso-cancelar-btn", "⏹ Cancelar lançamento", "#64748b", "70px", cancelarLancamento);
     }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
 
-    // Retoma automaticamente um lançamento em andamento (após o reload do site)
-    if (ehFrameItens()) processarRun();
+    // Retoma automaticamente um lançamento em andamento (após cada reload do site)
+    if (ehFramePrincipal()) processarRun();
 })();
