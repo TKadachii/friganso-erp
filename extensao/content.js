@@ -250,16 +250,22 @@
         return null;
     }
     function acharCampoCliente() {
-        const cells = document.querySelectorAll("td, th, label, span, div");
+        // acha o rótulo "CLIENTE"
+        let labelRect = null;
+        const cells = document.querySelectorAll("td, th, label, span, div, b");
         for (let i = 0; i < cells.length; i++) {
-            const c = cells[i];
-            if (/^\s*CLIENTE\b/i.test((c.innerText || "").trim())) {
-                const row = c.closest("tr") || c.parentElement;
-                const inps = (row || document).querySelectorAll("input[type=text], input:not([type])");
-                for (let j = 0; j < inps.length; j++) { const r = inps[j].getBoundingClientRect(); if (r.width > 20 && r.height > 5) return inps[j]; }
-            }
+            const t = (cells[i].innerText || "").trim();
+            if (/^cliente$/i.test(t)) { const r = cells[i].getBoundingClientRect(); if (r.width && r.height) { labelRect = r; break; } }
         }
-        return null;
+        if (!labelRect) return null;
+        const cy = labelRect.top + labelRect.height / 2;
+        // campos de texto na MESMA LINHA do rótulo e à DIREITA dele (o 1º é o ID do cliente)
+        const inps = inputsVisiveis().filter(function (i) {
+            const r = i.getBoundingClientRect();
+            return Math.abs((r.top + r.height / 2) - cy) < 16 && r.left > labelRect.left;
+        });
+        inps.sort(function (a, b) { return a.getBoundingClientRect().left - b.getBoundingClientRect().left; });
+        return inps[0] || null;
     }
     function ehFramePrincipal() { return ehFrameItens() || /CLIENTE/i.test(bodyText()) || !!acharBotaoNovo(); }
 
