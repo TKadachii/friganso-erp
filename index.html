@@ -2594,9 +2594,15 @@
                             <div className="bg-[#e1ffc7] rounded-2xl p-4 border border-[#d3f4b8] mb-4">
                                 <pre className="font-sans text-sm whitespace-pre-wrap text-slate-800">{personalizar(atual)}</pre>
                             </div>
-                            <a href={waLink(atual)} target="_blank" rel="noopener noreferrer" onClick={() => { const s = new Set(enviados); s.add(atual.id); setEnviados(s); }} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
+                            <button onClick={() => {
+                                // Reaproveita SEMPRE a mesma aba do WhatsApp (nome fixo)
+                                const w = window.open(waLink(atual), 'friganso_whatsapp');
+                                const s = new Set(enviados); s.add(atual.id); setEnviados(s);
+                                // Tenta manter o foco aqui na aba do site
+                                try { if (w) w.blur(); window.focus(); } catch (e) {}
+                            }} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
                                 <div className="h-6 w-6"><IconWhatsApp/></div> Abrir WhatsApp e Enviar
-                            </a>
+                            </button>
                             <div className="flex gap-2">
                                 <button onClick={() => avancar(false)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-colors">Pular</button>
                                 <button onClick={() => avancar(true)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors">Próximo →</button>
