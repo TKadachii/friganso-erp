@@ -1,52 +1,45 @@
-// Friganso ERP - Resumo Rápido
-// Lê o pedido aberto no SPAmov (cliente, SPAmov e itens com quantidade)
-// e envia para o Resumo de Pedido do app.
+// Friganso ERP - Extensão (Resumo + Lançar pedido)
 (function () {
     "use strict";
 
-    // URL do seu app Friganso ERP (GitHub Pages)
     const APP_URL = "https://TKadachii.github.io/friganso-erp/";
+    const host = location.hostname || "";
 
-    // ---- Extração dos dados ----
-
-    function textoDaPagina() {
-        return (document.body && document.body.innerText) || "";
+    // ========= PONTE: roda na página do APP (github.io) =========
+    if (host.indexOf("github.io") !== -1) {
+        window.addEventListener("message", function (e) {
+            const d = e.data;
+            if (d && d.source === "friganso-app" && d.type === "LANCAR_PEDIDO" && d.pedido) {
+                try {
+                    chrome.storage.local.set({ friganso_pedido: d.pedido, friganso_pedido_ts: Date.now() });
+                } catch (err) { /* ignore */ }
+            }
+        });
+        return;
     }
 
-    // Cliente: pega o código DEPOIS da palavra CLIENTE (evita pegar Local Entrega [f] 0 ou Vendedor)
+    // ========= SPAMOV: leitura + lançamento =========
+    if (host.indexOf("friganso.com.br") === -1) return;
+    if (!document.body || document.body.tagName === "FRAMESET") return;
+
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const bodyText = () => (document.body && document.body.innerText) || "";
+
+    // ---------- LEITURA (Resumo) ----------
     function extrairCliente() {
-        const body = textoDaPagina();
+        const body = bodyText();
         let m = body.match(/CLIENTE[\s\S]{0,60}?\[[jf]\]\s*(\d+[a-z]?)\s*-\s*([^\n\r]+)/i);
         if (!m) {
-            // fallback: último [j]/[f] com código diferente de 0 e que tenha nome
             const re = /\[[jf]\]\s*(\d+[a-z]?)\s*-\s*([^\n\r]{3,})/ig;
             let mm, melhor = null;
-            while ((mm = re.exec(body)) !== null) {
-                if (mm[1] !== "0" && /[A-Za-zÀ-Ú]/.test(mm[2])) melhor = mm;
-            }
+            while ((mm = re.exec(body)) !== null) { if (mm[1] !== "0" && /[A-Za-zÀ-Ú]/.test(mm[2])) melhor = mm; }
             m = melhor;
         }
-        if (m) return { code: m[1].trim(), nome: m[2].trim() };
-        return { code: "", nome: "" };
+        return m ? { code: m[1].trim(), nome: m[2].trim() } : { code: "", nome: "" };
     }
+    function extrairSpamov() { const m = bodyText().match(/SPAmov[\s\S]{0,200}?(\d{6,8})/i); return m ? m[1] : ""; }
+    function extrairOrcamento() { const m = bodyText().match(/Or[çc]amento[\s\S]{0,40}?(\d{6,8})/i); return m ? m[1] : ""; }
 
-    // SPAmov: número de 6-8 dígitos perto do rótulo "SPAmov"
-    function extrairSpamov() {
-        const body = textoDaPagina();
-        let m = body.match(/SPAmov[\s\S]{0,200}?(\d{6,8})/i);
-        if (m) return m[1];
-        return "";
-    }
-
-    // Orçamento: número do orçamento (para NÃO confundir com produto)
-    function extrairOrcamento() {
-        const body = textoDaPagina();
-        let m = body.match(/Or[çc]amento[\s\S]{0,40}?(\d{6,8})/i);
-        if (m) return m[1];
-        return "";
-    }
-
-    // Acha a tabela de itens (a que tem cabeçalho "Valor Unit." / "Quant. Mov.")
     function acharTabelaItens() {
         const tables = document.querySelectorAll("table");
         for (let i = 0; i < tables.length; i++) {
@@ -55,160 +48,162 @@
         }
         return null;
     }
+    function colXQuant(scope) {
+        const cs = (scope || document).querySelectorAll("td, th");
+        for (let i = 0; i < cs.length; i++) {
+            const t = (cs[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
+            if (t.indexOf("quant") !== -1 && t.indexOf("mov") !== -1) { const r = cs[i].getBoundingClientRect(); if (r.width) return r.left + r.width / 2; }
+        }
+        return null;
+    }
 
-    // Itens: lê só a tabela de itens — código (sem o nº da linha), nome e quantidade
     function extrairItens(spamov) {
         const raw = [];
         const ignorar = new Set([spamov, extrairOrcamento()].filter(Boolean));
-        const tabela = acharTabelaItens();
-        const scope = tabela || document;
-
-        // X central da coluna "Quant. Mov.Un." (pelo cabeçalho)
-        let colX = null;
-        const possiveis = scope.querySelectorAll("td, th");
-        for (let i = 0; i < possiveis.length; i++) {
-            const t = (possiveis[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
-            if (t.indexOf("quant") !== -1 && t.indexOf("mov") !== -1) {
-                const r = possiveis[i].getBoundingClientRect();
-                if (r.width) { colX = r.left + r.width / 2; break; }
-            }
-        }
-
-        // Junta todos os campos numéricos INTEIROS visíveis, com posição na tela
+        const scope = acharTabelaItens() || document;
+        const colX = colXQuant(scope);
         const campos = [];
-        const inputs = scope.querySelectorAll("input");
-        for (let i = 0; i < inputs.length; i++) {
-            const inp = inputs[i];
+        scope.querySelectorAll("input").forEach(function (inp) {
             const tipo = (inp.type || "").toLowerCase();
-            if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(tipo) !== -1) continue;
+            if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(tipo) !== -1) return;
             const v = (inp.value || "").trim();
-            if (!/^\d+$/.test(v) || parseInt(v, 10) <= 0) continue; // só inteiros > 0
-            const r = inp.getBoundingClientRect();
-            if (!r.width || !r.height) continue; // ignora invisíveis
+            if (!/^\d+$/.test(v) || parseInt(v, 10) <= 0) return;
+            const r = inp.getBoundingClientRect(); if (!r.width || !r.height) return;
             campos.push({ val: parseInt(v, 10), x: r.left + r.width / 2, y: r.top + r.height / 2 });
-        }
-
-        const rows = scope.querySelectorAll("tr");
-        rows.forEach(function (row) {
-            const cells = row.querySelectorAll("td");
-            if (!cells.length) return;
-
-            // Código do produto + a célula dele (para saber a linha/posição)
+        });
+        scope.querySelectorAll("tr").forEach(function (row) {
+            const cells = row.querySelectorAll("td"); if (!cells.length) return;
             let rawCode = "", codeCell = null;
-            for (let i = 0; i < cells.length; i++) {
-                const ct = (cells[i].innerText || "").trim();
-                const mm = ct.match(/^(\d{3,7})$/);
-                if (mm) { rawCode = mm[1]; codeCell = cells[i]; break; }
-            }
+            for (let i = 0; i < cells.length; i++) { const ct = (cells[i].innerText || "").trim(); const mm = ct.match(/^(\d{3,7})$/); if (mm) { rawCode = mm[1]; codeCell = cells[i]; break; } }
             if (!rawCode || ignorar.has(rawCode)) return;
-
-            // Nome do produto: a célula com o maior texto contendo letras
             let nome = "";
-            cells.forEach(function (c) {
-                const ct = (c.innerText || "").replace(/\s+/g, " ").trim();
-                if (/[A-Za-zÀ-Ú]{4,}/.test(ct) && ct.length > nome.length) nome = ct;
-            });
-            if (!nome || nome.replace(/[^A-Za-zÀ-Ú]/g, "").length < 4) return; // ignora linhas sem nome de produto
-
-            // Quantidade: campo na MESMA LINHA do produto (Y) e na coluna "Quant. Mov.Un." (X).
-            // Isso ignora o "1" da linha de novo orçamento (Y diferente) e os campos de estoque (X diferente).
-            const rr = (codeCell || row).getBoundingClientRect();
-            const prodY = rr.top + rr.height / 2;
+            cells.forEach(function (c) { const ct = (c.innerText || "").replace(/\s+/g, " ").trim(); if (/[A-Za-zÀ-Ú]{4,}/.test(ct) && ct.length > nome.length) nome = ct; });
+            if (!nome || nome.replace(/[^A-Za-zÀ-Ú]/g, "").length < 4) return;
+            const rr = (codeCell || row).getBoundingClientRect(); const prodY = rr.top + rr.height / 2;
             let qty = null, melhor = 1e9;
-            campos.forEach(function (c) {
-                const dy = Math.abs(c.y - prodY);
-                if (dy > 16) return; // tem que estar na mesma linha do produto
-                const dx = (colX !== null) ? Math.abs(c.x - colX) : 0;
-                const score = dx + dy;
-                if (score < melhor) { melhor = score; qty = c.val; }
-            });
+            campos.forEach(function (c) { const dy = Math.abs(c.y - prodY); if (dy > 16) return; const dx = (colX !== null) ? Math.abs(c.x - colX) : 0; const s = dx + dy; if (s < melhor) { melhor = s; qty = c.val; } });
             if (qty === null) qty = 1;
-
             raw.push({ rawCode: rawCode, nome: nome, qty: qty });
         });
-
-        // O SPAmov mostra o nº da linha colado no código (1: 0202, 2: 1602, 3: 2701...).
-        // Se TODOS os itens começam com o número da sua linha, removemos esse prefixo.
-        const temPrefixoLinha = raw.length > 0 && raw.every(function (r, i) {
-            const pref = String(i + 1);
-            return r.rawCode.indexOf(pref) === 0 && (r.rawCode.length - pref.length) >= 3;
-        });
-
-        const itens = [];
-        const seen = new Set();
-        raw.forEach(function (r, i) {
-            let code = r.rawCode;
-            if (temPrefixoLinha) code = r.rawCode.slice(String(i + 1).length); // "10202" -> "0202"
-            if (!code || seen.has(code)) return;
-            seen.add(code);
-            itens.push({ code: code, nome: r.nome, qty: r.qty });
-        });
-
+        const temPrefixoLinha = raw.length > 0 && raw.every(function (r, i) { const p = String(i + 1); return r.rawCode.indexOf(p) === 0 && (r.rawCode.length - p.length) >= 3; });
+        const itens = [], seen = new Set();
+        raw.forEach(function (r, i) { let code = temPrefixoLinha ? r.rawCode.slice(String(i + 1).length) : r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty }); });
         return itens;
     }
-
-    function montarPedido() {
-        const cli = extrairCliente();
-        const spamov = extrairSpamov();
-        const itens = extrairItens(spamov);
-        return { cliente: cli.code, clienteNome: cli.nome, spamov: spamov, itens: itens };
+    function montarPedidoLeitura() { const c = extrairCliente(); const sp = extrairSpamov(); return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: extrairItens(sp) }; }
+    function temPedidoLeitura(p) { return p && (p.cliente || p.spamov || (p.itens && p.itens.length > 0)); }
+    function enviarParaApp() {
+        const p = montarPedidoLeitura();
+        if (!temPedidoLeitura(p) || p.itens.length === 0) { alert("Não consegui ler o pedido nesta tela."); return; }
+        const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(p))));
+        try { (window.top || window).open(APP_URL + "?pedidojson=" + encodeURIComponent(b64), "friganso_erp_app").focus(); }
+        catch (e) { window.open(APP_URL + "?pedidojson=" + encodeURIComponent(b64), "friganso_erp_app"); }
     }
 
-    function temPedido(p) {
-        return p && (p.cliente || p.spamov || (p.itens && p.itens.length > 0));
-    }
-
-    function enviar() {
-        const pedido = montarPedido();
-        if (!temPedido(pedido) || pedido.itens.length === 0) {
-            alert("Não consegui ler o pedido nesta tela.\nAbra um pedido com itens no SPAmov e tente de novo.");
-            return;
+    // ---------- LANÇAMENTO (Fazer Pedido) ----------
+    function statusBox() {
+        let box = document.getElementById("friganso-status");
+        if (!box) {
+            box = document.createElement("div"); box.id = "friganso-status";
+            Object.assign(box.style, { position: "fixed", top: "10px", left: "50%", transform: "translateX(-50%)", zIndex: "2147483647", background: "#0f172a", color: "#fff", padding: "10px 18px", borderRadius: "10px", fontFamily: "system-ui,sans-serif", fontSize: "13px", fontWeight: "bold", boxShadow: "0 6px 20px rgba(0,0,0,.35)", maxWidth: "92vw", textAlign: "center" });
+            document.body.appendChild(box);
         }
-        const json = JSON.stringify(pedido);
-        const b64 = btoa(unescape(encodeURIComponent(json)));
-        const url = APP_URL + "?pedidojson=" + encodeURIComponent(b64);
-        // Nome fixo da aba: reutiliza a aba do Friganso ERP se já estiver aberta
-        const TAB = "friganso_erp_app";
+        return function (msg) { box.textContent = "🦢 " + msg; };
+    }
+    function setInput(el, v) { el.focus(); el.value = String(v); ["input", "change", "keyup"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true }))); }
+    function enter(el) { ["keydown", "keypress", "keyup"].forEach(t => el.dispatchEvent(new KeyboardEvent(t, { bubbles: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 }))); }
+    async function esperar(cond, ms) { const t = Date.now(); while (Date.now() - t < ms) { if (cond()) return true; await sleep(200); } return false; }
+
+    function acharLinhaEntrada() {
+        const selects = document.querySelectorAll("select");
+        for (let i = 0; i < selects.length; i++) {
+            const s = selects[i];
+            const txt = (s.innerText || "") + " " + Array.from(s.options || []).map(o => o.text).join(" ");
+            if (/PRODUTOS/i.test(txt)) { const tr = s.closest("tr"); if (tr) return tr; }
+        }
+        return null;
+    }
+    function acharInputCodigo(entrada) {
+        const inps = Array.from(entrada.querySelectorAll("input")).filter(i => { const t = (i.type || "").toLowerCase(); if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(t) !== -1) return false; const r = i.getBoundingClientRect(); return r.width > 20 && r.height > 0; });
+        if (!inps.length) return null;
+        inps.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+        return inps[0]; // mais à esquerda = campo de código do produto
+    }
+    function acharInputQtd(entrada) {
+        const colX = colXQuant();
+        const inps = Array.from(entrada.querySelectorAll("input")).filter(i => { const t = (i.type || "").toLowerCase(); return ["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(t) === -1; });
+        let best = null, bd = 1e9;
+        inps.forEach(i => { const r = i.getBoundingClientRect(); if (!r.width) return; const x = r.left + r.width / 2; const d = colX != null ? Math.abs(x - colX) : 0; if (d < bd) { bd = d; best = i; } });
+        return best;
+    }
+
+    async function lancarPedido(pedido) {
+        const status = statusBox();
         try {
-            const w = (window.top || window).open(url, TAB);
-            if (w && w.focus) w.focus();
-        } catch (e) {
-            window.open(url, TAB);
-        }
+            const entrada = acharLinhaEntrada();
+            if (!entrada) { status("❌ Abra o pedido até a tela amarela de itens (Novo + cliente + Enviar) e clique de novo."); return; }
+            const total = pedido.itens.length;
+            for (let k = 0; k < total; k++) {
+                const it = pedido.itens[k];
+                status("Lançando " + (k + 1) + "/" + total + ":  " + it.code + "  x" + it.qty);
+                const ent = acharLinhaEntrada();
+                const codeInput = ent && acharInputCodigo(ent);
+                const qtyInput = ent && acharInputQtd(ent);
+                if (!codeInput || !qtyInput) { status("❌ Não achei os campos de código/quantidade. Me chame pra ajustar."); return; }
+
+                const antes = bodyText();
+                setInput(codeInput, it.code);
+                enter(codeInput);
+                await sleep(1300); // espera o produto carregar
+                setInput(qtyInput, it.qty);
+                enter(qtyInput); // confirma/lança o item
+                await esperar(() => bodyText() !== antes, 8000);
+                await sleep(500);
+
+                const fim = bodyText().slice(-600);
+                if (/n[ãa]o\s+adicionado|saldo\s+n[ãa]o\s+suporta|n[ãa]o\s+suporta|estoque\s+insuficiente|bloquead/i.test(fim) && !/item\s+aceito/i.test(fim)) {
+                    status("🛑 PAROU no item " + it.code + ". O SPAmov recusou (veja a faixa azul). Os anteriores foram lançados.");
+                    return;
+                }
+                status("✓ " + it.code + " ok");
+                await sleep(400);
+            }
+            status("✅ " + total + " item(ns) lançados! Confira tudo e finalize na mão: DS → SP → PA.");
+            try { chrome.storage.local.remove("friganso_pedido"); } catch (e) {}
+        } catch (e) { status("❌ Erro: " + e.message); }
     }
 
-    // ---- Botão flutuante ----
+    function iniciarLancamento() {
+        try {
+            chrome.storage.local.get(["friganso_pedido"], function (res) {
+                const pedido = res && res.friganso_pedido;
+                if (!pedido || !pedido.itens || !pedido.itens.length) {
+                    alert("Nenhum pedido pendente.\n\nMonte o pedido no app (Fazer Pedido) e toque em 'Mandar pra Extensão' primeiro.");
+                    return;
+                }
+                const resumo = pedido.itens.map(i => "• " + i.code + "  x" + i.qty).join("\n");
+                if (confirm("Lançar este pedido no SPAmov?\n\nCliente: " + (pedido.cliente || "?") + "\n\n" + resumo + "\n\nVocê confere e finaliza (DS→SP→PA) na mão depois.")) {
+                    lancarPedido(pedido);
+                }
+            });
+        } catch (e) { alert("Erro ao ler o pedido: " + e.message); }
+    }
 
-    // Evita duplicar no mesmo documento
-    if (document.getElementById("friganso-erp-btn")) return;
-    // Precisa de um body utilizável (framesets não têm)
-    if (!document.body || document.body.tagName === "FRAMESET") return;
-    // Só mostra o botão no frame que tem o pedido
-    if (!temPedido(montarPedido())) return;
+    // ---------- BOTÕES ----------
+    function botao(id, texto, cor, bottom, onClick) {
+        if (document.getElementById(id)) return;
+        const b = document.createElement("button");
+        b.id = id; b.type = "button"; b.textContent = texto;
+        Object.assign(b.style, { position: "fixed", right: "18px", bottom: bottom, zIndex: "2147483647", background: cor, color: "#fff", border: "none", borderRadius: "12px", padding: "12px 18px", fontSize: "14px", fontWeight: "bold", fontFamily: "system-ui,sans-serif", boxShadow: "0 6px 20px rgba(0,0,0,0.3)", cursor: "pointer" });
+        b.addEventListener("click", onClick);
+        document.body.appendChild(b);
+    }
 
-    const btn = document.createElement("button");
-    btn.id = "friganso-erp-btn";
-    btn.type = "button";
-    btn.textContent = "📋 Enviar pro Friganso ERP";
-    Object.assign(btn.style, {
-        position: "fixed",
-        right: "18px",
-        bottom: "18px",
-        zIndex: "2147483647",
-        background: "#e11d48",
-        color: "#fff",
-        border: "none",
-        borderRadius: "12px",
-        padding: "12px 18px",
-        fontSize: "14px",
-        fontWeight: "bold",
-        fontFamily: "system-ui, sans-serif",
-        boxShadow: "0 6px 20px rgba(0,0,0,0.3)",
-        cursor: "pointer"
-    });
-    btn.addEventListener("mouseover", function () { btn.style.background = "#be123c"; });
-    btn.addEventListener("mouseout", function () { btn.style.background = "#e11d48"; });
-    btn.addEventListener("click", enviar);
+    const temEntrada = !!acharLinhaEntrada();
+    const temLeitura = temPedidoLeitura(montarPedidoLeitura());
 
-    document.body.appendChild(btn);
+    // Botão de LANÇAR aparece na tela de itens (linha amarela de entrada)
+    if (temEntrada) botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "70px", iniciarLancamento);
+    // Botão de LER/RESUMO aparece quando há um pedido já montado na tela
+    if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
 })();

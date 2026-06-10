@@ -2431,6 +2431,116 @@
             );
         };
 
+        // ===== FAZER PEDIDO: monta o pedido e manda a extensão lançar no SPAmov =====
+        const FazerPedidoScreen = ({ products, clients, showMessage }) => {
+            const [clienteId, setClienteId] = useState('');
+            const [busca, setBusca] = useState('');
+            const [itens, setItens] = useState([]); // {code, name, qty}
+            const [enviado, setEnviado] = useState(false);
+
+            const clienteInfo = useMemo(() => clients.find(c => String(c.code) === clienteId.trim()), [clients, clienteId]);
+
+            const resultados = useMemo(() => {
+                const q = busca.trim();
+                if (!q) return [];
+                const norm = normalizeForSearch(q);
+                return products.filter(p => normalizeForSearch(p.name).includes(norm) || String(p.code).includes(q)).slice(0, 12);
+            }, [products, busca]);
+
+            const addItem = (p) => {
+                setItens(prev => prev.some(i => i.code === p.code) ? prev : [...prev, { code: String(p.code), name: p.name, qty: 1 }]);
+                setBusca('');
+            };
+            const setQty = (code, q) => { const n = parseInt(q, 10); setItens(prev => prev.map(i => i.code === code ? { ...i, qty: (isNaN(n) ? '' : n) } : i)); };
+            const remover = (code) => setItens(prev => prev.filter(i => i.code !== code));
+
+            const lancar = () => {
+                if (!clienteId.trim()) { showMessage('Informe o ID do cliente.', 'error'); return; }
+                const validos = itens.filter(i => Number(i.qty) > 0);
+                if (!validos.length) { showMessage('Adicione ao menos 1 item com quantidade.', 'error'); return; }
+                const pedido = { cliente: clienteId.trim(), itens: validos.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
+                // Envia para a extensão (que está ouvindo nesta página)
+                window.postMessage({ source: 'friganso-app', type: 'LANCAR_PEDIDO', pedido: pedido }, '*');
+                setEnviado(true);
+                showMessage('Pedido enviado para a extensão! Abra a aba do SPAmov e clique em "🚀 Lançar pedido".', 'success');
+            };
+
+            return (
+                <div className="animate-in fade-in max-w-3xl mx-auto space-y-5">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🛒</span> Fazer Pedido</h2>
+                        <p className="text-slate-500 text-sm">Monte o pedido aqui e a extensão lança no SPAmov pra você.</p>
+                    </div>
+
+                    {products.length === 0 && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-medium">⚠️ Carregue a <b>Tabela do Dia (PDF)</b> para buscar os produtos.</div>
+                    )}
+
+                    {/* Cliente */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+                        <label className="text-xs font-bold text-slate-500">ID do Cliente</label>
+                        <input type="text" value={clienteId} onChange={e => setClienteId(e.target.value)} placeholder="Ex: 30298" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border rounded-xl text-sm font-bold outline-none focus:border-rose-500" />
+                        {clienteId.trim() && (clienteInfo
+                            ? <p className="text-xs text-emerald-600 font-bold mt-1.5">✓ {clienteInfo.name}</p>
+                            : <p className="text-xs text-slate-400 mt-1.5">Cliente não está no CRM (tudo bem, o SPAmov valida pelo ID).</p>)}
+                    </div>
+
+                    {/* Buscar produtos */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+                        <label className="text-xs font-bold text-slate-500">Adicionar Produto</label>
+                        <div className="relative mt-1">
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none"><IconSearch /></div>
+                            <input type="text" value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar por código ou nome..." className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border rounded-xl text-sm outline-none focus:border-rose-500" />
+                        </div>
+                        {resultados.length > 0 && (
+                            <div className="mt-2 space-y-1 max-h-56 overflow-y-auto">
+                                {resultados.map(p => (
+                                    <button key={p.code} onClick={() => addItem(p)} className="w-full text-left px-3 py-2 bg-slate-50 hover:bg-rose-50 rounded-lg flex items-center gap-2 transition-colors border border-transparent hover:border-rose-200">
+                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{p.code}</span>
+                                        <span className="text-sm text-slate-700 flex-1 truncate">{p.name}</span>
+                                        <span className="text-rose-600 font-bold flex-shrink-0">+</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Lista do pedido */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-4 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-slate-800">Itens do Pedido</h3><span className="text-xs font-bold text-slate-400">{itens.length} item(ns)</span></div>
+                        {itens.length === 0 ? (
+                            <div className="p-8 text-center text-slate-400 text-sm">Nenhum item ainda. Busque e adicione produtos acima.</div>
+                        ) : (
+                            <div className="divide-y divide-slate-100">
+                                {itens.map(i => (
+                                    <div key={i.code} className="p-3 flex items-center gap-3">
+                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{i.code}</span>
+                                        <span className="text-sm text-slate-700 flex-1 truncate">{i.name}</span>
+                                        <input type="number" min="1" value={i.qty} onChange={e => setQty(i.code, e.target.value)} className="w-16 text-center font-bold text-slate-700 bg-slate-50 border rounded-lg px-1 py-1 outline-none focus:border-rose-500" />
+                                        <button onClick={() => remover(i.code)} className="text-slate-300 hover:text-red-500 transition-colors h-7 w-7 flex items-center justify-center"><div className="h-4 w-4"><IconX /></div></button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Lançar */}
+                    <button onClick={lancar} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="w-full bg-rose-700 hover:bg-rose-800 disabled:opacity-40 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 text-lg">
+                        <span>🚀</span> Mandar pra Extensão
+                    </button>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs text-slate-500 space-y-1">
+                        <p className="font-bold text-slate-600">Como funciona:</p>
+                        <p>1. Preencha o cliente e os itens aqui e toque em <b>Mandar pra Extensão</b>.</p>
+                        <p>2. Abra a aba do <b>SPAmov</b> (logado, na tela de novo pedido).</p>
+                        <p>3. Clique no botão <b>🚀 Lançar pedido</b> que a extensão coloca lá.</p>
+                        <p>4. A extensão lança os itens e <b>para se algum der erro</b> (saldo, estoque...).</p>
+                        <p className="text-rose-600 font-bold pt-1">⚠️ A confirmação final (DS → SP → PA) você faz na mão, conferindo tudo.</p>
+                    </div>
+                </div>
+            );
+        };
+
         // ===== DISPAROS WHATSAPP: campanha clicar-e-enviar =====
         const DisparosScreen = ({ clients, products, user, showMessage, setActiveRoute }) => {
             const TEMPLATE_PADRAO = "🥩 *OFERTAS DO DIA*\n\n{ofertas}";
@@ -2809,6 +2919,7 @@
                     case 'resumo': return <ResumoScreen products={products} showMessage={showMessage} clients={clients} setActiveRoute={setActiveRoute} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
+                    case 'pedido': return <FazerPedidoScreen products={products} clients={clients} showMessage={showMessage} />;
                     case 'tutorial': return <TutorialScreen setActiveRoute={setActiveRoute} />;
                     default: return <DashboardScreen user={user} />;
                 }
@@ -2875,6 +2986,7 @@
                             
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Vendas Diárias</p>
                             <NavButton route="pdf" icon={IconFileText} label="Tabela do Dia (PDF)" />
+                            <NavButton route="pedido" icon={IconReceipt} label="Fazer Pedido" />
                             <NavButton route="resumo" icon={IconReceipt} label="Resumo de Pedido" />
                             <NavButton route="orcamentos" icon={IconWhatsApp} label="Gerador de Zap" />
                             <NavButton route="disparos" icon={IconWhatsApp} label="Disparos WhatsApp" />

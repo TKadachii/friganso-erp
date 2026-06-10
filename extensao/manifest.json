@@ -1,18 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Friganso ERP - Resumo Rápido",
-  "version": "1.0.0",
-  "description": "Lê o pedido aberto no SPAmov e envia direto para o Resumo de Pedido do Friganso ERP.",
+  "version": "2.0.0",
+  "description": "Lê o pedido do SPAmov para o Resumo e lança pedidos montados no app, direto no SPAmov.",
   "icons": {
     "16": "icon16.png",
     "48": "icon48.png",
     "128": "icon128.png"
   },
+  "permissions": ["storage"],
   "content_scripts": [
     {
       "matches": [
         "*://*.friganso.com.br/*",
-        "*://spd1.friganso.com.br/*"
+        "*://spd1.friganso.com.br/*",
+        "*://tkadachii.github.io/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle",
