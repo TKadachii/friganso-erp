@@ -357,6 +357,28 @@
     }
     function ehFramePrincipal() { return ehFrameItens() || /CLIENTE/i.test(bodyText()) || !!acharBotaoNovo(); }
 
+    // Seleciona "1. Jurídica" (CNPJ) ou "2. Física" (CPF) no dropdown do cliente
+    function selecionarTipoPessoa(tipo) {
+        const selects = document.querySelectorAll("select");
+        for (let i = 0; i < selects.length; i++) {
+            const s = selects[i];
+            const opts = Array.prototype.slice.call(s.options || []);
+            const txt = opts.map(o => o.text).join(" ");
+            if (/jur[ií]dica/i.test(txt) && /f[ií]sica/i.test(txt)) {
+                const re = (tipo === "fisica") ? /f[ií]sica/i : /jur[ií]dica/i;
+                for (let j = 0; j < opts.length; j++) {
+                    if (re.test(opts[j].text)) {
+                        s.value = opts[j].value; s.selectedIndex = j;
+                        s.dispatchEvent(new Event("input", { bubbles: true }));
+                        s.dispatchEvent(new Event("change", { bubbles: true }));
+                        return opts[j].text.trim();
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     // Processa UM item por carregamento da página. O clique no verde recarrega o site
     // e, no próximo load, esta função retoma sozinha do próximo item.
     // Detecta se o pedido já está no estado PA (confirmado)
@@ -463,11 +485,15 @@
         if (stage === "cliente") {
             status("Aguardando a tela do cliente...");
             await sleep(1000); // ⏱️ folga após o "Novo" (a tela termina de abrir e foca o campo)
-            // O site JÁ deixa o campo do cliente focado — digita direto no campo focado.
-            let cli = document.activeElement;
-            const focado = cli && cli.tagName === "INPUT";
-            if (!cli || cli.tagName !== "INPUT" || cli.type === "checkbox" || cli.type === "radio") cli = acharCampoCliente();
-            dlog("campo cliente: " + (cli ? ("achado (" + (focado ? "focado" : "por busca") + ")") : "NÃO achado"));
+            // Seleciona Jurídica (CNPJ) ou Física (CPF) ANTES de digitar o ID
+            const tipo = run.pedido.tipoPessoa || "juridica";
+            const tipoSel = selecionarTipoPessoa(tipo);
+            dlog("tipo pessoa: " + tipo + " -> " + (tipoSel || "select NÃO achado"));
+            await sleep(600);
+            // acha o campo do ID (após mudar o tipo, o foco pode ter saído do campo)
+            let cli = acharCampoCliente();
+            if (!cli) { const ae = document.activeElement; if (ae && ae.tagName === "INPUT" && ae.type !== "checkbox" && ae.type !== "radio") cli = ae; }
+            dlog("campo cliente: " + (cli ? "achado" : "NÃO achado"));
             if (!cli) { if (ehFramePrincipal()) status("❌ Não achei o campo do Cliente."); return; }
             status("Digitando cliente " + run.pedido.cliente + "...");
             typeInto(cli, run.pedido.cliente);   // digitação robusta (native setter + execCommand)

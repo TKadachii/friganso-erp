@@ -2442,25 +2442,33 @@
             });
 
             const clienteInfo = useMemo(() => clients.find(c => String(c.code) === clienteId.trim()), [clients, clienteId]);
+            const [tipoPessoa, setTipoPessoa] = useState('juridica'); // juridica (CNPJ) | fisica (CPF)
+            useEffect(() => {
+                if (clienteInfo && clienteInfo.tipo) {
+                    if (/f[ií]sica/i.test(clienteInfo.tipo)) setTipoPessoa('fisica');
+                    else if (/jur[ií]dica/i.test(clienteInfo.tipo)) setTipoPessoa('juridica');
+                }
+            }, [clienteInfo]);
 
             const ehHoje = (ts) => { const d = new Date(ts), n = new Date(); return d.getDate() === n.getDate() && d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear(); };
             const hora = (ts) => { const d = new Date(ts); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); };
             const histHoje = useMemo(() => historico.filter(h => ehHoje(h.ts)), [historico]);
 
             const salvarHistorico = (lista) => { try { window.localStorage.setItem('friganso_pedidos_hist', JSON.stringify(lista)); } catch (e) {} setHistorico(lista); };
-            const addHistorico = (cliente, itensValidos) => {
-                const entry = { id: Date.now() + '_' + Math.random().toString(36).slice(2, 6), cliente: cliente, itens: itensValidos.map(i => ({ code: String(i.code), name: i.name, qty: Number(i.qty) })), ts: Date.now() };
+            const addHistorico = (cliente, itensValidos, tipo) => {
+                const entry = { id: Date.now() + '_' + Math.random().toString(36).slice(2, 6), cliente: cliente, tipoPessoa: tipo || 'juridica', itens: itensValidos.map(i => ({ code: String(i.code), name: i.name, qty: Number(i.qty) })), ts: Date.now() };
                 salvarHistorico([entry, ...historico].slice(0, 60));
             };
             const puxarHistorico = (h) => {
                 setClienteId(h.cliente || '');
+                setTipoPessoa(h.tipoPessoa || 'juridica');
                 setItens(h.itens.map(i => ({ code: String(i.code), name: i.name || ('Produto ' + i.code), qty: Number(i.qty) || 1 })));
                 showMessage('Pedido carregado! Confira e mande de novo.', 'success');
             };
             const removerHistorico = (id) => salvarHistorico(historico.filter(h => h.id !== id));
             const mandarTodosHist = () => {
                 if (!histHoje.length) { showMessage('Sem pedidos no histórico de hoje.', 'error'); return; }
-                const pedidos = histHoje.map(h => ({ cliente: h.cliente, itens: h.itens.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) }));
+                const pedidos = histHoje.map(h => ({ cliente: h.cliente, tipoPessoa: h.tipoPessoa || 'juridica', itens: h.itens.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) }));
                 window.postMessage({ source: 'friganso-app', type: 'LANCAR_VARIOS', pedidos: pedidos }, '*');
                 showMessage(`${pedidos.length} pedido(s) enviado(s) pra fila da extensão! No SPAmov, clique em 🚀 Lançar pedido.`, 'success');
             };
@@ -2483,7 +2491,7 @@
                 if (!clienteId.trim()) { showMessage('Informe o ID do cliente.', 'error'); return; }
                 const validos = itens.filter(i => Number(i.qty) > 0);
                 if (!validos.length) { showMessage('Adicione ao menos 1 item com quantidade.', 'error'); return; }
-                const pedido = { cliente: clienteId.trim(), itens: validos.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
+                const pedido = { cliente: clienteId.trim(), tipoPessoa: tipoPessoa, itens: validos.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
                 // Envia para a extensão (que está ouvindo nesta página) — NÃO mexe no histórico
                 window.postMessage({ source: 'friganso-app', type: 'LANCAR_PEDIDO', pedido: pedido }, '*');
                 setEnviado(true);
@@ -2494,7 +2502,7 @@
                 if (!clienteId.trim()) { showMessage('Informe o ID do cliente.', 'error'); return; }
                 const validos = itens.filter(i => Number(i.qty) > 0);
                 if (!validos.length) { showMessage('Adicione ao menos 1 item com quantidade.', 'error'); return; }
-                addHistorico(clienteId.trim(), validos);
+                addHistorico(clienteId.trim(), validos, tipoPessoa);
                 showMessage('Pedido salvo no histórico do dia! 📋', 'success');
             };
 
@@ -2519,6 +2527,12 @@
                         {clienteId.trim() && (clienteInfo
                             ? <p className="text-xs text-emerald-600 font-bold mt-1.5">✓ {clienteInfo.name}</p>
                             : <p className="text-xs text-slate-400 mt-1.5">Cliente não está no CRM (tudo bem, o SPAmov valida pelo ID).</p>)}
+                        <label className="text-xs font-bold text-slate-500 block mt-3 mb-1">Tipo de Pessoa</label>
+                        <div className="flex gap-2">
+                            <button onClick={() => setTipoPessoa('juridica')} className={`flex-1 py-2 rounded-xl text-sm font-bold border-2 transition-colors ${tipoPessoa === 'juridica' ? 'border-rose-500 bg-rose-50 text-rose-700' : 'border-slate-200 text-slate-500'}`}>Jurídica (CNPJ)</button>
+                            <button onClick={() => setTipoPessoa('fisica')} className={`flex-1 py-2 rounded-xl text-sm font-bold border-2 transition-colors ${tipoPessoa === 'fisica' ? 'border-rose-500 bg-rose-50 text-rose-700' : 'border-slate-200 text-slate-500'}`}>Física (CPF)</button>
+                        </div>
+                        {clienteInfo && clienteInfo.tipo && <p className="text-[10px] text-slate-400 mt-1">Detectado do CRM: {clienteInfo.tipo}</p>}
                     </div>
 
                     {/* Buscar produtos */}
