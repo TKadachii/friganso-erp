@@ -2458,6 +2458,14 @@
                 showMessage('Pedido carregado! Confira e mande de novo.', 'success');
             };
             const removerHistorico = (id) => salvarHistorico(historico.filter(h => h.id !== id));
+            const mandarTodosHist = () => {
+                if (!histHoje.length) { showMessage('Sem pedidos no histórico de hoje.', 'error'); return; }
+                histHoje.forEach(h => {
+                    const pedido = { cliente: h.cliente, itens: h.itens.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
+                    window.postMessage({ source: 'friganso-app', type: 'LANCAR_PEDIDO', pedido: pedido }, '*');
+                });
+                showMessage(`${histHoje.length} pedido(s) enviado(s) pra fila da extensão! No SPAmov, clique em 🚀 Lançar pedido.`, 'success');
+            };
 
             const resultados = useMemo(() => {
                 const q = busca.trim();
@@ -2600,6 +2608,14 @@
                                     </div>
                                 ))}
                             </div>
+                            {histHoje.length > 0 && (
+                                <div className="p-3 border-t border-slate-100">
+                                    <button onClick={mandarTodosHist} className="w-full bg-rose-700 hover:bg-rose-800 text-white font-bold py-2.5 rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
+                                        <span>🚀</span> Mandar todos ({histHoje.length}) pra Extensão
+                                    </button>
+                                    <p className="text-[10px] text-slate-400 text-center mt-1.5">Vão todos pra fila — no SPAmov você lança um por um.</p>
+                                </div>
+                            )}
                         </div>
                     </div>
 
