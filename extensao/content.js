@@ -333,15 +333,19 @@
 
         // ETAPA 2: preencher o cliente e clicar em "Enviar"
         if (stage === "cliente") {
+            status("Aguardando a tela do cliente...");
+            await sleep(2000); // ⏱️ folga após o "Novo" (a tela termina de abrir e foca o campo)
             let cli = acharCampoCliente(), t = 0;
             while (!cli && t < 10) { await sleep(500); cli = acharCampoCliente(); t++; }
             // o site já deixa o campo focado depois do Novo — usa o campo focado como reforço
             if (!cli) { const ae = document.activeElement; if (ae && ae.tagName === "INPUT") cli = ae; }
             if (!cli) { if (ehFramePrincipal()) status("❌ Não achei o campo do Cliente. Manda um print que eu ajusto."); return; }
             status("Digitando cliente " + run.pedido.cliente + "...");
-            digitar(cli, run.pedido.cliente);   // digita o ID
+            try { cli.focus(); } catch (e) {}
+            digitar(cli, run.pedido.cliente);          // digita o ID caractere a caractere
+            setInput(cli, run.pedido.cliente);         // reforço: garante o valor final + change/blur
             enter(cli);
-            await sleep(1500); // deixa o cliente resolver
+            await sleep(2000); // ⏱️ folga antes do Enviar (deixa o cliente resolver)
             await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             let env = acharBotaoEnviar(), te = 0;
             while (!env && te < 6) { await sleep(400); env = acharBotaoEnviar(); te++; }
