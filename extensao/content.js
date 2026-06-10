@@ -159,6 +159,43 @@
         return { y: y, n: naLinha.length, code: code, qty: qty };
     }
 
+    // Detecta se um elemento é "verde" (pela cor ou pelo nome do ícone)
+    function ehVerde(el) {
+        try {
+            const cs = getComputedStyle(el);
+            const cores = [cs.backgroundColor, cs.color, cs.borderTopColor];
+            for (let i = 0; i < cores.length; i++) {
+                const m = cores[i] && cores[i].match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+                if (m) { const R = +m[1], G = +m[2], B = +m[3]; if (G > 90 && G > R + 20 && G > B + 20) return true; }
+            }
+            const s = ((el.src || "") + " " + (el.alt || "") + " " + (el.title || "")).toLowerCase();
+            if (/verde|green|\bok\b|check|confirm|aceit|salv|grava|adicion/.test(s)) return true;
+        } catch (e) {}
+        return false;
+    }
+    // Acha o ✓ verde da linha de entrada (clica pra lançar o item)
+    function acharCheckVerde(y) {
+        if (y == null) return null;
+        const cands = [];
+        const els = document.querySelectorAll("img, a, input[type=image], button, span, div, td");
+        els.forEach(function (el) {
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            if (Math.abs((r.top + r.height / 2) - y) > 24) return; // mesma linha da entrada
+            const txt = ((el.innerText || el.value || "") + "").trim();
+            if (/todos/i.test(txt)) return;            // ignora botão "Todos"
+            if (txt.length > 6) return;                // ignora textos longos (não é ícone)
+            const clicavel = el.tagName === "IMG" || el.tagName === "A" || el.tagName === "INPUT" || el.onclick || el.getAttribute("onclick") || getComputedStyle(el).cursor === "pointer";
+            if (!clicavel) return;
+            cands.push({ el: el, x: r.left + r.width / 2, verde: ehVerde(el) });
+        });
+        if (!cands.length) return null;
+        const verdes = cands.filter(c => c.verde);
+        const lista = verdes.length ? verdes : cands;
+        lista.sort((a, b) => b.x - a.x); // mais à direita primeiro (o ✓ fica no fim da linha)
+        return lista[0].el;
+    }
+
     async function lancarPedido(pedido) {
         const status = statusBox();
         try {
@@ -177,12 +214,19 @@
                 await sleep(1300); // espera o produto carregar
                 info = camposEntrada(); // a linha pode ter mudado
                 const q = (info && info.qty) ? info.qty : null;
-                if (q) { setInput(q, it.qty); enter(q); }
-                else { enter(info && info.code ? info.code : document.activeElement); }
-                await esperar(function () { return bodyText() !== antes; }, 8000);
+                if (q) setInput(q, it.qty);
+                await sleep(250);
+
+                // clica no ✓ verde pra lançar o item
+                const check = acharCheckVerde(info ? info.y : entradaY());
+                if (check) { check.click(); }
+                else if (q) { enter(q); } // fallback: tenta Enter
+
+                const mudou = await esperar(function () { return bodyText() !== antes; }, 8000);
                 await sleep(500);
 
-                const fim = bodyText().slice(-600);
+                const fim = bodyText().slice(-700);
+                if (!mudou) { status("⚠️ Item " + it.code + " não parece ter entrado (não achei/cliquei no ✓ certo). Manda um print que eu ajusto a mira."); return; }
                 if (/n[ãa]o\s+adicionado|saldo\s+n[ãa]o\s+suporta|n[ãa]o\s+suporta|estoque\s+insuficiente|bloquead/i.test(fim) && !/item\s+aceito/i.test(fim)) {
                     status("🛑 PAROU no item " + it.code + ". O SPAmov recusou (veja a faixa azul). Os anteriores foram lançados.");
                     return;
