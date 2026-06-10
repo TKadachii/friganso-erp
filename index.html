@@ -398,7 +398,7 @@
             );
         };
 
-        const ProfileAdminScreen = ({ user, showMessage }) => {
+        const ProfileAdminScreen = ({ user, showMessage, setActiveRoute }) => {
             const [usersList, setUsersList] = useState([]);
             const [loading, setLoading] = useState(false);
             const [installPrompt, setInstallPrompt] = useState(window.__pwaInstallPrompt || null);
@@ -491,6 +491,34 @@
                                     Baixar Programa para PC (.exe)
                                 </a>
                             )}
+                        </div>
+                    </div>
+
+                    {/* Card da Extensão do Chrome (SPAmov -> Resumo) */}
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <div className="flex items-start gap-3 mb-1">
+                            <span className="text-2xl">🔌</span>
+                            <div>
+                                <h3 className="text-base font-bold text-slate-800">Extensão do Chrome — Resumo Rápido</h3>
+                                <p className="text-sm text-slate-500">Lê o pedido aberto no SPAmov e manda direto pro Resumo, sem digitar.</p>
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap gap-3 items-center mt-4">
+                            <a href="friganso-extensao.zip" download className="flex items-center gap-2 bg-rose-700 hover:bg-rose-800 text-white px-5 py-3 rounded-xl font-bold text-sm transition-all shadow-md shadow-rose-100">
+                                <div className="h-4 w-4"><IconCloudDownload /></div>
+                                Baixar Extensão (.zip)
+                            </a>
+                            <button onClick={() => setActiveRoute && setActiveRoute('tutorial')} className="flex items-center gap-2 bg-white border-2 border-slate-200 hover:border-rose-400 text-slate-700 px-5 py-3 rounded-xl font-bold text-sm transition-all">
+                                <div className="h-4 w-4"><IconBook /></div>
+                                Como instalar e usar
+                            </button>
+                        </div>
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-4 text-xs text-slate-500 space-y-1">
+                            <p className="font-bold text-slate-600">Instalação rápida:</p>
+                            <p>1. Baixe e <b>descompacte</b> o .zip numa pasta fixa.</p>
+                            <p>2. No Chrome abra <b>chrome://extensions</b> e ligue o <b>Modo do desenvolvedor</b>.</p>
+                            <p>3. Clique em <b>Carregar sem compactação</b> e escolha a pasta descompactada.</p>
+                            <p>4. No SPAmov, libere o acesso ao site e use o botão <b>📋 Enviar pro Friganso ERP</b>.</p>
                         </div>
                     </div>
 
@@ -2378,6 +2406,22 @@
                         <Ir rota="profile">Abrir Meu Perfil</Ir>
                     </Secao>
 
+                    {/* 8. Extensão do Chrome */}
+                    <Secao id="extensao" icon={IconBook} cor="bg-rose-700" titulo="8. Extensão do Chrome (SPAmov → Resumo)" sub="Manda o pedido do SPAmov pro app sem digitar">
+                        <Banner grad="from-rose-600 to-rose-800" emoji="🔌" titulo="Do SPAmov pro Resumo em 1 clique" />
+                        <p className="text-sm text-slate-600">A extensão coloca um botão dentro do SPAmov que lê o pedido (cliente, SPAmov e itens com quantidade) e abre o Resumo já preenchido.</p>
+                        <p className="text-sm font-bold text-slate-700 pt-1">📥 Instalar (uma vez só)</p>
+                        <Passo n="1">Em <b>Meu Perfil</b>, baixe a <b>Extensão (.zip)</b> e <b>descompacte</b> numa pasta fixa (não apague depois).</Passo>
+                        <Passo n="2">No Chrome, abra <b>chrome://extensions</b> e ligue o <b>Modo do desenvolvedor</b> (canto superior direito).</Passo>
+                        <Passo n="3">Clique em <b>Carregar sem compactação</b> e selecione a pasta descompactada.</Passo>
+                        <Passo n="4">Na extensão, em <b>"Pode ler e alterar os dados do site"</b>, escolha <b>Em spd1.friganso.com.br</b>.</Passo>
+                        <p className="text-sm font-bold text-slate-700 pt-1">🚀 Usar no dia a dia</p>
+                        <Passo n="5">Abra um pedido no SPAmov e clique no botão vermelho <b>📋 Enviar pro Friganso ERP</b> (canto inferior direito).</Passo>
+                        <Passo n="6">O app abre o Resumo preenchido. Confira as <b>quantidades</b> (são editáveis) e finalize.</Passo>
+                        <Dica>Se algum dado vier errado, corrija direto no Resumo. A quantidade e o preço são editáveis ali mesmo.</Dica>
+                        <Ir rota="profile">Baixar a Extensão</Ir>
+                    </Secao>
+
                     <p className="text-center text-xs text-slate-400 pt-2">Ficou com dúvida? Use o <b>Suporte Técnico</b> no menu. 🦢</p>
                 </div>
             );
@@ -2750,7 +2794,7 @@
                     case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
                     case 'credits': return <CreditsScreen />;
-                    case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} />;
+                    case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} />;
                     case 'resumo': return <ResumoScreen products={products} showMessage={showMessage} clients={clients} setActiveRoute={setActiveRoute} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;

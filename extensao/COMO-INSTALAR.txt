@@ -1,0 +1,38 @@
+==========================================================
+  FRIGANSO ERP - Extensão "Resumo Rápido" (Chrome)
+==========================================================
+
+O QUE FAZ:
+  Coloca um botão "📋 Enviar pro Friganso ERP" nas telas do
+  SPAmov (friganso.com.br). Ao clicar, ele lê o pedido aberto
+  (cliente, SPAmov e itens) e abre o seu app Friganso ERP já
+  com o Resumo de Pedido preenchido — sem copiar e colar.
+
+------------------------------------------------------------
+COMO INSTALAR (uma vez só):
+------------------------------------------------------------
+1. Abra o Chrome e digite na barra de endereço:
+       chrome://extensions
+2. No canto superior direito, ligue o "Modo do desenvolvedor".
+3. Clique em "Carregar sem compactação" (Load unpacked).
+4. Selecione esta pasta:
+       C:\Users\Usuario\Downloads\friganso-extension
+5. Pronto! O ícone do ganso aparece na barra de extensões.
+
+------------------------------------------------------------
+COMO USAR:
+------------------------------------------------------------
+1. Abra um pedido no SPAmov (spd1.friganso.com.br).
+2. Clique no botão vermelho "📋 Enviar pro Friganso ERP"
+   (canto inferior direito da tela).
+3. O Friganso ERP abre numa nova aba já com o pedido no
+   Resumo. Confira as quantidades e finalize.
+
+------------------------------------------------------------
+OBSERVAÇÕES:
+------------------------------------------------------------
+- Carregue a "Tabela do Dia (PDF)" no app para os itens
+  serem reconhecidos com nome e preço.
+- Se algum item não vier certo, me avise qual tela/pedido
+  que eu ajusto a leitura (cada tela do SPAmov é diferente).
+==========================================================
