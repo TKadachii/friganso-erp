@@ -824,8 +824,37 @@
                 } catch (err) { showMessage('Erro crítico ao ler pedido.', 'error'); setIsProcessing(false); }
             };
 
-            // Recebe o pedido enviado pela extensão do Chrome (lê o SPAmov) e processa automaticamente
+            // Recebe o pedido enviado pela extensão do Chrome (lê o SPAmov)
             useEffect(() => {
+                // 1) Pedido estruturado (com quantidades) — monta o resumo direto
+                const rawJson = window.sessionStorage.getItem('friganso_pedido_json');
+                if (rawJson) {
+                    window.sessionStorage.removeItem('friganso_pedido_json');
+                    try {
+                        const data = JSON.parse(rawJson);
+                        const processed = (data.itens || []).map(it => {
+                            const rp = products.find(p => String(p.code) === String(it.code));
+                            const nome = rp ? rp.name : (it.nome || ('Produto ' + it.code));
+                            const base = rp ? rp.originalPrice : 0;
+                            const { hasDiscount, origPrice, unitFinalPrice } = checkDiscountRules(it.code, nome, base);
+                            const qty = Number(it.qty) || 1;
+                            return { code: String(it.code), name: nome, quantity: qty, unitFinalPrice, discountedPrice: unitFinalPrice * qty, originalPrice: origPrice * qty, hasDiscount };
+                        }).filter(x => x.code);
+                        if (processed.length) {
+                            setPendingCustomer(data.cliente || '');
+                            setPendingSpamov(data.spamov || '');
+                            setDetectedClientName(data.clienteNome || '');
+                            setOrderSummary({ customerCode: data.cliente || '', spamov: data.spamov || '', items: processed, totalDiscounted: processed.reduce((a, c) => a + c.discountedPrice, 0) });
+                            const existing = clients.find(c => c.code === (data.cliente || ''));
+                            if (existing) { setClientToSave(existing); setShowHistoryPrompt(true); }
+                            showMessage('Pedido importado do SPAmov! ' + (products.length === 0 ? '(carregue a Tabela PDF p/ ver preços)' : ''), 'success');
+                        } else {
+                            showMessage('Pedido recebido, mas nenhum item reconhecido.', 'error');
+                        }
+                    } catch (e) { showMessage('Erro ao importar pedido do SPAmov.', 'error'); }
+                    return;
+                }
+                // 2) Compatibilidade: pedido em texto (abre o modal para preencher quantidades)
                 const ped = window.sessionStorage.getItem('friganso_pedido_texto');
                 if (ped) {
                     window.sessionStorage.removeItem('friganso_pedido_texto');
@@ -2830,16 +2859,15 @@
             const r = p.get('route');
             if (r) window.sessionStorage.setItem('friganso_initial_route', r);
             // Pedido vindo da extensão do Chrome (lê a tela do SPAmov)
+            const pedJson = p.get('pedidojson');
             const ped = p.get('pedido');
-            if (ped) {
-                try {
-                    window.sessionStorage.setItem('friganso_pedido_texto', decodeURIComponent(escape(atob(ped))));
-                    window.sessionStorage.setItem('friganso_initial_route', 'resumo');
-                } catch (e) {
-                    window.sessionStorage.setItem('friganso_pedido_texto', ped);
-                    window.sessionStorage.setItem('friganso_initial_route', 'resumo');
-                }
-                // limpa a URL para não reimportar ao recarregar
+            if (pedJson) {
+                try { window.sessionStorage.setItem('friganso_pedido_json', decodeURIComponent(escape(atob(pedJson)))); } catch (e) { window.sessionStorage.setItem('friganso_pedido_json', pedJson); }
+                window.sessionStorage.setItem('friganso_initial_route', 'resumo');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            } else if (ped) {
+                try { window.sessionStorage.setItem('friganso_pedido_texto', decodeURIComponent(escape(atob(ped)))); } catch (e) { window.sessionStorage.setItem('friganso_pedido_texto', ped); }
+                window.sessionStorage.setItem('friganso_initial_route', 'resumo');
                 if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
             }
         })();
