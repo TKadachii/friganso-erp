@@ -2224,10 +2224,14 @@
             // --- audiência filtrada ---
             const lista = useMemo(() => {
                 const lvl = (c) => (c.history || []).length;
+                const temTel = (c) => { let d = String(c.phone || '').replace(/\D/g, ''); return d.length > 0; };
                 let base = clients;
                 if (filtro === 'inativos') base = clients.filter(c => lvl(c) === 0);
                 else if (filtro === 'atencao') base = clients.filter(c => lvl(c) >= 1 && lvl(c) <= 3);
-                else if (filtro === 'top') base = clients.filter(c => lvl(c) >= 9);
+                else if (filtro === 'top') base = [...clients].filter(c => lvl(c) >= 4).sort((a, b) => lvl(b) - lvl(a));
+                else if (filtro === 'comtel') base = clients.filter(c => temTel(c));
+                else if (filtro === 'semtel') base = clients.filter(c => !temTel(c));
+                else if (filtro === 'comhist') base = clients.filter(c => lvl(c) > 0);
                 const q = busca.trim().toLowerCase();
                 if (q) base = base.filter(c => (c.name || '').toLowerCase().includes(q) || String(c.code || '').toLowerCase().includes(q));
                 return base;
@@ -2341,7 +2345,7 @@
                                 <span className="text-xs font-bold text-emerald-600">{selecionados.size} selecionado(s)</span>
                             </div>
                             <div className="flex flex-wrap gap-1.5 mb-3">
-                                {[['todos', 'Todos'], ['inativos', '🚨 Inativos'], ['atencao', '⚠️ Atenção'], ['top', '🔥 Top']].map(([k, lbl]) => (
+                                {[['todos', 'Todos'], ['top', '🔥 Compra mais'], ['comhist', '🛒 Com histórico'], ['atencao', '⚠️ Atenção'], ['inativos', '🚨 Inativos'], ['comtel', '📱 Com número'], ['semtel', '📵 Sem número']].map(([k, lbl]) => (
                                     <button key={k} onClick={() => setFiltro(k)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${filtro === k ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{lbl}</button>
                                 ))}
                             </div>
