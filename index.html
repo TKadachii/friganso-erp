@@ -655,12 +655,16 @@
                                 }
                                 const rawPrice = parsePrice(rawPriceStr) || 0; 
                                 
-                                // Limpa o nome do produto cortando fora as colunas de tabela do PDF
-                                let finalName = rest.split(/Kg\s*\[?L\]?|Vista\s*\/\s*PIX/i)[0];
-                                finalName = finalName.replace(/\s+(?:CX|PC|PCT|BD|PLT|FD|UN|SC|GF|CB)\s+(?:\d+.*)?$/i, '');
-                                finalName = finalName.replace(/\s+(?:\d+(?:\.\d+)?\s*Kg).*$/i, '');
-                                finalName = finalName.replace(/\s+(?:CX|PC|PCT|BD|PLT|FD|UN|SC|GF|CB)\s*$/i, '');
-                                finalName = finalName.replace(/[-—.,]+$/, '').trim();
+                                // Nome do produto = tudo até o PRIMEIRO PREÇO (número com vírgula, ex 12,22),
+                                // mas mantendo os pesos/embalagem (ex CX/+-28KG, PC/1,05KG) que fazem parte do nome.
+                                let finalName = rest;
+                                // primeiro número com vírgula que NÃO seja um peso (não é seguido por kg/g)
+                                const precoNoNome = rest.match(/\d{1,3}(?:\.\d{3})*,\d{2}(?!\s*k?g\b)/i);
+                                if (precoNoNome) finalName = rest.slice(0, precoNoNome.index);
+                                // remove marcadores de coluna que sobrarem no fim
+                                finalName = finalName.split(/Vista\s*\/\s*PIX/i)[0];
+                                finalName = finalName.replace(/\s*\[?\s*L\s*\]?\s*$/i, '');
+                                finalName = finalName.replace(/[-—.,\s]+$/, '').trim();
 
                                 const { hasDiscount, unitFinalPrice } = checkDiscountRules(code, finalName, rawPrice);
                                 
