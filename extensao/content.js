@@ -11,7 +11,12 @@
             const d = e.data;
             if (d && d.source === "friganso-app" && d.type === "LANCAR_PEDIDO" && d.pedido) {
                 try {
-                    chrome.storage.local.set({ friganso_pedido: d.pedido, friganso_pedido_ts: Date.now() });
+                    chrome.storage.local.get(["friganso_fila"], function (r) {
+                        const fila = (r && r.friganso_fila) || [];
+                        fila.push({ id: Date.now() + "_" + Math.floor(Math.random() * 1000), cliente: d.pedido.cliente, itens: d.pedido.itens, ts: Date.now() });
+                        while (fila.length > 12) fila.shift(); // guarda os últimos 12
+                        chrome.storage.local.set({ friganso_fila: fila });
+                    });
                 } catch (err) { /* ignore */ }
             }
         });
@@ -275,7 +280,7 @@
         const run = await getRun();
         if (!run || !run.ativo) return;
         if (!ehFrameItens()) return;                                   // só o frame de itens age
-        if (Date.now() - (run.ts || 0) > 15 * 60 * 1000) { await clearRun(); return; } // expira em 15min
+        if (Date.now() - (run.ts || 0) > 120 * 1000) { await clearRun(); return; } // expira em 2min sem progresso
 
         const status = statusBox();
         const stage = run.stage || "itens";
@@ -365,20 +370,52 @@
         processarRun();
     }
 
-    function iniciarLancamento() {
-        try {
-            chrome.storage.local.get(["friganso_pedido"], function (res) {
-                const pedido = res && res.friganso_pedido;
-                if (!pedido || !pedido.itens || !pedido.itens.length) {
-                    alert("Nenhum pedido pendente.\n\nMonte o pedido no app (Fazer Pedido) e toque em 'Mandar pra Extensão' primeiro.");
-                    return;
-                }
-                const resumo = pedido.itens.map(i => "• " + i.code + "  x" + i.qty).join("\n");
-                if (!confirm("Lançar pedido COMPLETO no SPAmov?\n\nVai clicar em NOVO, pôr o cliente " + (pedido.cliente || "?") + " e lançar:\n\n" + resumo + "\n\n⚠️ Clica em 'Novo' (começa um pedido novo). A cada passo o site recarrega e a extensão continua sozinha.\nVocê confere e finaliza (DS→SP→PA) na mão depois.")) return;
-                statusBox()("Iniciando lançamento...");
-                setRun({ pedido: pedido, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
+    function removerDaFila(id) {
+        chrome.storage.local.get(["friganso_fila"], function (r) {
+            const fila = ((r && r.friganso_fila) || []).filter(function (x) { return x.id !== id; });
+            chrome.storage.local.set({ friganso_fila: fila });
+        });
+    }
+    function lancarDaFila(p) {
+        removerDaFila(p.id);
+        statusBox()("Iniciando lançamento do cliente " + (p.cliente || "?") + "...");
+        clearRun().then(function () {
+            setRun({ pedido: { cliente: p.cliente, itens: p.itens }, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
+        });
+    }
+    function abrirPopupFila() {
+        chrome.storage.local.get(["friganso_fila"], function (r) {
+            const fila = (r && r.friganso_fila) || [];
+            const old = document.getElementById("friganso-popup"); if (old) old.remove();
+            const ov = document.createElement("div"); ov.id = "friganso-popup";
+            Object.assign(ov.style, { position: "fixed", inset: "0", background: "rgba(15,23,42,.6)", zIndex: "2147483647", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui,sans-serif" });
+            ov.addEventListener("click", function (e) { if (e.target === ov) ov.remove(); });
+            const box = document.createElement("div");
+            Object.assign(box.style, { background: "#fff", borderRadius: "16px", padding: "18px", width: "440px", maxWidth: "92vw", maxHeight: "80vh", overflow: "auto", boxShadow: "0 10px 40px rgba(0,0,0,.4)" });
+            const titulo = document.createElement("div"); titulo.textContent = "🚀 Pedidos para lançar"; Object.assign(titulo.style, { fontWeight: "800", fontSize: "16px", color: "#0f172a", marginBottom: "6px" });
+            box.appendChild(titulo);
+            if (!fila.length) {
+                const vazio = document.createElement("div"); vazio.style.cssText = "color:#64748b;font-size:13px;padding:14px 0;line-height:1.5;";
+                vazio.innerHTML = 'Nenhum pedido na fila.<br>No app, vá em <b>Fazer Pedido</b>, monte e toque em <b>Mandar pra Extensão</b>.';
+                box.appendChild(vazio);
+            }
+            fila.slice().reverse().forEach(function (p) {
+                const card = document.createElement("div");
+                Object.assign(card.style, { border: "1px solid #e2e8f0", borderRadius: "12px", padding: "10px", margin: "8px 0", display: "flex", gap: "10px", alignItems: "center" });
+                const info = document.createElement("div"); info.style.flex = "1"; info.style.minWidth = "0";
+                info.innerHTML = '<div style="font-weight:700;color:#0f172a;font-size:14px;">Cliente ' + (p.cliente || "?") + '</div><div style="color:#64748b;font-size:12px;line-height:1.4;">' + p.itens.length + ' item(ns): ' + p.itens.map(function (i) { return i.code + "×" + i.qty; }).join(", ") + '</div>';
+                const btnL = document.createElement("button"); btnL.textContent = "Lançar"; Object.assign(btnL.style, { background: "#15803d", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 14px", fontWeight: "700", cursor: "pointer", flexShrink: "0" });
+                btnL.addEventListener("click", function () { ov.remove(); lancarDaFila(p); });
+                const btnX = document.createElement("button"); btnX.textContent = "✕"; btnX.title = "Remover da fila"; Object.assign(btnX.style, { background: "#f1f5f9", color: "#64748b", border: "none", borderRadius: "8px", padding: "8px 10px", cursor: "pointer", flexShrink: "0" });
+                btnX.addEventListener("click", function () { removerDaFila(p.id); card.remove(); });
+                card.appendChild(info); card.appendChild(btnL); card.appendChild(btnX);
+                box.appendChild(card);
             });
-        } catch (e) { alert("Erro ao ler o pedido: " + e.message); }
+            const fechar = document.createElement("button"); fechar.textContent = "Fechar"; Object.assign(fechar.style, { marginTop: "8px", background: "#e2e8f0", color: "#334155", border: "none", borderRadius: "8px", padding: "9px 12px", cursor: "pointer", width: "100%", fontWeight: "700" });
+            fechar.addEventListener("click", function () { ov.remove(); });
+            box.appendChild(fechar);
+            ov.appendChild(box); document.body.appendChild(ov);
+        });
     }
     function cancelarLancamento() { clearRun().then(function () { statusBox()("Lançamento cancelado."); }); }
 
@@ -395,7 +432,7 @@
     const temLeitura = temPedidoLeitura(montarPedidoLeitura());
 
     if (ehFramePrincipal()) {
-        botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", iniciarLancamento);
+        botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", abrirPopupFila);
         botao("friganso-cancelar-btn", "⏹ Cancelar lançamento", "#64748b", "70px", cancelarLancamento);
     }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
