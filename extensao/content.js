@@ -380,22 +380,38 @@
         }
         return best;
     }
-    // Acha o botão circular "DS/SP/PA Mov" — retorna o ELEMENTO CLICÁVEL (o círculo), não o texto
+    // Acha o botão "DS/SP/PA Mov" — é uma IMAGENZINHA. Acha a imagem perto do texto "Mov"/"Orçamento".
     function acharMovBotao() {
-        const els = document.querySelectorAll("a, td, div, span, img, button");
-        let labelExato = null, labelMov = null;
+        const els = document.querySelectorAll("a, td, div, span, b, img, button");
+        let ref = null;
+        // 1) referência: texto "DS Mov" / "Mov"
         for (let i = 0; i < els.length; i++) {
             const e = els[i];
             const t = ((e.innerText || e.alt || e.title || "") + "").replace(/\s+/g, " ").trim();
             const r = e.getBoundingClientRect();
             if (!r.width || !r.height) continue;
-            if (/^(DS|SP|PA)\s*Mov$/i.test(t) && !labelExato) labelExato = e;
-            if (/^Mov$/i.test(t) && !labelMov) labelMov = e;
+            if (/^(DS|SP|PA)\s*Mov$/i.test(t) || /^Mov$/i.test(t)) { ref = e; break; }
         }
-        const ref = labelExato || labelMov;
+        // 2) sem "Mov": usa "Orçamento" como referência (o DS fica logo à esquerda dele)
+        if (!ref) {
+            for (let i = 0; i < els.length; i++) {
+                const e = els[i]; const t = ((e.innerText || "") + "").trim();
+                if (/^Or[çc]amento$/i.test(t)) { const r = e.getBoundingClientRect(); if (r.width) { ref = e; break; } }
+            }
+        }
         if (!ref) return null;
-        // o clicável de verdade (círculo/imagem/link) fica coladinho no "Mov"
-        return clicavelPerto(ref, 90) || ref;
+        const rr = ref.getBoundingClientRect(); const cx = rr.left + rr.width / 2, cy = rr.top + rr.height / 2;
+        // procura a IMAGEM mais próxima da referência (o badge DS)
+        const imgs = document.querySelectorAll("img, input[type=image]");
+        let best = null, bd = 1e9;
+        for (let i = 0; i < imgs.length; i++) {
+            const im = imgs[i]; const r = im.getBoundingClientRect(); if (!r.width || !r.height) continue;
+            const x = r.left + r.width / 2, y = r.top + r.height / 2;
+            const d = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+            if (d < 100 && d < bd) { bd = d; best = im; }
+        }
+        if (best) return best;
+        return clicavelPerto(ref, 100) || ref;
     }
     // Um passo da finalização: se já está em PA, termina; senão clica no DS/SP/PA
     async function finalizarPasso() {
