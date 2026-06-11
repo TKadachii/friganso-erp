@@ -2433,22 +2433,46 @@
 
         // ===== FAZER PEDIDO: monta o pedido e manda a extensão lançar no SPAmov =====
         const FazerPedidoScreen = ({ products, clients, showMessage }) => {
-            const [clienteId, setClienteId] = useState('');
+            const RASCUNHO_KEY = 'friganso_pedido_rascunho';
+            const rascunhoInicial = (() => { try { return JSON.parse(window.localStorage.getItem(RASCUNHO_KEY) || '{}') || {}; } catch (e) { return {}; } })();
+            const [clienteId, setClienteId] = useState(rascunhoInicial.clienteId || '');
+            const [clienteFoco, setClienteFoco] = useState(false);
             const [busca, setBusca] = useState('');
-            const [itens, setItens] = useState([]); // {code, name, qty}
+            const [itens, setItens] = useState(Array.isArray(rascunhoInicial.itens) ? rascunhoInicial.itens : []); // {code, name, qty}
             const [enviado, setEnviado] = useState(false);
             const [historico, setHistorico] = useState(() => {
                 try { const raw = window.localStorage.getItem('friganso_pedidos_hist'); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
             });
 
             const clienteInfo = useMemo(() => clients.find(c => String(c.code) === clienteId.trim()), [clients, clienteId]);
-            const [tipoPessoa, setTipoPessoa] = useState('juridica'); // juridica (CNPJ) | fisica (CPF)
+            const [tipoPessoa, setTipoPessoa] = useState(rascunhoInicial.tipoPessoa || 'juridica'); // juridica (CNPJ) | fisica (CPF)
             useEffect(() => {
                 if (clienteInfo && clienteInfo.tipo) {
                     if (/f[ií]sica/i.test(clienteInfo.tipo)) setTipoPessoa('fisica');
                     else if (/jur[ií]dica/i.test(clienteInfo.tipo)) setTipoPessoa('juridica');
                 }
             }, [clienteInfo]);
+
+            // 💾 Rascunho: salva o pedido a cada tecla (cliente, itens, tipo) — volta exatamente onde parou
+            useEffect(() => {
+                try { window.localStorage.setItem(RASCUNHO_KEY, JSON.stringify({ clienteId, itens, tipoPessoa })); } catch (e) {}
+            }, [clienteId, itens, tipoPessoa]);
+
+            // 🔍 Sugestões de cliente enquanto digita (por ID ou nome)
+            const clienteSugestoes = useMemo(() => {
+                const q = clienteId.trim();
+                if (!q) return [];
+                const norm = normalizeForSearch(q);
+                const arr = clients.filter(c => String(c.code).includes(q) || normalizeForSearch(c.name || '').includes(norm));
+                if (arr.length === 1 && String(arr[0].code) === q) return []; // já é exato, não precisa sugerir
+                return arr.slice(0, 8);
+            }, [clients, clienteId]);
+
+            const limparPedido = () => {
+                setClienteId(''); setItens([]); setTipoPessoa('juridica'); setBusca(''); setEnviado(false);
+                try { window.localStorage.removeItem(RASCUNHO_KEY); } catch (e) {}
+                showMessage('Pedido limpo. Começar do zero. 🧹', 'info');
+            };
 
             const ehHoje = (ts) => { const d = new Date(ts), n = new Date(); return d.getDate() === n.getDate() && d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear(); };
             const hora = (ts) => { const d = new Date(ts); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); };
@@ -2552,9 +2576,20 @@
 
                     {/* Cliente */}
                     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                        <label className="text-xs font-bold text-slate-500">ID do Cliente</label>
-                        <input type="text" value={clienteId} onChange={e => setClienteId(e.target.value)} placeholder="Ex: 30298" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border rounded-xl text-sm font-bold outline-none focus:border-rose-500" />
-                        {clienteId.trim() && (clienteInfo
+                        <label className="text-xs font-bold text-slate-500">ID ou nome do Cliente</label>
+                        <input type="text" value={clienteId} onChange={e => setClienteId(e.target.value)} onFocus={() => setClienteFoco(true)} onBlur={() => setTimeout(() => setClienteFoco(false), 150)} placeholder="Ex: 30298 ou um nome..." className="w-full mt-1 px-3 py-2.5 bg-slate-50 border rounded-xl text-sm font-bold outline-none focus:border-rose-500" />
+                        {/* 🔍 Sugestões de cliente (por ID ou nome) */}
+                        {clienteFoco && clienteSugestoes.length > 0 && (
+                            <div className="mt-1.5 space-y-1 max-h-52 overflow-y-auto">
+                                {clienteSugestoes.map(c => (
+                                    <button key={c.code} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { setClienteId(String(c.code)); setClienteFoco(false); }} className="w-full text-left px-3 py-2 bg-slate-50 hover:bg-rose-50 rounded-lg flex items-center gap-2 transition-colors border border-transparent hover:border-rose-200">
+                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{c.code}</span>
+                                        <span className="text-sm text-slate-700 flex-1 truncate">{c.name}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        {clienteId.trim() && !clienteFoco && (clienteInfo
                             ? <p className="text-xs text-emerald-600 font-bold mt-1.5">✓ {clienteInfo.name}</p>
                             : <p className="text-xs text-slate-400 mt-1.5">Cliente não está no CRM (tudo bem, o SPAmov valida pelo ID).</p>)}
                         <label className="text-xs font-bold text-slate-500 block mt-3 mb-1">Tipo de Pessoa</label>
@@ -2622,6 +2657,9 @@
                                 <span>💾</span> Salvar no Histórico
                             </button>
                         </div>
+                        {(clienteId.trim() || itens.length > 0) && (
+                            <button onClick={limparPedido} className="w-full text-xs text-slate-400 hover:text-rose-500 py-1.5 transition-colors">🧹 Limpar pedido (começar do zero)</button>
+                        )}
                     </div>
 
                     <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs text-slate-500 space-y-1">
@@ -2630,6 +2668,7 @@
                         <p>2. A extensão <b>abre o SPAmov, faz login, navega</b> e <b>lança os itens</b> sozinha.</p>
                         <p>3. Ela <b>para se algum item der erro</b> (saldo, estoque...) e te avisa.</p>
                         <p className="text-slate-400">(Precisa ter salvado seu login do SPAmov uma vez na aba 🐞 Debug.)</p>
+                        <p className="text-emerald-600 font-semibold pt-1">💾 Tudo o que você digita fica salvo automático — pode sair pro WhatsApp e voltar que o pedido continua igualzinho.</p>
                         <p className="text-rose-600 font-bold pt-1">⚠️ A confirmação final (DS → SP → PA) você confere e finaliza.</p>
                     </div>
                     </div>{/* fim coluna do formulário */}
