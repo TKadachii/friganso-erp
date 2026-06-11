@@ -716,6 +716,13 @@
         if (!el) return;
         try { el.style.display = "block"; el.style.visibility = "visible"; el.removeAttribute("hidden"); } catch (e) {}
     }
+    // Acha o link "VENDAS - VENDEDOR" (prioriza <a>, depois href de vendedor/spadim)
+    function acharLinkVendas() {
+        const as = document.querySelectorAll("a");
+        for (let i = 0; i < as.length; i++) { const a = as[i]; const t = ((a.innerText || "") + "").replace(/\s+/g, " ").trim(); if (/VENDAS\s*-\s*VENDEDOR/i.test(t)) { const r = a.getBoundingClientRect(); if (r.width && r.height) return a; } }
+        for (let i = 0; i < as.length; i++) { const a = as[i]; const h = ((a.getAttribute("href") || "") + " " + (a.getAttribute("onclick") || "")).toLowerCase(); if (/vendedorexterno|spa\.vended|vended/.test(h)) { const r = a.getBoundingClientRect(); if (r.width && r.height) return a; } }
+        return acharLinkTexto(/VENDAS\s*-\s*VENDEDOR/i);
+    }
     function tentarNavegarVendas() {
         try {
             chrome.storage.local.get(["friganso_creds"], function (c) {
@@ -735,9 +742,13 @@
                 const iv = setInterval(function () {
                     tentou++;
                     forcarVisivel(document.getElementById("spamov")); // mantém aberto
-                    const v = acharLinkTexto(/VENDAS\s*-\s*VENDEDOR/i);
-                    if (v) { dlog("menu: clicando VENDAS - VENDEDOR"); clicarRobusto(v); clearInterval(iv); }
-                    else if (tentou > 16) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu (manda o log)"); }
+                    const v = acharLinkVendas();
+                    if (v) {
+                        dlog("menu: clicando VENDAS - VENDEDOR <" + v.tagName + ">");
+                        try { v.focus && v.focus(); } catch (e) {}
+                        try { v.click(); } catch (e) {}          // clique NATIVO (navega / executa javascript:)
+                        clearInterval(iv);
+                    } else if (tentou > 16) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu (manda o log)"); }
                 }, 400);
             });
         } catch (e) { dlog("menu ERRO: " + (e && e.message)); }
