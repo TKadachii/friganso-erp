@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.6.11.0240
+// @version      2026.6.11.0323
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -58,7 +58,7 @@
                     chrome.storage.local.set({
                         friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: true, irVendas: true },
                         friganso_run_auto: { pedido: d.pedido, ts: Date.now() }
-                    });
+                    }, function () { try { window.postMessage({ source: "friganso-ext", type: "AUTO_SAVED" }, "*"); } catch (e) {} });
                 } catch (err) {}
                 return;
             }

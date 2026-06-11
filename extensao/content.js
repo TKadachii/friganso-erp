@@ -20,7 +20,7 @@
                     chrome.storage.local.set({
                         friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: true, irVendas: true },
                         friganso_run_auto: { pedido: d.pedido, ts: Date.now() }
-                    });
+                    }, function () { try { window.postMessage({ source: "friganso-ext", type: "AUTO_SAVED" }, "*"); } catch (e) {} });
                 } catch (err) {}
                 return;
             }
