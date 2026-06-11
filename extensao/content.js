@@ -681,7 +681,8 @@
             return true;
         } catch (e) { return false; }
     }
-    // Clique robusto: se o elemento (ou um pai) tem onclick/javascript:, roda na página; senão clica
+    // Aciona UMA VEZ: se tem onclick/javascript:, roda na página (1x); senão dá 1 clique nativo.
+    // (não usa o clicar() normal aqui pra NÃO disparar a ação 2x e "destogglar" o menu)
     function clicarRobusto(el) {
         if (!el) return;
         let p = el, code = null;
@@ -692,8 +693,8 @@
             if (hr && /^javascript:/i.test(hr)) { code = hr.replace(/^javascript:/i, ""); break; }
             p = p.parentElement;
         }
-        if (code) rodarNaPagina("try{" + code + "}catch(e){}");
-        clicar(el);
+        if (code) { rodarNaPagina("try{" + code + "}catch(e){}"); }
+        else { try { el.focus && el.focus(); } catch (e) {} try { el.click(); } catch (e) {} }
     }
     function acharLinkTexto(re) {
         const els = document.querySelectorAll("a, td, span, div, b, font, li");
@@ -722,9 +723,9 @@
                 if (!spamov && !temVendasAgora) return; // ainda não é a tela de menu
                 chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario, senha: cr.senha, autoLogin: false, irVendas: false } });
                 dlog("menu: abrindo SPA mov -> VENDAS - VENDEDOR");
-                // expande o submenu chamando a função direto na página (e clicando de backup)
-                rodarNaPagina("try{ if(typeof show_hide_span==='function') show_hide_span('spamov'); }catch(e){}");
+                // expande o submenu — UMA vez só (clicarRobusto executa o show_hide_span)
                 if (spamov) clicarRobusto(spamov);
+                else rodarNaPagina("try{ if(typeof show_hide_span==='function') show_hide_span('spamov'); }catch(e){}");
                 let tentou = 0;
                 const iv = setInterval(function () {
                     tentou++;
