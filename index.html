@@ -182,6 +182,20 @@
             s = s.replace(/\bcong\.?\b/g, "congelado").replace(/\b(resf|ref)\.?\b/g, "resfriado").replace(/[-_./]/g, " ").replace(/\s+/g, " ").trim();
             return s;
         };
+        // Busca de produto tolerante: cada palavra digitada precisa existir no nome (em qualquer ordem),
+        // tratando "contra file" e "contrafile" como iguais. Também casa por código.
+        const matchProduto = (p, query) => {
+            if (!p) return false;
+            const q = (query || '').trim();
+            if (!q) return false;
+            if (String(p.code).includes(q)) return true;
+            const nName = normalizeForSearch(p.name);
+            const nNameJunto = nName.replace(/\s+/g, '');
+            const norm = normalizeForSearch(q);
+            const tokens = norm.split(' ').filter(Boolean);
+            if (!tokens.length) return false;
+            return tokens.every(t => nName.includes(t) || nNameJunto.includes(t));
+        };
         const parsePrice = (priceStr) => {
             if (!priceStr) return null;
             let cleanStr = priceStr.includes('.') && priceStr.includes(',') ? priceStr.replace(/\./g, '').replace(',', '.') : priceStr.replace(',', '.');
@@ -194,8 +208,9 @@
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             let hasDiscount = true;
-            if (codeStr.startsWith('16') || codeStr.startsWith('27') || codeStr.startsWith('90')) hasDiscount = false;
-            if (nameStr.includes('fraldinha ramax')) hasDiscount = false;
+            if (codeStr.startsWith('16') || codeStr.startsWith('27') || codeStr.startsWith('90')) hasDiscount = false; // grupos sem desconto
+            if (codeStr === '24962') hasDiscount = false; // Fraldinha Ramax (por código, garantido)
+            if (nameStr.includes('fraldinha ramax') || (nameStr.includes('fraldinha') && nameStr.includes('ramax'))) hasDiscount = false;
             return { hasDiscount, origPrice, unitFinalPrice: hasDiscount ? Math.round((origPrice * 0.97) * 100) / 100 : origPrice };
         };
 
@@ -702,8 +717,8 @@
             };
 
             const filteredProducts = useMemo(() => {
-                if (!searchTerm) return products; const searchNorm = normalizeForSearch(searchTerm);
-                return products.filter(p => normalizeForSearch(p.name).includes(searchNorm) || p.code.includes(searchNorm));
+                if (!searchTerm) return products;
+                return products.filter(p => matchProduto(p, searchTerm.trim()));
             }, [products, searchTerm]);
 
             return (
@@ -1270,7 +1285,7 @@
 
             const filtered = useMemo(() => { 
                 if (!search.trim() && selectedCodes.size > 0) return products.filter(p => selectedCodes.has(p.code));
-                if (!search.trim()) return []; const norm = normalizeForSearch(search); return products.filter(p => normalizeForSearch(p.name).includes(norm) || p.code.includes(norm)); 
+                if (!search.trim()) return []; return products.filter(p => matchProduto(p, search.trim()));
             }, [products, search, selectedCodes]);
 
             const toggleCode = code => { const s = new Set(selectedCodes); s.has(code) ? s.delete(code) : s.add(code); setSelectedCodes(s); };
@@ -2547,8 +2562,7 @@
             const resultados = useMemo(() => {
                 const q = busca.trim();
                 if (!q) return [];
-                const norm = normalizeForSearch(q);
-                return products.filter(p => normalizeForSearch(p.name).includes(norm) || String(p.code).includes(q)).slice(0, 12);
+                return products.filter(p => matchProduto(p, q)).slice(0, 30);
             }, [products, busca]);
 
             const addItem = (p) => {
