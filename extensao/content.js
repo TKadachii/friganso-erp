@@ -11,7 +11,7 @@
             const d = e.data;
             if (!d || d.source !== "friganso-app") return;
             if (d.type === "SET_CREDS") {
-                try { chrome.storage.local.set({ friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: !!d.autoLogin } }); } catch (err) {}
+                try { chrome.storage.local.set({ friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: !!d.autoLogin, irVendas: !!d.irVendas } }); } catch (err) {}
                 return;
             }
             let novos = [];
@@ -655,7 +655,7 @@
                 const cr = c && c.friganso_creds;
                 if (!cr || !cr.autoLogin) return;
                 if (!document.querySelector("input[type=password]")) return; // não é a tela de login
-                chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario, senha: cr.senha, autoLogin: false } }); // evita loop
+                chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario, senha: cr.senha, autoLogin: false, irVendas: cr.irVendas } }); // evita loop, mantém o ir-pra-vendas
                 const userInput = acharCampoPorLabel(/Usu[áa]rio/i, "text") || document.querySelector("input[type=text]");
                 const passInput = acharCampoPorLabel(/Senha/i, "password") || document.querySelector("input[type=password]");
                 dlog("login: campo usuário " + (userInput ? "ok" : "?") + ", senha " + (passInput ? "ok" : "?"));
@@ -666,6 +666,46 @@
                     dlog("login: botão Log In " + (b ? "achado — clicando" : "NÃO achado"));
                     if (b) clicar(b);
                 }, 700);
+            });
+        } catch (e) {}
+    }
+
+    // ---------- NAVEGAR NO MENU (SPA mov -> VENDAS - VENDEDOR) ----------
+    function acharLinkTexto(re) {
+        const els = document.querySelectorAll("a, td, span, div, b, font, li");
+        for (let i = 0; i < els.length; i++) {
+            const e = els[i]; const t = ((e.innerText || "") + "").replace(/\s+/g, " ").trim();
+            if (re.test(t) && t.length < 30) { const r = e.getBoundingClientRect(); if (r.width && r.height) return e; }
+        }
+        return null;
+    }
+    function acharPorHrefOnclick(sub) {
+        const els = document.querySelectorAll("a, [onclick]");
+        for (let i = 0; i < els.length; i++) {
+            const e = els[i]; const h = ((e.getAttribute("href") || "") + " " + (e.getAttribute("onclick") || "")).toLowerCase();
+            if (h.indexOf(sub.toLowerCase()) !== -1) { const r = e.getBoundingClientRect(); if (r.width && r.height) return e; }
+        }
+        return null;
+    }
+    function tentarNavegarVendas() {
+        try {
+            chrome.storage.local.get(["friganso_creds"], function (c) {
+                const cr = c && c.friganso_creds;
+                if (!cr || !cr.irVendas) return;
+                if (document.querySelector("input[type=password]")) return; // ainda na tela de login
+                const spamov = acharPorHrefOnclick("spamov") || acharLinkTexto(/^SPA\s*mov$/i);
+                const temVendasAgora = acharLinkTexto(/VENDAS\s*-\s*VENDEDOR/i);
+                if (!spamov && !temVendasAgora) return; // ainda não é a tela de menu
+                chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario, senha: cr.senha, autoLogin: false, irVendas: false } });
+                dlog("menu: abrindo SPA mov -> VENDAS - VENDEDOR");
+                if (spamov) clicar(spamov); // expande o submenu
+                let tentou = 0;
+                const iv = setInterval(function () {
+                    tentou++;
+                    const v = acharLinkTexto(/VENDAS\s*-\s*VENDEDOR/i);
+                    if (v) { dlog("menu: clicando VENDAS - VENDEDOR"); clicar(v); clearInterval(iv); }
+                    else if (tentou > 12) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu"); }
+                }, 400);
             });
         } catch (e) {}
     }
@@ -694,4 +734,6 @@
     if (ehFramePrincipal()) processarRun();
     // Login automático (se solicitado pelo Debug e estivermos na tela de login)
     tentarLogin();
+    // Após logar, navega: SPA mov -> VENDAS - VENDEDOR
+    tentarNavegarVendas();
 })();

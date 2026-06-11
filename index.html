@@ -2967,8 +2967,8 @@
                 if (!usuario.trim() || !senha) { showMessage('Preencha usuário e senha primeiro.', 'error'); return; }
                 window.localStorage.setItem('friganso_spamov_user', usuario);
                 window.localStorage.setItem('friganso_spamov_pass', senha);
-                window.postMessage({ source: 'friganso-app', type: 'SET_CREDS', usuario: usuario, senha: senha, autoLogin: true }, '*');
-                showMessage('Abrindo SPAmov e fazendo login...', 'success');
+                window.postMessage({ source: 'friganso-app', type: 'SET_CREDS', usuario: usuario, senha: senha, autoLogin: true, irVendas: true }, '*');
+                showMessage('Abrindo SPAmov, logando e indo pra Vendas...', 'success');
                 setTimeout(() => { window.open('http://spd1.friganso.com.br/rdm-business/', 'spamov_login'); }, 500);
             };
 
