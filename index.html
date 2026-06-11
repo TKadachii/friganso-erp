@@ -2506,6 +2506,22 @@
                 showMessage('Pedido salvo no histórico do dia! 📋', 'success');
             };
 
+            // ⚡ TUDO automático: abre o SPAmov, loga, navega pra VENDAS - VENDEDOR e lança o pedido sozinho
+            const lancarAuto = () => {
+                if (!clienteId.trim()) { showMessage('Informe o ID do cliente.', 'error'); return; }
+                const validos = itens.filter(i => Number(i.qty) > 0);
+                if (!validos.length) { showMessage('Adicione ao menos 1 item com quantidade.', 'error'); return; }
+                const u = window.localStorage.getItem('friganso_spamov_user') || '';
+                const s = window.localStorage.getItem('friganso_spamov_pass') || '';
+                if (!u || !s) { showMessage('Primeiro salve seu login do SPAmov na aba 🐞 Debug.', 'error'); return; }
+                const pedido = { cliente: clienteId.trim(), tipoPessoa: tipoPessoa, itens: validos.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
+                // Uma mensagem só: guarda credenciais (autoLogin + irVendas) + o pedido pendente pra disparar na tela de vendas
+                window.postMessage({ source: 'friganso-app', type: 'LANCAR_AUTO', usuario: u, senha: s, pedido: pedido }, '*');
+                setEnviado(true);
+                showMessage('Abrindo o SPAmov... vou logar, navegar e lançar sozinho. 🤖', 'success');
+                setTimeout(() => { window.open('http://spd1.friganso.com.br/rdm-business/', 'spamov_login'); }, 500);
+            };
+
             return (
                 <div className="animate-in fade-in max-w-5xl mx-auto">
                     <div className="mb-5">
@@ -2575,22 +2591,29 @@
                     </div>
 
                     {/* Ações */}
-                    <div className="flex flex-col sm:flex-row gap-2">
-                        <button onClick={lancar} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="flex-1 bg-rose-700 hover:bg-rose-800 disabled:opacity-40 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 text-lg">
-                            <span>🚀</span> Mandar pra Extensão
+                    <div className="space-y-2">
+                        {/* ⚡ O botão principal: faz tudo sozinho */}
+                        <button onClick={lancarAuto} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 disabled:opacity-40 text-white font-black py-5 rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 text-lg">
+                            <span>⚡</span> Lançar Automático
                         </button>
-                        <button onClick={salvarHist} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="bg-white border-2 border-slate-200 hover:border-rose-400 disabled:opacity-40 text-slate-700 font-bold py-4 px-5 rounded-2xl transition-colors flex items-center justify-center gap-2">
-                            <span>💾</span> Salvar no Histórico
-                        </button>
+                        <p className="text-[11px] text-center text-slate-400 -mt-1">Abre o SPAmov, faz login, navega e lança o pedido sozinho. Você não precisa ir no site.</p>
+                        <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                            <button onClick={lancar} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="flex-1 bg-white border-2 border-slate-200 hover:border-rose-400 disabled:opacity-40 text-slate-700 font-bold py-3 rounded-2xl transition-colors flex items-center justify-center gap-2 text-sm">
+                                <span>🚀</span> Só mandar (site já aberto)
+                            </button>
+                            <button onClick={salvarHist} disabled={!clienteId.trim() || itens.filter(i => Number(i.qty) > 0).length === 0} className="bg-white border-2 border-slate-200 hover:border-rose-400 disabled:opacity-40 text-slate-700 font-bold py-3 px-5 rounded-2xl transition-colors flex items-center justify-center gap-2 text-sm">
+                                <span>💾</span> Salvar no Histórico
+                            </button>
+                        </div>
                     </div>
 
                     <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs text-slate-500 space-y-1">
                         <p className="font-bold text-slate-600">Como funciona:</p>
-                        <p>1. Preencha o cliente e os itens aqui e toque em <b>Mandar pra Extensão</b>.</p>
-                        <p>2. Abra a aba do <b>SPAmov</b> (logado, na tela de novo pedido).</p>
-                        <p>3. Clique no botão <b>🚀 Lançar pedido</b> que a extensão coloca lá.</p>
-                        <p>4. A extensão lança os itens e <b>para se algum der erro</b> (saldo, estoque...).</p>
-                        <p className="text-rose-600 font-bold pt-1">⚠️ A confirmação final (DS → SP → PA) você faz na mão, conferindo tudo.</p>
+                        <p>1. Preencha o cliente e os itens e toque em <b>⚡ Lançar Automático</b>.</p>
+                        <p>2. A extensão <b>abre o SPAmov, faz login, navega</b> e <b>lança os itens</b> sozinha.</p>
+                        <p>3. Ela <b>para se algum item der erro</b> (saldo, estoque...) e te avisa.</p>
+                        <p className="text-slate-400">(Precisa ter salvado seu login do SPAmov uma vez na aba 🐞 Debug.)</p>
+                        <p className="text-rose-600 font-bold pt-1">⚠️ A confirmação final (DS → SP → PA) você confere e finaliza.</p>
                     </div>
                     </div>{/* fim coluna do formulário */}
 

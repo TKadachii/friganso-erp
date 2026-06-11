@@ -14,6 +14,16 @@
                 try { chrome.storage.local.set({ friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: !!d.autoLogin, irVendas: !!d.irVendas } }); } catch (err) {}
                 return;
             }
+            // ⚡ TUDO automático: guarda credenciais (login + ir pra vendas) + pedido pendente
+            if (d.type === "LANCAR_AUTO" && d.pedido) {
+                try {
+                    chrome.storage.local.set({
+                        friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: true, irVendas: true },
+                        friganso_run_auto: { pedido: d.pedido, ts: Date.now() }
+                    });
+                } catch (err) {}
+                return;
+            }
             let novos = [];
             if (d.type === "LANCAR_PEDIDO" && d.pedido) novos = [d.pedido];
             else if (d.type === "LANCAR_VARIOS" && Array.isArray(d.pedidos)) novos = d.pedidos;
@@ -754,6 +764,37 @@
         } catch (e) { dlog("menu ERRO: " + (e && e.message)); }
     }
 
+    // ⚡ Dispara o lançamento sozinho quando chega na tela de vendas (após login + navegação)
+    function tentarIniciarAuto() {
+        try {
+            chrome.storage.local.get(["friganso_run_auto", "friganso_run"], function (r) {
+                const auto = r && r.friganso_run_auto;
+                if (!auto || !auto.pedido) return;
+                if (Date.now() - (auto.ts || 0) > 5 * 60 * 1000) { chrome.storage.local.remove("friganso_run_auto"); return; }
+                if (r.friganso_run && r.friganso_run.ativo) return;          // já tem lançamento rolando
+                if (document.querySelector("input[type=password]")) return;  // ainda na tela de login
+                let t = 0;
+                const iv = setInterval(function () {
+                    t++;
+                    if (document.querySelector("input[type=password]")) { clearInterval(iv); return; }
+                    const novo = acharBotaoNovo();
+                    if (novo) {
+                        clearInterval(iv);
+                        chrome.storage.local.get(["friganso_run", "friganso_run_auto"], function (r2) {
+                            if (r2.friganso_run && r2.friganso_run.ativo) return;   // outro frame já começou
+                            if (!r2.friganso_run_auto) return;                       // já foi consumido
+                            chrome.storage.local.remove("friganso_run_auto");
+                            limparLog();
+                            dlog("🤖 auto: tela de vendas pronta — lançando cliente " + (auto.pedido.cliente || "?") + " (" + (auto.pedido.itens ? auto.pedido.itens.length : 0) + " itens)");
+                            statusBox()("🤖 Lançando automático: cliente " + (auto.pedido.cliente || "?") + "...");
+                            setRun({ pedido: auto.pedido, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
+                        });
+                    } else if (t > 20) { clearInterval(iv); }  // ~10s esperando a tela de vendas neste load
+                }, 500);
+            });
+        } catch (e) {}
+    }
+
     // ---------- BOTÕES ----------
     function botao(id, texto, cor, bottom, onClick) {
         if (document.getElementById(id)) return;
@@ -780,4 +821,6 @@
     tentarLogin();
     // Após logar, navega: SPA mov -> VENDAS - VENDEDOR
     tentarNavegarVendas();
+    // ⚡ Se houver pedido pendente "automático", dispara o lançamento ao chegar na tela de vendas
+    tentarIniciarAuto();
 })();
