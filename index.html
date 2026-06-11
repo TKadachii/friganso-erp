@@ -214,6 +214,40 @@
             return { hasDiscount, origPrice, unitFinalPrice: hasDiscount ? Math.round((origPrice * 0.97) * 100) / 100 : origPrice };
         };
 
+        // 🧾 Registra a compra na ficha do cliente (nuvem). Anti-duplicata de 5 min.
+        let _ultimaCompraReg = { sig: '', ts: 0 };
+        const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user) => {
+            try {
+                const itensSafe = (itensValidos || [])
+                    .map(i => ({ code: String(i.code), name: i.name || i.nome || ('Produto ' + i.code), qty: Number(i.qty != null ? i.qty : i.quantity) }))
+                    .filter(i => i.code && i.qty > 0);
+                if (!clienteCode || !itensSafe.length) return;
+                const sig = String(clienteCode) + '|' + itensSafe.map(i => i.code + 'x' + i.qty).sort().join(',');
+                const agora = Date.now();
+                if (_ultimaCompraReg.sig === sig && (agora - _ultimaCompraReg.ts) < 5 * 60 * 1000) return;
+                _ultimaCompraReg = { sig, ts: agora };
+                const d = new Date(agora);
+                const dia = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+                const cli = (clients || []).find(c => String(c.code) === String(clienteCode));
+                await db.collection('purchases').add({
+                    clienteCode: String(clienteCode),
+                    clienteName: (cli && cli.name) || '',
+                    tipoPessoa: tipo || (cli && cli.tipo) || 'juridica',
+                    itens: itensSafe,
+                    dia: dia,
+                    ts: agora,
+                    via: via || '',
+                    vendedor: (user && user.code) || ''
+                });
+                // mantém o histórico de códigos do cliente atualizado (pras recomendações/Disparos)
+                if (cli && cli.id) {
+                    const atual = cli.history || [];
+                    const novos = [...new Set([...atual, ...itensSafe.map(i => i.code)])];
+                    if (novos.length !== atual.length) { try { await db.collection('clients').doc(cli.id).update({ history: novos }); } catch (e) {} }
+                }
+            } catch (e) { /* silencioso */ }
+        };
+
         const CustomMessageBox = ({ message, type = 'info', onClose }) => {
             // Fecha sozinha depois de 3 segundos
             useEffect(() => {
@@ -810,7 +844,7 @@
             );
         };
 
-        const ResumoScreen = ({ products, showMessage, clients, setActiveRoute }) => {
+        const ResumoScreen = ({ products, showMessage, clients, user, setActiveRoute }) => {
             const [orderText, setOrderText] = useState('');
             const [showModal, setShowModal] = useState(false);
             const [pendingCustomer, setPendingCustomer] = useState('');
@@ -1266,7 +1300,15 @@
                             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
                                 <div className="p-4 border-b bg-slate-50 flex justify-between items-center">
                                     <h3 className="font-semibold text-slate-700 flex items-center gap-2"><div className="h-5 w-5 text-emerald-600"><IconWhatsApp /></div> Resumo WhatsApp</h3>
-                                    <button onClick={() => { navigator.clipboard.writeText(generateWhatsAppText()); showMessage('Copiado para o Zap!', 'success'); }} className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-4 py-2 rounded-xl text-sm font-bold transition-colors">Copiar Resumo</button>
+                                    <button onClick={() => {
+                                        navigator.clipboard.writeText(generateWhatsAppText());
+                                        // 🧾 Grava na ficha do cliente (todo pedido confirmado passa por aqui)
+                                        if (orderSummary && orderSummary.customerCode) {
+                                            const itens = (orderSummary.items || []).map(it => ({ code: it.code, name: it.name, qty: Number(getQty(it)) }));
+                                            registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user);
+                                        }
+                                        showMessage('Copiado pro Zap e salvo na ficha do cliente! 🧾', 'success');
+                                    }} className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-4 py-2 rounded-xl text-sm font-bold transition-colors">Copiar Resumo</button>
                                 </div>
                                 <div className="p-6 bg-slate-100 flex-1 overflow-y-auto" style={{backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')", backgroundSize: 'cover', backgroundPosition: 'center'}}>
                                     <div className="bg-[#e1ffc7] p-3 rounded-xl shadow-sm border border-[#d3f4b8] inline-block text-left relative min-w-[200px] max-w-full">
@@ -2497,37 +2539,8 @@
                 showMessage('Pedido limpo. Começar do zero. 🧹', 'info');
             };
 
-            // 🧾 Registra a compra na ficha do cliente (todo pedido feito, por qualquer botão)
-            const ultimaCompraRef = useRef({ sig: '', ts: 0 });
+            // (O registro da compra agora acontece no RESUMO DE PEDIDO, ao tocar em "Copiar Resumo".)
             const diaISO = (ts) => { const d = new Date(ts); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); };
-            const registrarCompra = async (clienteCode, itensValidos, tipo, via) => {
-                try {
-                    const itensSafe = itensValidos.map(i => ({ code: String(i.code), name: i.name || ('Produto ' + i.code), qty: Number(i.qty) }));
-                    if (!clienteCode || !itensSafe.length) return;
-                    // anti-duplicata: mesmo cliente + mesmos itens em menos de 5 min = não grava de novo
-                    const sig = clienteCode + '|' + itensSafe.map(i => i.code + 'x' + i.qty).sort().join(',');
-                    const agora = Date.now();
-                    if (ultimaCompraRef.current.sig === sig && (agora - ultimaCompraRef.current.ts) < 5 * 60 * 1000) return;
-                    ultimaCompraRef.current = { sig, ts: agora };
-                    const cli = clients.find(c => String(c.code) === String(clienteCode));
-                    await db.collection('purchases').add({
-                        clienteCode: String(clienteCode),
-                        clienteName: (cli && cli.name) || '',
-                        tipoPessoa: tipo || 'juridica',
-                        itens: itensSafe,
-                        dia: diaISO(agora),
-                        ts: agora,
-                        via: via || '',
-                        vendedor: (user && user.code) || ''
-                    });
-                    // mantém o histórico de códigos do cliente atualizado (pras recomendações/Disparos)
-                    if (cli && cli.id) {
-                        const atual = cli.history || [];
-                        const novos = [...new Set([...atual, ...itensSafe.map(i => i.code)])];
-                        if (novos.length !== atual.length) { try { await db.collection('clients').doc(cli.id).update({ history: novos }); } catch (e) {} }
-                    }
-                } catch (e) { /* silencioso — nunca atrapalha o lançamento */ }
-            };
 
             // Compras anteriores do cliente que está no campo (mais recentes primeiro)
             const comprasDoCliente = useMemo(() => {
@@ -2600,7 +2613,6 @@
                 const pedido = { cliente: clienteId.trim(), tipoPessoa: tipoPessoa, itens: validos.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
                 // Envia para a extensão (que está ouvindo nesta página)
                 window.postMessage({ source: 'friganso-app', type: 'LANCAR_PEDIDO', pedido: pedido }, '*');
-                registrarCompra(clienteId.trim(), validos, tipoPessoa, 'extensao'); // grava na ficha do cliente
                 setEnviado(true);
                 showMessage('Pedido enviado para a extensão! Abra a aba do SPAmov e clique em "🚀 Lançar pedido".', 'success');
             };
@@ -2610,7 +2622,6 @@
                 const validos = itens.filter(i => Number(i.qty) > 0);
                 if (!validos.length) { showMessage('Adicione ao menos 1 item com quantidade.', 'error'); return; }
                 addHistorico(clienteId.trim(), validos, tipoPessoa);
-                registrarCompra(clienteId.trim(), validos, tipoPessoa, 'historico'); // grava na ficha do cliente
                 showMessage('Pedido salvo no histórico do dia! 📋', 'success');
             };
 
@@ -2623,7 +2634,6 @@
                 const s = window.localStorage.getItem('friganso_spamov_pass') || '';
                 if (!u || !s) { showMessage('Primeiro salve seu login do SPAmov na aba 🐞 Debug.', 'error'); return; }
                 const pedido = { cliente: clienteId.trim(), tipoPessoa: tipoPessoa, itens: validos.map(i => ({ code: String(i.code), nome: i.name, qty: Number(i.qty) })) };
-                registrarCompra(clienteId.trim(), validos, tipoPessoa, 'auto'); // grava na ficha ANTES de navegar (offline cache garante)
                 const SPURL = 'http://spd1.friganso.com.br/rdm-business/';
                 const msg = { source: 'friganso-app', type: 'LANCAR_AUTO', usuario: u, senha: s, pedido: pedido };
                 setEnviado(true);
@@ -3296,7 +3306,7 @@
                     case 'credits': return <CreditsScreen />;
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} />;
-                    case 'resumo': return <ResumoScreen products={products} showMessage={showMessage} clients={clients} setActiveRoute={setActiveRoute} />;
+                    case 'resumo': return <ResumoScreen products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} purchases={purchases} user={user} showMessage={showMessage} />;
