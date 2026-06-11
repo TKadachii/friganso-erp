@@ -2526,20 +2526,20 @@
 
             return (
                 <div className="animate-in fade-in max-w-5xl mx-auto">
-                    <div className="mb-5">
-                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🛒</span> Fazer Pedido</h2>
-                        <p className="text-slate-500 text-sm">Monte o pedido aqui e a extensão lança no SPAmov pra você.</p>
+                    <div className="mb-4">
+                        <h2 className="text-xl sm:text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🛒</span> Fazer Pedido</h2>
+                        <p className="text-slate-500 text-xs sm:text-sm">Monte o pedido aqui e a extensão lança no SPAmov pra você.</p>
                     </div>
 
-                    <div className="lg:grid lg:grid-cols-3 lg:gap-5 space-y-5 lg:space-y-0">
-                    <div className="lg:col-span-2 space-y-5">
+                    <div className="lg:grid lg:grid-cols-3 lg:gap-5 space-y-4 lg:space-y-0">
+                    <div className="lg:col-span-2 space-y-4">
 
                     {products.length === 0 && (
                         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-medium">⚠️ Carregue a <b>Tabela do Dia (PDF)</b> para buscar os produtos.</div>
                     )}
 
                     {/* Cliente */}
-                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
                         <label className="text-xs font-bold text-slate-500">ID do Cliente</label>
                         <input type="text" value={clienteId} onChange={e => setClienteId(e.target.value)} placeholder="Ex: 30298" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border rounded-xl text-sm font-bold outline-none focus:border-rose-500" />
                         {clienteId.trim() && (clienteInfo
@@ -2554,8 +2554,11 @@
                     </div>
 
                     {/* Buscar produtos */}
-                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
                         <label className="text-xs font-bold text-slate-500">Adicionar Produto</label>
+                        {products.length === 0 && (
+                            <p className="text-[11px] text-amber-600 font-semibold mt-1">⏳ Carregando a tabela do dia... se não aparecer, abra <b>Tabela do Dia (PDF)</b> no menu e toque em <b>Baixar Tabela Atual</b>.</p>
+                        )}
                         <div className="relative mt-1">
                             <div className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none"><IconSearch /></div>
                             <input type="text" value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar por código ou nome..." className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border rounded-xl text-sm outline-none focus:border-rose-500" />
@@ -2574,8 +2577,8 @@
                     </div>
 
                     {/* Lista do pedido */}
-                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-                        <div className="p-4 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-slate-800">Itens do Pedido</h3><span className="text-xs font-bold text-slate-400">{itens.length} item(ns)</span></div>
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-3 sm:p-4 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-slate-800">Itens do Pedido</h3><span className="text-xs font-bold text-slate-400">{itens.length} item(ns)</span></div>
                         {itens.length === 0 ? (
                             <div className="p-8 text-center text-slate-400 text-sm">Nenhum item ainda. Busque e adicione produtos acima.</div>
                         ) : (
@@ -2621,8 +2624,8 @@
 
                     {/* Histórico de pedidos do dia */}
                     <div className="lg:col-span-1">
-                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden lg:sticky lg:top-4">
-                            <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden lg:sticky lg:top-4">
+                            <div className="p-3 sm:p-4 border-b border-slate-100 flex justify-between items-center">
                                 <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>📋</span> Histórico do dia</h3>
                                 <span className="text-xs font-bold text-slate-400">{histHoje.length}</span>
                             </div>
@@ -3064,6 +3067,16 @@
                 window.localStorage.setItem('friganso_products', JSON.stringify(newProducts));
             };
 
+            // 📲 Celular/aparelho novo: se não tem tabela local, baixa a última da nuvem sozinho
+            useEffect(() => {
+                if (products.length > 0) return;
+                let cancel = false;
+                db.collection('system_data').doc('shared_pdf').get()
+                    .then(doc => { if (cancel || !doc.exists) return; const prods = doc.data().products; if (prods && prods.length) setProducts(prods); })
+                    .catch(() => {});
+                return () => { cancel = true; };
+            }, []);
+
             const handleSetUser = (userData) => {
                 if (userData) window.localStorage.setItem('friganso_loggedUser', JSON.stringify(userData));
                 else { window.localStorage.removeItem('friganso_loggedUser'); auth.signOut(); }
@@ -3139,9 +3152,14 @@
                         </div>
                     )}
 
-                    <button className="md:hidden fixed top-4 left-4 z-50 p-2 bg-slate-900 text-white rounded-lg shadow-lg" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
-                        <div className="h-6 w-6"><IconMenu/></div>
-                    </button>
+                    {/* Barra de topo do celular (cara de app) */}
+                    <div className="md:hidden fixed top-0 inset-x-0 z-50 h-14 bg-slate-950 text-white flex items-center gap-3 px-3 shadow-lg">
+                        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1.5 rounded-lg hover:bg-slate-800 active:bg-slate-800">
+                            <div className="h-6 w-6"><IconMenu/></div>
+                        </button>
+                        <FrigansoLogo className="h-8 w-8 rounded-lg bg-black/40 p-1 border border-slate-700" />
+                        <span className="font-black tracking-tight text-base">FRIGANSO</span>
+                    </div>
 
                     <div className={`fixed inset-y-0 left-0 z-40 w-72 bg-slate-950 text-slate-300 transform transition-transform duration-300 ease-in-out flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static border-r border-slate-800 shadow-2xl`}>
                         <div className="p-6 border-b border-slate-800 flex items-center gap-4 bg-slate-900/50">
@@ -3192,7 +3210,7 @@
                         </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto relative z-0 p-4 pt-20 md:p-8 bg-slate-100">
+                    <div className="flex-1 overflow-y-auto relative z-0 p-3 pt-[68px] sm:p-4 md:p-8 md:pt-8 bg-slate-100">
                         <div className="absolute inset-0 pointer-events-none opacity-[0.02]" style={{ backgroundImage: `url('${BG_IMAGE}')`, backgroundSize: 'cover', backgroundPosition: 'center' }}></div>
                         <div className="relative z-10 max-w-7xl mx-auto">
                             {renderContent()}
