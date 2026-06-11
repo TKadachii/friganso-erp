@@ -44,6 +44,17 @@
 
     // ========= SPAMOV: leitura + lançamento =========
     if (host.indexOf("friganso.com.br") === -1) return;
+
+    // 📱 Força largura "de PC" no SPAmov mesmo no celular (no modo mobile a página
+    // se espreme e o robô erra a posição dos campos). Roda no documento principal.
+    if (window.top === window.self) {
+        try {
+            var vpFg = document.querySelector('meta[name="viewport"]');
+            if (!vpFg) { vpFg = document.createElement("meta"); vpFg.setAttribute("name", "viewport"); (document.head || document.documentElement).appendChild(vpFg); }
+            vpFg.setAttribute("content", "width=1280");
+        } catch (e) {}
+    }
+
     if (!document.body || document.body.tagName === "FRAMESET") return;
 
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
