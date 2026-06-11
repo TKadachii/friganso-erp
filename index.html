@@ -2527,6 +2527,19 @@
                 if (!q) return [];
                 return purchases.filter(p => String(p.clienteCode) === q).slice(0, 15);
             }, [purchases, clienteId]);
+
+            // Tudo que o cliente já comprou alguma vez (histórico antigo da planilha + tudo que aparecer nas compras por dia)
+            const jaComprou = useMemo(() => {
+                const q = clienteId.trim();
+                if (!q) return [];
+                const codes = new Set();
+                if (clienteInfo && Array.isArray(clienteInfo.history)) clienteInfo.history.forEach(c => codes.add(String(c)));
+                purchases.filter(p => String(p.clienteCode) === q).forEach(p => (p.itens || []).forEach(it => codes.add(String(it.code))));
+                return Array.from(codes).map(code => {
+                    const prod = products.find(p => String(p.code) === code);
+                    return { code: code, name: prod ? prod.name : ('Produto ' + code), naTabela: !!prod };
+                });
+            }, [clienteInfo, purchases, clienteId, products]);
             const rotuloDia = (dia, ts) => {
                 const hoje = diaISO(Date.now());
                 const ontem = diaISO(Date.now() - 86400000);
@@ -2664,28 +2677,48 @@
                         {clienteInfo && clienteInfo.tipo && <p className="text-[10px] text-slate-400 mt-1">Detectado do CRM: {clienteInfo.tipo}</p>}
                     </div>
 
-                    {/* 🧾 Compras anteriores deste cliente (por dia) */}
-                    {clienteId.trim() && comprasDoCliente.length > 0 && (
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 mb-2"><span>🧾</span> Compras anteriores deste cliente</h3>
-                            <div className="space-y-2 max-h-64 overflow-y-auto">
-                                {comprasDoCliente.map(p => (
-                                    <div key={p.id} className="bg-slate-50 rounded-xl p-2.5 border border-slate-100">
-                                        <div className="flex items-center justify-between mb-1.5">
-                                            <span className="text-xs font-black text-rose-700">{rotuloDia(p.dia, p.ts)}</span>
-                                            <span className="text-[10px] text-slate-400">{(p.itens || []).length} item(ns){p.via ? ' · ' + p.via : ''}</span>
-                                        </div>
-                                        <div className="flex flex-wrap gap-1">
-                                            {(p.itens || []).map((it, idx) => (
-                                                <button key={idx} type="button" onClick={() => addItem({ code: String(it.code), name: it.name })} title="Tocar pra adicionar ao pedido" className="text-[11px] bg-white border border-slate-200 rounded-lg px-2 py-1 text-slate-600 hover:border-rose-300 hover:bg-rose-50 transition-colors">
-                                                    <span className="font-mono font-bold text-rose-700">{it.code}</span> ×{it.qty}
-                                                </button>
-                                            ))}
-                                        </div>
+                    {/* 🧾 Compras do cliente: por dia (novo) + tudo que já comprou (histórico) */}
+                    {clienteId.trim() && (comprasDoCliente.length > 0 || jaComprou.length > 0) && (
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+                            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2"><span>🧾</span> Compras deste cliente</h3>
+
+                            {comprasDoCliente.length > 0 && (
+                                <div>
+                                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Por dia</p>
+                                    <div className="space-y-2 max-h-56 overflow-y-auto">
+                                        {comprasDoCliente.map(p => (
+                                            <div key={p.id} className="bg-slate-50 rounded-xl p-2.5 border border-slate-100">
+                                                <div className="flex items-center justify-between mb-1.5">
+                                                    <span className="text-xs font-black text-rose-700">{rotuloDia(p.dia, p.ts)}</span>
+                                                    <span className="text-[10px] text-slate-400">{(p.itens || []).length} item(ns){p.via ? ' · ' + p.via : ''}</span>
+                                                </div>
+                                                <div className="flex flex-wrap gap-1">
+                                                    {(p.itens || []).map((it, idx) => (
+                                                        <button key={idx} type="button" onClick={() => addItem({ code: String(it.code), name: it.name })} title="Tocar pra adicionar ao pedido" className="text-[11px] bg-white border border-slate-200 rounded-lg px-2 py-1 text-slate-600 hover:border-rose-300 hover:bg-rose-50 transition-colors">
+                                                            <span className="font-mono font-bold text-rose-700">{it.code}</span> ×{it.qty}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
-                            <p className="text-[10px] text-slate-400 mt-2">Toque num produto pra adicionar de novo ao pedido. 🔁</p>
+                                </div>
+                            )}
+
+                            {jaComprou.length > 0 && (
+                                <div>
+                                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Tudo que já comprou ({jaComprou.length})</p>
+                                    <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto">
+                                        {jaComprou.map((it, idx) => (
+                                            <button key={idx} type="button" onClick={() => addItem({ code: it.code, name: it.name })} title={it.name} className={`text-[11px] rounded-lg px-2 py-1 border transition-colors ${it.naTabela ? 'bg-white border-slate-200 text-slate-600 hover:border-rose-300 hover:bg-rose-50' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                                                <span className="font-mono font-bold text-rose-700">{it.code}</span> <span className="truncate">{it.name.length > 22 ? it.name.slice(0, 22) + '…' : it.name}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <p className="text-[10px] text-slate-400">Toque num produto pra adicionar ao pedido. 🔁 {jaComprou.some(i => !i.naTabela) && '(itens cinzas não estão na tabela de hoje)'}</p>
                         </div>
                     )}
 
