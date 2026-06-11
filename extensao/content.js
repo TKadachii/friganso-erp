@@ -712,29 +712,35 @@
         }
         return null;
     }
+    function forcarVisivel(el) {
+        if (!el) return;
+        try { el.style.display = "block"; el.style.visibility = "visible"; el.removeAttribute("hidden"); } catch (e) {}
+    }
     function tentarNavegarVendas() {
         try {
             chrome.storage.local.get(["friganso_creds"], function (c) {
                 const cr = c && c.friganso_creds;
                 if (!cr || !cr.irVendas) return;
                 if (document.querySelector("input[type=password]")) return; // ainda na tela de login
-                const spamov = acharPorHrefOnclick("spamov") || acharLinkTexto(/^SPA\s*mov$/i);
-                const temVendasAgora = acharLinkTexto(/VENDAS\s*-\s*VENDEDOR/i);
-                if (!spamov && !temVendasAgora) return; // ainda não é a tela de menu
+                const span = document.getElementById("spamov");
+                const spamovLink = acharPorHrefOnclick("spamov") || acharLinkTexto(/^SPA\s*mov$/i);
+                const jaTemVendas = acharLinkTexto(/VENDAS\s*-\s*VENDEDOR/i);
+                if (!span && !spamovLink && !jaTemVendas) return; // ainda não é a tela de menu
                 chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario, senha: cr.senha, autoLogin: false, irVendas: false } });
-                dlog("menu: abrindo SPA mov -> VENDAS - VENDEDOR");
-                // expande o submenu — UMA vez só (clicarRobusto executa o show_hide_span)
-                if (spamov) clicarRobusto(spamov);
-                else rodarNaPagina("try{ if(typeof show_hide_span==='function') show_hide_span('spamov'); }catch(e){}");
+                dlog("menu: span#spamov=" + (span ? "ok" : "?") + " linkSPAmov=" + (spamovLink ? "ok" : "?"));
+                // força o submenu visível (mais confiável que depender da função do site)
+                forcarVisivel(span);
+                if (!span && spamovLink) clicarRobusto(spamovLink); // sem o span, tenta a função
                 let tentou = 0;
                 const iv = setInterval(function () {
                     tentou++;
+                    forcarVisivel(document.getElementById("spamov")); // mantém aberto
                     const v = acharLinkTexto(/VENDAS\s*-\s*VENDEDOR/i);
                     if (v) { dlog("menu: clicando VENDAS - VENDEDOR"); clicarRobusto(v); clearInterval(iv); }
-                    else if (tentou > 14) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu"); }
+                    else if (tentou > 16) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu (manda o log)"); }
                 }, 400);
             });
-        } catch (e) {}
+        } catch (e) { dlog("menu ERRO: " + (e && e.message)); }
     }
 
     // ---------- BOTÕES ----------
