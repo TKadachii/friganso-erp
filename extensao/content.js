@@ -671,6 +671,30 @@
     }
 
     // ---------- NAVEGAR NO MENU (SPA mov -> VENDAS - VENDEDOR) ----------
+    // Roda um código no CONTEXTO da página (necessário para javascript: e funções do site)
+    function rodarNaPagina(code) {
+        try {
+            const s = document.createElement("script");
+            s.textContent = code;
+            (document.head || document.documentElement).appendChild(s);
+            if (s.parentNode) s.parentNode.removeChild(s);
+            return true;
+        } catch (e) { return false; }
+    }
+    // Clique robusto: se o elemento (ou um pai) tem onclick/javascript:, roda na página; senão clica
+    function clicarRobusto(el) {
+        if (!el) return;
+        let p = el, code = null;
+        for (let i = 0; i < 4 && p; i++) {
+            const oc = p.getAttribute && p.getAttribute("onclick");
+            const hr = p.getAttribute && p.getAttribute("href");
+            if (oc) { code = oc; break; }
+            if (hr && /^javascript:/i.test(hr)) { code = hr.replace(/^javascript:/i, ""); break; }
+            p = p.parentElement;
+        }
+        if (code) rodarNaPagina("try{" + code + "}catch(e){}");
+        clicar(el);
+    }
     function acharLinkTexto(re) {
         const els = document.querySelectorAll("a, td, span, div, b, font, li");
         for (let i = 0; i < els.length; i++) {
@@ -698,13 +722,15 @@
                 if (!spamov && !temVendasAgora) return; // ainda não é a tela de menu
                 chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario, senha: cr.senha, autoLogin: false, irVendas: false } });
                 dlog("menu: abrindo SPA mov -> VENDAS - VENDEDOR");
-                if (spamov) clicar(spamov); // expande o submenu
+                // expande o submenu chamando a função direto na página (e clicando de backup)
+                rodarNaPagina("try{ if(typeof show_hide_span==='function') show_hide_span('spamov'); }catch(e){}");
+                if (spamov) clicarRobusto(spamov);
                 let tentou = 0;
                 const iv = setInterval(function () {
                     tentou++;
                     const v = acharLinkTexto(/VENDAS\s*-\s*VENDEDOR/i);
-                    if (v) { dlog("menu: clicando VENDAS - VENDEDOR"); clicar(v); clearInterval(iv); }
-                    else if (tentou > 12) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu"); }
+                    if (v) { dlog("menu: clicando VENDAS - VENDEDOR"); clicarRobusto(v); clearInterval(iv); }
+                    else if (tentou > 14) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu"); }
                 }, 400);
             });
         } catch (e) {}
