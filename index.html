@@ -2519,7 +2519,9 @@
                 window.postMessage({ source: 'friganso-app', type: 'LANCAR_AUTO', usuario: u, senha: s, pedido: pedido }, '*');
                 setEnviado(true);
                 showMessage('Abrindo o SPAmov... vou logar, navegar e lançar sozinho. 🤖', 'success');
-                setTimeout(() => { window.open('http://spd1.friganso.com.br/rdm-business/', 'spamov_login'); }, 500);
+                // Abre JÁ no toque do botão (celular bloqueia abertura de aba com atraso).
+                // O SPAmov demora segundos pra carregar — tempo de sobra pra extensão guardar o pedido.
+                window.open('http://spd1.friganso.com.br/rdm-business/', 'spamov_login');
             };
 
             return (
