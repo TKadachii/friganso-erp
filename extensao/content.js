@@ -10,6 +10,10 @@
         window.addEventListener("message", function (e) {
             const d = e.data;
             if (!d || d.source !== "friganso-app") return;
+            if (d.type === "SET_CREDS") {
+                try { chrome.storage.local.set({ friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: !!d.autoLogin } }); } catch (err) {}
+                return;
+            }
             let novos = [];
             if (d.type === "LANCAR_PEDIDO" && d.pedido) novos = [d.pedido];
             else if (d.type === "LANCAR_VARIOS" && Array.isArray(d.pedidos)) novos = d.pedidos;
@@ -620,6 +624,52 @@
     }
     function cancelarLancamento() { clearRun().then(function () { statusBox()("Lançamento cancelado."); }); }
 
+    // ---------- LOGIN AUTOMÁTICO ----------
+    function acharCampoPorLabel(re, tipo) {
+        let labelRect = null;
+        const cells = document.querySelectorAll("td, th, label, span, div, b, font");
+        for (let i = 0; i < cells.length; i++) {
+            const t = (cells[i].innerText || "").trim();
+            if (re.test(t) && t.length < 28) { const r = cells[i].getBoundingClientRect(); if (r.width && r.height) { labelRect = r; break; } }
+        }
+        if (!labelRect) return null;
+        const cy = labelRect.top + labelRect.height / 2;
+        const inps = Array.prototype.slice.call(document.querySelectorAll("input")).filter(function (inp) {
+            const tp = (inp.type || "text").toLowerCase();
+            if (tipo && tp !== tipo) return false;
+            if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(tp) !== -1) return false;
+            const r = inp.getBoundingClientRect();
+            return r.width > 20 && r.height > 5 && Math.abs((r.top + r.height / 2) - cy) < 18 && r.left >= labelRect.left;
+        });
+        inps.sort(function (a, b) { return a.getBoundingClientRect().left - b.getBoundingClientRect().left; });
+        return inps[0] || null;
+    }
+    function acharBotaoTextoExato(re) {
+        const els = document.querySelectorAll("input[type=button], input[type=submit], button, a");
+        for (let i = 0; i < els.length; i++) { const e = els[i]; const t = ((e.value || e.innerText || "") + "").trim(); if (re.test(t)) { const r = e.getBoundingClientRect(); if (r.width && r.height) return e; } }
+        return null;
+    }
+    function tentarLogin() {
+        try {
+            chrome.storage.local.get(["friganso_creds"], function (c) {
+                const cr = c && c.friganso_creds;
+                if (!cr || !cr.autoLogin) return;
+                if (!document.querySelector("input[type=password]")) return; // não é a tela de login
+                chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario, senha: cr.senha, autoLogin: false } }); // evita loop
+                const userInput = acharCampoPorLabel(/Usu[áa]rio/i, "text") || document.querySelector("input[type=text]");
+                const passInput = acharCampoPorLabel(/Senha/i, "password") || document.querySelector("input[type=password]");
+                dlog("login: campo usuário " + (userInput ? "ok" : "?") + ", senha " + (passInput ? "ok" : "?"));
+                if (userInput && cr.usuario) typeInto(userInput, cr.usuario);
+                if (passInput && cr.senha) typeInto(passInput, cr.senha);
+                setTimeout(function () {
+                    const b = acharBotaoTextoExato(/^Log\s*In$/i);
+                    dlog("login: botão Log In " + (b ? "achado — clicando" : "NÃO achado"));
+                    if (b) clicar(b);
+                }, 700);
+            });
+        } catch (e) {}
+    }
+
     // ---------- BOTÕES ----------
     function botao(id, texto, cor, bottom, onClick) {
         if (document.getElementById(id)) return;
@@ -642,4 +692,6 @@
     if (ehFramePrincipal()) mostrarLogSalvo();
     // Retoma automaticamente um lançamento em andamento (após cada reload do site)
     if (ehFramePrincipal()) processarRun();
+    // Login automático (se solicitado pelo Debug e estivermos na tela de login)
+    tentarLogin();
 })();

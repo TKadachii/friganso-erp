@@ -2951,6 +2951,60 @@
             );
         };
 
+        // ===== DEBUG (somente admin) =====
+        const DebugScreen = ({ user, showMessage }) => {
+            const [usuario, setUsuario] = useState(() => window.localStorage.getItem('friganso_spamov_user') || '');
+            const [senha, setSenha] = useState(() => window.localStorage.getItem('friganso_spamov_pass') || '');
+            const [verSenha, setVerSenha] = useState(false);
+
+            const salvar = () => {
+                window.localStorage.setItem('friganso_spamov_user', usuario);
+                window.localStorage.setItem('friganso_spamov_pass', senha);
+                window.postMessage({ source: 'friganso-app', type: 'SET_CREDS', usuario: usuario, senha: senha, autoLogin: false }, '*');
+                showMessage('Credenciais salvas neste dispositivo.', 'success');
+            };
+            const abrirELogar = () => {
+                if (!usuario.trim() || !senha) { showMessage('Preencha usuário e senha primeiro.', 'error'); return; }
+                window.localStorage.setItem('friganso_spamov_user', usuario);
+                window.localStorage.setItem('friganso_spamov_pass', senha);
+                window.postMessage({ source: 'friganso-app', type: 'SET_CREDS', usuario: usuario, senha: senha, autoLogin: true }, '*');
+                showMessage('Abrindo SPAmov e fazendo login...', 'success');
+                setTimeout(() => { window.open('http://spd1.friganso.com.br/rdm-business/', 'spamov_login'); }, 500);
+            };
+
+            return (
+                <div className="animate-in fade-in max-w-2xl mx-auto space-y-5">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🐞</span> Debug (Admin)</h2>
+                        <p className="text-slate-500 text-sm">Ferramentas internas, só pra você.</p>
+                    </div>
+
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>🔐</span> Login automático no SPAmov</h3>
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
+                            ⚠️ Suas credenciais ficam salvas <b>só neste aparelho</b> (nunca no servidor/GitHub). Use só num dispositivo de confiança.
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-slate-500">Usuário</label>
+                            <input type="text" value={usuario} onChange={e => setUsuario(e.target.value)} placeholder="ex: f.v.99206" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border rounded-xl text-sm outline-none focus:border-rose-500" />
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-slate-500">Senha</label>
+                            <div className="relative mt-1">
+                                <input type={verSenha ? 'text' : 'password'} value={senha} onChange={e => setSenha(e.target.value)} placeholder="sua senha do SPAmov" className="w-full px-3 py-2.5 pr-16 bg-slate-50 border rounded-xl text-sm outline-none focus:border-rose-500" />
+                                <button onClick={() => setVerSenha(!verSenha)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-slate-600 px-2 py-1">{verSenha ? 'ocultar' : 'ver'}</button>
+                            </div>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={abrirELogar} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"><span>🚀</span> Abrir SPAmov e Logar</button>
+                            <button onClick={salvar} className="bg-white border-2 border-slate-200 hover:border-rose-400 text-slate-700 font-bold py-3 px-5 rounded-xl transition-colors">💾 Salvar</button>
+                        </div>
+                        <p className="text-[11px] text-slate-400">A extensão precisa estar instalada e com acesso aos sites. Ao clicar em "Abrir e Logar", a página do SPAmov abre e a extensão preenche e clica em <b>Log In</b>.</p>
+                    </div>
+                </div>
+            );
+        };
+
         const App = () => {
             const [user, setUser] = useState(() => { const s = window.localStorage.getItem('friganso_loggedUser'); return s ? JSON.parse(s) : null; });
             const [activeRoute, setActiveRoute] = useState(() => {
@@ -3016,6 +3070,7 @@
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} showMessage={showMessage} />;
                     case 'tutorial': return <TutorialScreen setActiveRoute={setActiveRoute} />;
+                    case 'debug': return user.role === 'admin' ? <DebugScreen user={user} showMessage={showMessage} /> : <DashboardScreen user={user} />;
                     default: return <DashboardScreen user={user} />;
                 }
             };
@@ -3090,6 +3145,7 @@
                             <NavButton route="tutorial" icon={IconBook} label="Tutorial" />
                             <NavButton route="support" icon={IconSupport} label="Suporte Técnico" />
                             <NavButton route="credits" icon={IconCode} label="Sobre o Desenvolvedor" />
+                            {user.role === 'admin' && <NavButton route="debug" icon={IconSettings} label="🐞 Debug" />}
                         </div>
 
                         <div className="p-4 border-t border-slate-800 bg-slate-900/50">
