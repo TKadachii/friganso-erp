@@ -214,18 +214,26 @@
             return { hasDiscount, origPrice, unitFinalPrice: hasDiscount ? Math.round((origPrice * 0.97) * 100) / 100 : origPrice };
         };
 
-        const CustomMessageBox = ({ message, type = 'info', onClose }) => (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] animate-in fade-in">
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col items-center text-center zoom-in-95 animate-in">
-                    <div className={`h-16 w-16 rounded-full flex items-center justify-center mb-4 ${type === 'error' ? 'bg-red-100 text-red-600' : type === 'success' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
-                        {type === 'error' ? <IconX /> : <IconCheck />}
+        const CustomMessageBox = ({ message, type = 'info', onClose }) => {
+            // Fecha sozinha depois de 3 segundos
+            useEffect(() => {
+                const t = setTimeout(() => { onClose && onClose(); }, 3000);
+                return () => clearTimeout(t);
+            }, [message]);
+            return (
+                // Clicar em qualquer lugar (o fundo) também fecha
+                <div onClick={onClose} className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[100] animate-in fade-in">
+                    <div onClick={e => e.stopPropagation()} className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col items-center text-center zoom-in-95 animate-in">
+                        <div className={`h-16 w-16 rounded-full flex items-center justify-center mb-4 ${type === 'error' ? 'bg-red-100 text-red-600' : type === 'success' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                            {type === 'error' ? <IconX /> : <IconCheck />}
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-800 mb-2">{type === 'error' ? 'Atenção' : type === 'success' ? 'Sucesso' : 'Aviso'}</h3>
+                        <p className="text-slate-600 text-sm mb-6">{message}</p>
+                        <button onClick={onClose} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-xl transition-colors">Entendi</button>
                     </div>
-                    <h3 className="text-lg font-bold text-slate-800 mb-2">{type === 'error' ? 'Atenção' : type === 'success' ? 'Sucesso' : 'Aviso'}</h3>
-                    <p className="text-slate-600 text-sm mb-6">{message}</p>
-                    <button onClick={onClose} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-xl transition-colors">Entendi</button>
                 </div>
-            </div>
-        );
+            );
+        };
 
         const LoginScreen = ({ onLogin, showMessage }) => {
             const [isRegistering, setIsRegistering] = useState(false);
