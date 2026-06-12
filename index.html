@@ -682,7 +682,9 @@
                     const arrayBuffer = await file.arrayBuffer();
                     const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                     let extractedProducts = [];
-                    
+                    const byCode = new Map(); // dedup por código: se repetir, fica com o nome mais "de produto"
+                    const letterScore = (s) => ((s || '').match(/[A-Za-zÀ-ú]/g) || []).length;
+
                     for (let i = 1; i <= pdf.numPages; i++) {
                         const page = await pdf.getPage(i);
                         const textContent = await page.getTextContent();
@@ -725,15 +727,16 @@
                                 finalName = finalName.replace(/[-—.,\s]+$/, '').trim();
 
                                 const { hasDiscount, unitFinalPrice } = checkDiscountRules(code, finalName, rawPrice);
-                                
-                                extractedProducts.push({ 
-                                    code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice 
-                                });
+                                const cand = { code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice };
+                                const prev = byCode.get(code);
+                                // código repetido = um deles é fragmento mal lido: fica com o de nome mais "de produto" (mais letras)
+                                if (!prev || letterScore(cand.name) > letterScore(prev.name)) byCode.set(code, cand);
                             }
                         });
                     }
-                    setProducts(extractedProducts); 
-                    showMessage(`Sucesso! ${extractedProducts.length} produtos carregados (Incluindo os sem preço).`, 'success');
+                    extractedProducts = Array.from(byCode.values());
+                    setProducts(extractedProducts);
+                    showMessage(`Sucesso! ${extractedProducts.length} produtos carregados (códigos duplicados foram limpos).`, 'success');
                 } catch (err) { showMessage('Erro ao processar PDF.', 'error'); } finally { setIsLoading(false); }
             };
 
