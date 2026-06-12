@@ -1051,13 +1051,22 @@
                 } catch(err) { showMessage('Erro ao salvar no histórico.', 'error'); }
             };
 
+            // 🔑 Reconsulta o item na Tabela do Dia (PDF) AGORA: nome e preço sempre iguais à tabela.
+            const itemAtual = (it) => {
+                const rp = products.find(p => String(p.code) === String(it.code));
+                if (!rp) return { ...it, name: it.name, unitFinalPrice: it.unitFinalPrice || 0, naTabela: false };
+                const { unitFinalPrice } = checkDiscountRules(rp.code, rp.name, rp.originalPrice);
+                return { ...it, name: rp.name, unitFinalPrice: unitFinalPrice, naTabela: true };
+            };
+
             const generateWhatsAppText = () => {
                 if (!orderSummary) return '';
                 let txt = '';
                 if (orderSummary.customerCode) txt += `ID: ${orderSummary.customerCode}\n`;
                 if (orderSummary.spamov) txt += `SPAmov: ${orderSummary.spamov}\n`;
                 if (txt !== '') txt += '\n';
-                orderSummary.items.forEach(item => {
+                orderSummary.items.forEach(it0 => {
+                    const item = itemAtual(it0); // nome+preço da Tabela do Dia, na hora
                     const price = editedPrices[item.code] !== undefined ? editedPrices[item.code] : item.unitFinalPrice;
                     txt += `${item.code} - ${getQty(item)}x - ${formatPrice(price)}\n`;
                 });
@@ -1188,15 +1197,20 @@
                                     <table className="w-full text-left border-collapse">
                                         <thead className="bg-white sticky top-0 shadow-sm">
                                             <tr>
-                                                <th className="p-4 font-bold text-slate-600 border-b">Cód</th>
+                                                <th className="p-4 font-bold text-slate-600 border-b">Produto</th>
                                                 <th className="p-4 font-bold text-slate-600 border-b text-center">Qtd</th>
                                                 <th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">Preço Unit.</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {orderSummary.items.map((i, idx) => (
+                                            {orderSummary.items.map((i0, idx) => {
+                                                const i = itemAtual(i0); // nome + preço da Tabela do Dia, na hora
+                                                return (
                                                 <tr key={idx} className="hover:bg-slate-50 border-b border-slate-50">
-                                                    <td className="p-4 text-slate-500 font-bold">{i.code}</td>
+                                                    <td className="p-3">
+                                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs">{i.code}</span>
+                                                        <div className="text-sm text-slate-700 font-medium mt-1 leading-tight">{i.name}{!i.naTabela && <span className="text-[10px] text-amber-600 font-bold"> (fora da tabela de hoje)</span>}</div>
+                                                    </td>
                                                     <td className="p-4 text-center">
                                                         <div className="inline-flex items-center gap-1">
                                                             <input
@@ -1218,7 +1232,8 @@
                                                         />
                                                     </td>
                                                 </tr>
-                                            ))}
+                                                );
+                                            })}
                                         </tbody>
                                     </table>
                                 </div>
@@ -1305,7 +1320,7 @@
                                         navigator.clipboard.writeText(generateWhatsAppText());
                                         // 🧾 Grava na ficha do cliente (todo pedido confirmado passa por aqui)
                                         if (orderSummary && orderSummary.customerCode) {
-                                            const itens = (orderSummary.items || []).map(it => ({ code: it.code, name: it.name, qty: Number(getQty(it)) }));
+                                            const itens = (orderSummary.items || []).map(it => { const a = itemAtual(it); return { code: a.code, name: a.name, qty: Number(getQty(it)) }; });
                                             registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user);
                                         }
                                         showMessage('Copiado pro Zap e salvo na ficha do cliente! 🧾', 'success');
