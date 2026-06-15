@@ -2584,7 +2584,18 @@
         };
 
         // ===== FAZER PEDIDO: monta o pedido e manda a extensão lançar no SPAmov =====
-        const FazerPedidoScreen = ({ products, clients, purchases = [], user, showMessage }) => {
+        const FazerPedidoScreen = ({ products, clients, user, showMessage }) => {
+            // Histórico de compras carrega SÓ aqui (quando abre o Fazer Pedido), não no boot do app
+            const [purchases, setPurchases] = useState([]);
+            useEffect(() => {
+                try {
+                    const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(400).onSnapshot(
+                        snap => setPurchases(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+                        () => {}
+                    );
+                    return () => unsub();
+                } catch (e) {}
+            }, []);
             const RASCUNHO_KEY = 'friganso_pedido_rascunho';
             const rascunhoInicial = (() => { try { return JSON.parse(window.localStorage.getItem(RASCUNHO_KEY) || '{}') || {}; } catch (e) { return {}; } })();
             const [clienteId, setClienteId] = useState(rascunhoInicial.clienteId || '');
@@ -3335,17 +3346,8 @@
                 return () => unsubscribe();
             }, []);
 
-            // 🧾 Histórico de compras por cliente/dia (todo pedido feito fica registrado aqui)
-            const [purchases, setPurchases] = useState([]);
-            useEffect(() => {
-                try {
-                    const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(1500).onSnapshot(
-                        snap => setPurchases(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-                        () => {}
-                    );
-                    return () => unsub();
-                } catch (e) {}
-            }, []);
+            // 🧾 O histórico de compras NÃO carrega mais no boot (era pesado).
+            // Agora é carregado só dentro da tela "Fazer Pedido", quando você abre ela.
             
             const [products, setProductsState] = useState(() => {
                 const savedProds = window.localStorage.getItem('friganso_products');
@@ -3396,7 +3398,7 @@
                     case 'resumo': return <ResumoScreen products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
-                    case 'pedido': return <FazerPedidoScreen products={products} clients={clients} purchases={purchases} user={user} showMessage={showMessage} />;
+                    case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
                     case 'tutorial': return <TutorialScreen setActiveRoute={setActiveRoute} />;
                     case 'debug': return user.role === 'admin' ? <DebugScreen user={user} showMessage={showMessage} /> : <DashboardScreen user={user} />;
                     default: return <DashboardScreen user={user} />;
