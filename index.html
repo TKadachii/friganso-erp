@@ -646,6 +646,7 @@
             const [showCloudModal, setShowCloudModal] = useState(false);
             const [pdfVersions, setPdfVersions] = useState([]);
             const [isLoadingVersions, setIsLoadingVersions] = useState(false);
+            const [priceChanges, setPriceChanges] = useState(null); // {changes:[...], novos:[...], removidos:n} ao carregar tabela nova
 
             useEffect(() => { 
                 if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; 
@@ -735,8 +736,22 @@
                         });
                     }
                     extractedProducts = Array.from(byCode.values());
+
+                    // 🔔 Compara com a tabela anterior (a que estava carregada) e lista mudanças de preço
+                    const antigos = new Map((products || []).map(p => [String(p.code), p]));
+                    const changes = [], novos = [];
+                    extractedProducts.forEach(np => {
+                        const op = antigos.get(String(np.code));
+                        if (!op) { novos.push({ code: np.code, name: np.name, price: Number(np.originalPrice) || 0 }); return; }
+                        const oldP = Number(op.originalPrice) || 0, newP = Number(np.originalPrice) || 0;
+                        if (Math.abs(oldP - newP) >= 0.01) changes.push({ code: np.code, name: np.name, oldPrice: oldP, newPrice: newP });
+                    });
+                    const removidos = (products || []).filter(p => !extractedProducts.some(np => String(np.code) === String(p.code))).length;
+                    // só mostra comparação se já havia uma tabela antes (senão é a primeira carga)
+                    setPriceChanges((products && products.length > 0) ? { changes, novos, removidos } : null);
+
                     setProducts(extractedProducts);
-                    showMessage(`Sucesso! ${extractedProducts.length} produtos carregados (códigos duplicados foram limpos).`, 'success');
+                    showMessage(`Sucesso! ${extractedProducts.length} produtos carregados.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
                 } catch (err) { showMessage('Erro ao processar PDF.', 'error'); } finally { setIsLoading(false); }
             };
 
@@ -823,6 +838,59 @@
                             )}
                         </div>
                     </header>
+
+                    {/* 🔔 Mudanças de preço em relação à tabela anterior */}
+                    {priceChanges && (priceChanges.changes.length > 0 || priceChanges.novos.length > 0 || priceChanges.removidos > 0) && (
+                        <div className="bg-white rounded-3xl shadow-sm border-2 border-amber-200 overflow-hidden">
+                            <div className="p-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center">
+                                <h3 className="font-bold text-amber-800 flex items-center gap-2"><span>🔔</span> Mudanças nesta tabela (comparado à anterior)</h3>
+                                <button onClick={() => setPriceChanges(null)} className="h-7 w-7 flex items-center justify-center rounded-full bg-amber-100 hover:bg-amber-200 text-amber-700"><div className="h-3.5 w-3.5"><IconX/></div></button>
+                            </div>
+                            <div className="p-4 space-y-3 max-h-[40vh] overflow-y-auto">
+                                <div className="flex flex-wrap gap-2 text-xs font-bold">
+                                    <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded-lg">{priceChanges.changes.length} preço(s) mudaram</span>
+                                    <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg">{priceChanges.novos.length} novo(s)</span>
+                                    {priceChanges.removidos > 0 && <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">{priceChanges.removidos} sairam</span>}
+                                </div>
+                                {priceChanges.changes.length > 0 && (
+                                    <div className="space-y-1">
+                                        {priceChanges.changes.map((c, idx) => {
+                                            const subiu = c.newPrice > c.oldPrice;
+                                            return (
+                                                <div key={idx} className="flex items-center gap-2 text-sm bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">
+                                                    <span className="bg-rose-700 text-white px-1.5 py-0.5 rounded font-mono font-black text-[10px] flex-shrink-0">{c.code}</span>
+                                                    <span className="text-slate-700 flex-1 truncate">{c.name}</span>
+                                                    <span className="text-slate-400 line-through text-xs">{formatPrice(c.oldPrice)}</span>
+                                                    <span className={`font-bold flex-shrink-0 ${subiu ? 'text-red-600' : 'text-emerald-600'}`}>{subiu ? '↑' : '↓'} {formatPrice(c.newPrice)}</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                                {priceChanges.novos.length > 0 && (
+                                    <div>
+                                        <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-wide mb-1">Novos produtos</p>
+                                        <div className="flex flex-wrap gap-1">
+                                            {priceChanges.novos.slice(0, 40).map((n, idx) => (
+                                                <span key={idx} className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-2 py-1"><span className="font-mono font-bold">{n.code}</span> {n.name.length > 20 ? n.name.slice(0,20)+'…' : n.name} · {formatPrice(n.price)}</span>
+                                            ))}
+                                            {priceChanges.novos.length > 40 && <span className="text-[11px] text-slate-400 px-1 py-1">+{priceChanges.novos.length - 40} mais</span>}
+                                        </div>
+                                    </div>
+                                )}
+                                {priceChanges.changes.length === 0 && priceChanges.novos.length === 0 && (
+                                    <p className="text-sm text-slate-500">Nenhum preço mudou — só houve saída de produto(s).</p>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {priceChanges && priceChanges.changes.length === 0 && priceChanges.novos.length === 0 && priceChanges.removidos === 0 && (
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-emerald-700 text-sm font-semibold flex items-center justify-between">
+                            <span>✅ Nenhuma mudança de preço em relação à tabela anterior.</span>
+                            <button onClick={() => setPriceChanges(null)} className="text-emerald-600 hover:text-emerald-800"><div className="h-4 w-4"><IconX/></div></button>
+                        </div>
+                    )}
 
                     {products.length > 0 && (
                         <div className="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col h-[60vh] overflow-hidden">
