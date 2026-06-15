@@ -2956,7 +2956,6 @@
         // ===== DISPAROS WHATSAPP: campanha clicar-e-enviar =====
         const DisparosScreen = ({ clients, products, user, showMessage, setActiveRoute }) => {
             const TEMPLATE_PADRAO = "🥩 *OFERTAS DO DIA*\n\n{ofertas}";
-            const zapWinRef = useRef(null); // referência da aba do WhatsApp pra reusar sempre a mesma
             const [template, setTemplate] = useState(TEMPLATE_PADRAO);
             const [incluirProduto, setIncluirProduto] = useState(true);
             const [ofertaModo, setOfertaModo] = useState('historico'); // historico | novos
@@ -3122,17 +3121,13 @@
                                 <pre className="font-sans text-sm whitespace-pre-wrap text-slate-800">{personalizar(atual)}</pre>
                             </div>
                             <button onClick={() => {
-                                const url = waLink(atual);
-                                const ref = zapWinRef.current;
-                                if (ref && !ref.closed) {
-                                    // Aba do WhatsApp já existe: navega ELA em segundo plano (reusa + não rouba seu foco)
-                                    try { ref.location.href = url; } catch (e) { zapWinRef.current = window.open(url, 'friganso_whatsapp'); }
-                                } else {
-                                    // Primeira vez: abre a aba (só essa vez ela vem pra frente)
-                                    zapWinRef.current = window.open(url, 'friganso_whatsapp');
-                                }
+                                // Abre o APP do WhatsApp Desktop via protocolo (whatsapp://) — o Chrome NÃO sai do site.
+                                const a = document.createElement('a');
+                                a.href = 'whatsapp://send?phone=' + waNumber(atual.phone) + '&text=' + encodeURIComponent(personalizar(atual));
+                                document.body.appendChild(a);
+                                a.click();
+                                setTimeout(() => { try { a.remove(); } catch (e) {} }, 500);
                                 const s = new Set(enviados); s.add(atual.id); setEnviados(s);
-                                try { window.focus(); } catch (e) {}
                             }} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
                                 <div className="h-6 w-6"><IconWhatsApp/></div> Abrir WhatsApp e Enviar
                             </button>
@@ -3141,7 +3136,7 @@
                                 <button onClick={() => avancar(true)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors">Próximo →</button>
                             </div>
                         </div>
-                        <p className="text-center text-xs text-slate-400 mt-4">Toque em "Abrir WhatsApp e Enviar", confirme o envio no app, e volte aqui para "Próximo".</p>
+                        <p className="text-center text-xs text-slate-400 mt-4">Abre o <b>app do WhatsApp</b> já com a mensagem — é só dar <b>Enter</b> pra enviar. Você continua aqui no site; toque em <b>Próximo</b>. 🎉</p>
                     </div>
                 );
             }
