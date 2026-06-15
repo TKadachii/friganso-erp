@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.6.11.0323
+// @version      2026.6.15.0615
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -169,8 +169,17 @@
         const p = montarPedidoLeitura();
         if (!temPedidoLeitura(p) || p.itens.length === 0) { alert("Não consegui ler o pedido nesta tela."); return; }
         const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(p))));
-        try { (window.top || window).open(APP_URL + "?pedidojson=" + encodeURIComponent(b64), "friganso_erp_app").focus(); }
-        catch (e) { window.open(APP_URL + "?pedidojson=" + encodeURIComponent(b64), "friganso_erp_app"); }
+        const url = APP_URL + "?pedidojson=" + encodeURIComponent(b64);
+        // Celular (toque): abrir aba nova no Firefox costuma ser bloqueado/perdido -> navega a PRÓPRIA aba.
+        // Detecta por toque porque no SPAmov a UA está forçada como PC (não dá pra confiar no userAgent/largura).
+        const ehCelular = (navigator.maxTouchPoints || 0) > 0;
+        if (ehCelular) {
+            try { (window.top || window).location.href = url; }
+            catch (e) { window.location.href = url; }
+            return;
+        }
+        try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
+        catch (e) { window.open(url, "friganso_erp_app"); }
     }
 
     // ---------- LANÇAMENTO (Fazer Pedido) ----------
