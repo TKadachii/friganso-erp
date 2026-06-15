@@ -2956,6 +2956,7 @@
         // ===== DISPAROS WHATSAPP: campanha clicar-e-enviar =====
         const DisparosScreen = ({ clients, products, user, showMessage, setActiveRoute }) => {
             const TEMPLATE_PADRAO = "🥩 *OFERTAS DO DIA*\n\n{ofertas}";
+            const zapWinRef = useRef(null); // referência da aba do WhatsApp pra reusar sempre a mesma
             const [template, setTemplate] = useState(TEMPLATE_PADRAO);
             const [incluirProduto, setIncluirProduto] = useState(true);
             const [ofertaModo, setOfertaModo] = useState('historico'); // historico | novos
@@ -3121,11 +3122,17 @@
                                 <pre className="font-sans text-sm whitespace-pre-wrap text-slate-800">{personalizar(atual)}</pre>
                             </div>
                             <button onClick={() => {
-                                // Reaproveita SEMPRE a mesma aba do WhatsApp (nome fixo)
-                                const w = window.open(waLink(atual), 'friganso_whatsapp');
+                                const url = waLink(atual);
+                                const ref = zapWinRef.current;
+                                if (ref && !ref.closed) {
+                                    // Aba do WhatsApp já existe: navega ELA em segundo plano (reusa + não rouba seu foco)
+                                    try { ref.location.href = url; } catch (e) { zapWinRef.current = window.open(url, 'friganso_whatsapp'); }
+                                } else {
+                                    // Primeira vez: abre a aba (só essa vez ela vem pra frente)
+                                    zapWinRef.current = window.open(url, 'friganso_whatsapp');
+                                }
                                 const s = new Set(enviados); s.add(atual.id); setEnviados(s);
-                                // Tenta manter o foco aqui na aba do site
-                                try { if (w) w.blur(); window.focus(); } catch (e) {}
+                                try { window.focus(); } catch (e) {}
                             }} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
                                 <div className="h-6 w-6"><IconWhatsApp/></div> Abrir WhatsApp e Enviar
                             </button>
