@@ -2956,7 +2956,26 @@
         // ===== DISPAROS WHATSAPP: campanha clicar-e-enviar =====
         const DisparosScreen = ({ clients, products, user, showMessage, setActiveRoute }) => {
             const TEMPLATE_PADRAO = "🥩 *OFERTAS DO DIA*\n\n{ofertas}";
-            const [template, setTemplate] = useState(TEMPLATE_PADRAO);
+            const PRESETS_PADRAO = [
+                { id: 'p_ofertas', nome: 'Ofertas do Dia', texto: '🥩 *OFERTAS DO DIA*\n\n{ofertas}' },
+                { id: 'p_bomdia', nome: 'Saudação', texto: '{saudacao}, {contato}! 😊\n\nSeparei as ofertas de hoje pra você:\n{ofertas}\n\nQualquer coisa é só chamar! {vendedor}' },
+                { id: 'p_novidades', nome: 'Novidades', texto: '✨ *NOVIDADES PRA VOCÊ!*\n\n{contato}, olha o que chegou:\n{ofertas}' },
+            ];
+            const presetsIniciais = (() => { try { const raw = window.localStorage.getItem('friganso_zap_presets'); const arr = raw ? JSON.parse(raw) : null; return (Array.isArray(arr) && arr.length) ? arr : PRESETS_PADRAO; } catch (e) { return PRESETS_PADRAO; } })();
+            const [presets, setPresets] = useState(presetsIniciais);
+            const [presetAtivo, setPresetAtivo] = useState(presetsIniciais[0] ? presetsIniciais[0].id : null);
+            const [template, setTemplate] = useState(presetsIniciais[0] ? presetsIniciais[0].texto : TEMPLATE_PADRAO);
+            // salva presets no aparelho
+            useEffect(() => { try { window.localStorage.setItem('friganso_zap_presets', JSON.stringify(presets)); } catch (e) {} }, [presets]);
+            // cada aba "lembra" o texto: o que você digita vai pro preset ativo
+            useEffect(() => {
+                if (!presetAtivo) return;
+                setPresets(prev => prev.map(p => p.id === presetAtivo ? (p.texto === template ? p : { ...p, texto: template }) : p));
+            }, [template]);
+            const selecionarPreset = (p) => { setPresetAtivo(p.id); setTemplate(p.texto); };
+            const novoPreset = () => { const nome = window.prompt('Nome do novo preset:'); if (!nome || !nome.trim()) return; const id = 'p_' + Date.now(); setPresets([...presets, { id, nome: nome.trim(), texto: template }]); setPresetAtivo(id); showMessage('Preset criado!', 'success'); };
+            const renomearPreset = () => { if (!presetAtivo) return; const a = presets.find(p => p.id === presetAtivo); const nome = window.prompt('Novo nome do preset:', a ? a.nome : ''); if (!nome || !nome.trim()) return; setPresets(presets.map(p => p.id === presetAtivo ? { ...p, nome: nome.trim() } : p)); };
+            const apagarPreset = () => { if (presets.length <= 1) { showMessage('Precisa ter ao menos 1 preset.', 'error'); return; } if (!window.confirm('Apagar este preset?')) return; const rest = presets.filter(p => p.id !== presetAtivo); setPresets(rest); setPresetAtivo(rest[0].id); setTemplate(rest[0].texto); };
             const [incluirProduto, setIncluirProduto] = useState(true);
             const [ofertaModo, setOfertaModo] = useState('historico'); // historico | novos
             const [qtdProdutos, setQtdProdutos] = useState(3); // 2..5 ou 'todos'
@@ -3155,7 +3174,19 @@
                         {/* Composer */}
                         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
                             <h3 className="font-bold text-slate-800 flex items-center gap-2"><div className="h-5 w-5 text-rose-600"><IconWand/></div> Mensagem</h3>
+                            {/* Abinhas de presets */}
+                            <div className="flex items-center gap-1 flex-wrap">
+                                {presets.map(p => (
+                                    <button key={p.id} onClick={() => selecionarPreset(p)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${presetAtivo === p.id ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{p.nome}</button>
+                                ))}
+                                <button onClick={novoPreset} title="Criar novo preset" className="text-xs font-bold px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200">+ Novo</button>
+                            </div>
                             <textarea value={template} onChange={e => setTemplate(e.target.value)} rows="6" className="w-full p-3 bg-slate-50 border rounded-xl text-sm outline-none focus:border-emerald-500 resize-none font-mono"></textarea>
+                            <div className="flex items-center gap-2 -mt-1">
+                                <span className="text-[11px] text-slate-400">Preset atual: <b className="text-slate-600">{(presets.find(p => p.id === presetAtivo) || {}).nome || '—'}</b> (salva sozinho)</span>
+                                <button onClick={renomearPreset} title="Renomear preset" className="ml-auto text-[11px] font-bold px-2 py-1 rounded-md bg-slate-100 text-slate-600 hover:bg-slate-200">✏️ Renomear</button>
+                                <button onClick={apagarPreset} title="Apagar preset" className="text-[11px] font-bold px-2 py-1 rounded-md bg-red-50 text-red-600 hover:bg-red-100">🗑️</button>
+                            </div>
                             <div className="flex flex-wrap gap-1.5">
                                 {['{ofertas}', '{contato}', '{nome}', '{saudacao}', '{produto}', '{vendedor}'].map(v => (
                                     <button key={v} onClick={() => setTemplate(template + (v === '{ofertas}' ? '\n\n' : ' ') + v)} className={`text-[11px] font-mono font-bold px-2 py-1 rounded-md transition-colors ${v === '{ofertas}' ? 'bg-rose-100 hover:bg-rose-200 text-rose-700' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}>{v}</button>
