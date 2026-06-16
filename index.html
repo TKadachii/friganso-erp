@@ -3186,6 +3186,16 @@
                 });
             };
 
+            // 💨 Pré-carrega a conversa do contato atual enquanto você lê o card (só no programa de PC),
+            // assim "Enviar automático" só clica em enviar — sem recarregar o WhatsApp na hora.
+            useEffect(() => {
+                if (!isElectron || !emCampanha) return;
+                const cli = comTelefone[idx]; if (!cli) return;
+                if (!window.__frigZap || !window.__frigZap.preparar) return;
+                const num = waNumber(cli.phone); if (!num) return;
+                window.__frigZap.preparar(num, personalizar(cli));
+            }, [emCampanha, idx]);
+
             // ===== MODO CAMPANHA (passo a passo) =====
             if (emCampanha && atual) {
                 const prodsRec = incluirProduto ? recomendarProdutos(atual, qtdProdutos) : [];
@@ -3558,14 +3568,24 @@
             useEffect(() => {
                 if (!isElectron) return;
                 const SCRIPT = 'new Promise(function(resolve){var t=0;var iv=setInterval(function(){t++;var ic=document.querySelector(\'button[aria-label="Enviar"], button[aria-label="Send"]\')||document.querySelector(\'span[data-icon="send"]\')||document.querySelector(\'[data-testid="send"]\');if(ic){var b=ic;for(var i=0;i<4&&b;i++){if(b.tagName===\'BUTTON\'||(b.getAttribute&&b.getAttribute(\'role\')===\'button\'))break;b=b.parentElement;}try{(b||ic).click();}catch(e){}clearInterval(iv);resolve(\'ok\');return;}if(t>60){clearInterval(iv);resolve(\'timeout\');}},300);});';
+                let zapPreparedNum = null; // número já pré-carregado (chat aberto + texto pronto) p/ enviar sem recarregar
+                const zapURL = (num, msg) => 'https://web.whatsapp.com/send?phone=' + num + '&text=' + encodeURIComponent(msg);
                 window.__frigZap = {
                     abrir: () => setZapAberto(true),
                     fechar: () => setZapAberto(false),
+                    // 💨 Pré-carrega a conversa em segundo plano (enquanto você lê o card), SEM enviar
+                    preparar: (num, msg) => {
+                        const wv = appZapRef.current; if (!wv || !num) return;
+                        setZapAberto(true);
+                        try { wv.loadURL(zapURL(num, msg)); zapPreparedNum = num; } catch (e) {}
+                    },
                     enviar: (num, msg, cb) => {
                         const wv = appZapRef.current; if (!wv) { cb && cb(false); return; }
                         setZapAberto(true);
-                        try { wv.loadURL('https://web.whatsapp.com/send?phone=' + num + '&text=' + encodeURIComponent(msg)); } catch (e) {}
-                        setTimeout(() => { wv.executeJavaScript(SCRIPT).then(r => cb && cb(r === 'ok')).catch(() => cb && cb(false)); }, 2800);
+                        const jaPronto = (num && num === zapPreparedNum); // já pré-carregado? então não recarrega
+                        zapPreparedNum = null; // consome (evita reenvio / duplo-clique sem recarregar)
+                        if (!jaPronto) { try { wv.loadURL(zapURL(num, msg)); } catch (e) {} }
+                        setTimeout(() => { wv.executeJavaScript(SCRIPT).then(r => cb && cb(r === 'ok')).catch(() => cb && cb(false)); }, jaPronto ? 150 : 2800);
                     }
                 };
             }, []);
