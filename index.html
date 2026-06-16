@@ -284,6 +284,10 @@
             const [regPassword, setRegPassword] = useState('');
             const [pendingGoogleUser, setPendingGoogleUser] = useState(null);
             const [googleCode, setGoogleCode] = useState('');
+            // Conta Google sem senha: força definir uma senha (pra poder entrar pelo celular com código+senha)
+            const [needsPass, setNeedsPass] = useState(null);
+            const [setPass1, setSetPass1] = useState('');
+            const [setPass2, setSetPass2] = useState('');
 
             // Electron: recebe resultado da autenticação feita no browser externo
             useEffect(() => {
@@ -301,7 +305,9 @@
                         } else {
                             const snapshot = await db.collection('users').where('email', '==', result.user.email).get();
                             if (!snapshot.empty) {
-                                onLogin({ ...snapshot.docs[0].data(), id: snapshot.docs[0].id });
+                                const d = snapshot.docs[0].data();
+                                if (!d.password) { setNeedsPass({ ...d, id: snapshot.docs[0].id }); } // sem senha → define agora
+                                else { onLogin({ ...d, id: snapshot.docs[0].id }); }
                             } else {
                                 showMessage('Conta não encontrada. Crie seu cadastro primeiro.', 'error');
                                 auth.signOut();
@@ -339,6 +345,20 @@
                 } catch(err) { showMessage('Erro de conexão com o banco.', 'error'); } finally { setIsLoading(false); }
             };
 
+            // Conta Google sem senha → grava a senha (hash) no ID e entra. Depois dá pra logar no celular com código+senha.
+            const handleDefinirSenha = async (e) => {
+                e.preventDefault();
+                if (!passwordRegex.test(setPass1)) { showMessage('Senha precisa de letras, números e caractere especial (mín. 6).', 'error'); return; }
+                if (setPass1 !== setPass2) { showMessage('As senhas não conferem.', 'error'); return; }
+                setIsLoading(true);
+                try {
+                    const hashed = await hashPassword(setPass1);
+                    await db.collection('users').doc(needsPass.id).update({ password: hashed });
+                    showMessage('Senha definida! Agora dá pra entrar pelo celular com seu código e essa senha. 🔑', 'success');
+                    onLogin({ ...needsPass, password: hashed });
+                } catch (err) { showMessage('Erro ao salvar a senha.', 'error'); } finally { setIsLoading(false); }
+            };
+
             const handleGoogleLoginOnly = async () => {
                 // Electron: abre o browser do sistema para fazer login (evita verificações extras do Google)
                 if (window.electronBridge) {
@@ -353,7 +373,9 @@
                     const result = await auth.signInWithPopup(provider);
                     const snapshot = await db.collection('users').where('email', '==', result.user.email).get();
                     if (!snapshot.empty) {
-                        onLogin({ ...snapshot.docs[0].data(), id: snapshot.docs[0].id });
+                        const d = snapshot.docs[0].data();
+                        if (!d.password) { setNeedsPass({ ...d, id: snapshot.docs[0].id }); } // sem senha → define agora
+                        else { onLogin({ ...d, id: snapshot.docs[0].id }); }
                     } else {
                         showMessage('Conta não encontrada. Crie seu cadastro primeiro.', 'error');
                         auth.signOut();
@@ -399,14 +421,17 @@
 
             const handleConfirmGoogleCode = async (e) => {
                 e.preventDefault();
+                if (!passwordRegex.test(setPass1)) { showMessage('Crie uma senha com letras, números e caractere especial (mín. 6).', 'error'); return; }
+                if (setPass1 !== setPass2) { showMessage('As senhas não conferem.', 'error'); return; }
                 setIsLoading(true);
                 try {
                     const codeSnap = await db.collection('users').where('code', '==', googleCode).get();
                     if (!codeSnap.empty) { showMessage('Código em uso.', 'error'); setIsLoading(false); return; }
                     const userRole = googleCode === '99206' ? 'admin' : 'vendedor';
-                    const newUser = { name: pendingGoogleUser.displayName, code: googleCode, email: pendingGoogleUser.email, password: '', role: userRole, avatar: pendingGoogleUser.photoURL };
+                    const hashed = await hashPassword(setPass1); // senha obrigatória, pra poder entrar pelo celular
+                    const newUser = { name: pendingGoogleUser.displayName, code: googleCode, email: pendingGoogleUser.email, password: hashed, role: userRole, avatar: pendingGoogleUser.photoURL };
                     const docRef = await db.collection('users').add(newUser);
-                    showMessage('Conta Google vinculada!', 'success');
+                    showMessage('Conta Google vinculada com senha!', 'success');
                     onLogin({ ...newUser, id: docRef.id });
                 } catch(err) { showMessage('Erro ao gravar.', 'error'); } finally { setIsLoading(false); }
             };
@@ -423,14 +448,27 @@
                             <p className="text-slate-500 text-sm mt-1">{isRegistering ? 'Crie sua conta de Vendedor' : 'Gestão Inteligente de Vendas'}</p>
                         </div>
 
-                        {pendingGoogleUser ? (
+                        {needsPass ? (
+                            <form onSubmit={handleDefinirSenha} className="space-y-4 animate-in fade-in">
+                                <div className="text-center mb-2">
+                                    {needsPass.avatar ? <img src={needsPass.avatar} alt="Perfil" className="w-16 h-16 rounded-full mx-auto border-2 border-rose-500 mb-2"/> : null}
+                                    <p className="text-slate-800 text-sm">Olá, <span className="font-bold">{needsPass.name}</span>! 👋</p>
+                                    <p className="text-slate-500 text-xs mt-1">Sua conta ainda não tem senha. Crie uma agora pra conseguir entrar pelo <b>celular</b> (com seu código <b>{needsPass.code}</b> + senha).</p>
+                                </div>
+                                <div className="relative"><div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400"><IconLock/></div><input type="password" value={setPass1} onChange={e => setSetPass1(e.target.value)} disabled={isLoading} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none text-sm" required placeholder="Nova senha (letras, números, especial)"/></div>
+                                <div className="relative"><div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400"><IconLock/></div><input type="password" value={setPass2} onChange={e => setSetPass2(e.target.value)} disabled={isLoading} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none text-sm" required placeholder="Repita a senha"/></div>
+                                <button type="submit" disabled={isLoading} className="w-full bg-rose-700 hover:bg-rose-800 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all flex justify-center">{isLoading ? <div className="h-5 w-5"><IconLoader2/></div> : 'Salvar senha e entrar'}</button>
+                            </form>
+                        ) : pendingGoogleUser ? (
                             <form onSubmit={handleConfirmGoogleCode} className="space-y-4 animate-in fade-in">
                                 <div className="text-center mb-4">
                                     <img src={pendingGoogleUser.photoURL} alt="Perfil" className="w-16 h-16 rounded-full mx-auto border-2 border-rose-500 mb-2"/>
                                     <p className="text-slate-800 text-sm">Olá, <span className="font-bold">{pendingGoogleUser.displayName}</span>!</p>
-                                    <p className="text-slate-500 text-xs mt-1">Defina seu código de vendedor (ID):</p>
+                                    <p className="text-slate-500 text-xs mt-1">Defina seu código de vendedor (ID) e uma senha:</p>
                                 </div>
                                 <div className="relative"><div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400"><IconUser/></div><input type="text" value={googleCode} onChange={e => setGoogleCode(e.target.value)} disabled={isLoading} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none text-sm" required placeholder="Seu Código Único (Ex: 99206)"/></div>
+                                <div className="relative"><div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400"><IconLock/></div><input type="password" value={setPass1} onChange={e => setSetPass1(e.target.value)} disabled={isLoading} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none text-sm" required placeholder="Crie uma senha (letras, números, especial)"/></div>
+                                <div className="relative"><div className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400"><IconLock/></div><input type="password" value={setPass2} onChange={e => setSetPass2(e.target.value)} disabled={isLoading} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none text-sm" required placeholder="Repita a senha"/></div>
                                 <button type="submit" disabled={isLoading} className="w-full bg-rose-700 hover:bg-rose-800 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all flex justify-center">{isLoading ? <div className="h-5 w-5"><IconLoader2/></div> : 'Finalizar Cadastro'}</button>
                             </form>
                         ) : !isRegistering ? (
