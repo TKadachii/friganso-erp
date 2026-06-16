@@ -3186,15 +3186,30 @@
                 });
             };
 
-            // 💨 Pré-carrega a conversa do contato atual enquanto você lê o card (só no programa de PC),
-            // assim "Enviar automático" só clica em enviar — sem recarregar o WhatsApp na hora.
-            useEffect(() => {
-                if (!isElectron || !emCampanha) return;
-                const cli = comTelefone[idx]; if (!cli) return;
-                if (!window.__frigZap || !window.__frigZap.preparar) return;
-                const num = waNumber(cli.phone); if (!num) return;
-                window.__frigZap.preparar(num, personalizar(cli));
-            }, [emCampanha, idx]);
+            // 🤖 Envio automático em sequência: manda pra um, espera confirmar, vai pro próximo sozinho.
+            const [rodandoAuto, setRodandoAuto] = useState(false);
+            const pararRef = useRef(false);
+            const enviarIndice = (i) => new Promise(res => {
+                const cli = comTelefone[i]; if (!cli || !window.__frigZap) { res(false); return; }
+                window.__frigZap.enviar(waNumber(cli.phone), personalizar(cli), ok => res(ok));
+            });
+            const rodarAuto = async () => {
+                if (rodandoAuto || comTelefone.length === 0) return;
+                setRodandoAuto(true); pararRef.current = false;
+                let i = idx, okCount = 0;
+                while (i < comTelefone.length && !pararRef.current) {
+                    setIdx(i); setEnviando(true);
+                    const ok = await enviarIndice(i);
+                    setEnviando(false);
+                    if (ok) { okCount++; setEnviados(prev => { const s = new Set(prev); s.add(comTelefone[i].id); return s; }); }
+                    i++;
+                    if (i < comTelefone.length && !pararRef.current) await new Promise(r => setTimeout(r, 2000)); // respiro entre envios
+                }
+                setRodandoAuto(false);
+                if (pararRef.current) showMessage('Envio automático pausado em ' + okCount + ' enviada(s).', 'success');
+                else { setEmCampanha(false); showMessage('Campanha automática concluída! ' + okCount + ' enviada(s). 🎉', 'success'); }
+            };
+            const pararAuto = () => { pararRef.current = true; setRodandoAuto(false); };
 
             // ===== MODO CAMPANHA (passo a passo) =====
             if (emCampanha && atual) {
@@ -3220,7 +3235,17 @@
                             <div className="bg-[#e1ffc7] rounded-2xl p-4 border border-[#d3f4b8] mb-4">
                                 <pre className="font-sans text-sm whitespace-pre-wrap text-slate-800">{personalizar(atual)}</pre>
                             </div>
-                            <button disabled={enviando} onClick={() => {
+                            {/* 🤖 Envio automático em sequência (só no programa de PC) */}
+                            {isElectron && (rodandoAuto ? (
+                                <button onClick={pararAuto} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg animate-pulse">
+                                    ⏸ Parar envio automático ({enviados.size} enviada(s))
+                                </button>
+                            ) : (
+                                <button onClick={rodarAuto} className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
+                                    🤖 Enviar todos sozinho ({comTelefone.length - idx} restante{comTelefone.length - idx > 1 ? 's' : ''})
+                                </button>
+                            ))}
+                            <button disabled={enviando || rodandoAuto} onClick={() => {
                                 if (isElectron) { enviarAutomatico(); return; } // auto-envio no programa de PC
                                 // Fora do programa: abre o app do WhatsApp Desktop via protocolo
                                 const a = document.createElement('a');
@@ -3230,18 +3255,18 @@
                                 setTimeout(() => { try { a.remove(); } catch (e) {} }, 500);
                                 avancar(true);
                             }} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
-                                <div className="h-6 w-6"><IconWhatsApp/></div> {enviando ? 'Enviando...' : (isElectron ? 'Enviar automático ✨' : 'Abrir WhatsApp e Enviar')}
+                                <div className="h-6 w-6"><IconWhatsApp/></div> {enviando ? 'Enviando...' : (isElectron ? (rodandoAuto ? 'Enviando automático...' : 'Enviar só este ✨') : 'Abrir WhatsApp e Enviar')}
                             </button>
                             <div className="flex items-center gap-2">
-                                <button onClick={voltar} disabled={idx === 0} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-600 font-black text-xl rounded-xl transition-colors flex items-center justify-center gap-2" title="Voltar">← <span className="text-sm font-bold">Voltar</span></button>
+                                <button onClick={voltar} disabled={idx === 0 || rodandoAuto} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-600 font-black text-xl rounded-xl transition-colors flex items-center justify-center gap-2" title="Voltar">← <span className="text-sm font-bold">Voltar</span></button>
                                 <span className="text-xs font-bold text-slate-400 px-1 flex-shrink-0">{idx + 1}/{comTelefone.length}</span>
-                                <button onClick={() => avancar(false)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-900 text-white font-black text-xl rounded-xl transition-colors flex items-center justify-center gap-2" title="Avançar (pular)"><span className="text-sm font-bold">Avançar</span> →</button>
+                                <button onClick={() => avancar(false)} disabled={rodandoAuto} className="flex-1 py-3 bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white font-black text-xl rounded-xl transition-colors flex items-center justify-center gap-2" title="Avançar (pular)"><span className="text-sm font-bold">Avançar</span> →</button>
                             </div>
                             {isElectron && (
                                 <button onClick={() => window.__frigZap && window.__frigZap.abrir()} className="w-full mt-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-bold">💬 Abrir WhatsApp (conectar / ver QR)</button>
                             )}
                         </div>
-                        <p className="text-center text-xs text-slate-400 mt-4">{isElectron ? <>Clica em <b>Enviar automático</b> → ele abre a conversa e <b>envia sozinho</b>, já pulando pro próximo. 🎉</> : <>Clica em <b>Abrir WhatsApp</b> → <b>Enter</b> no app. Usa as setas <b>← →</b> pra navegar.</>}</p>
+                        <p className="text-center text-xs text-slate-400 mt-4">{isElectron ? <><b>🤖 Enviar todos sozinho</b> = dispara um por um sem você clicar (pode parar quando quiser). <b>Enviar só este</b> = manda só o atual.</> : <>Clica em <b>Abrir WhatsApp</b> → <b>Enter</b> no app. Usa as setas <b>← →</b> pra navegar.</>}</p>
                     </div>
                 );
             }
@@ -3564,28 +3589,58 @@
             const [zapW, setZapW] = useState(() => { try { return parseInt(window.localStorage.getItem('friganso_zapW')) || 440; } catch (e) { return 440; } });
             const [zapH, setZapH] = useState(() => { try { return parseInt(window.localStorage.getItem('friganso_zapH')) || 620; } catch (e) { return 620; } });
             useEffect(() => { try { window.localStorage.setItem('friganso_zapW', String(zapW)); window.localStorage.setItem('friganso_zapH', String(zapH)); } catch (e) {} }, [zapW, zapH]);
-            const mudarZap = (dw, dh) => { setZapW(w => Math.min(1000, Math.max(320, w + dw))); setZapH(h => Math.min(1040, Math.max(420, h + dh))); };
+            const mudarZap = (dw, dh) => { setZapW(w => Math.min(1200, Math.max(320, w + dw))); setZapH(h => Math.min(1100, Math.max(420, h + dh))); };
+            // 🖱️ Redimensionar o painel do WhatsApp arrastando o canto (ancorado embaixo à direita → cresce p/ cima e p/ esquerda)
+            const [resizandoZap, setResizandoZap] = useState(false);
+            const resizeStart = useRef(null);
+            const onResizeDown = (e) => { e.preventDefault(); resizeStart.current = { sx: e.clientX, sy: e.clientY, sw: zapW, sh: zapH }; setResizandoZap(true); };
+            const onResizeMove = (e) => {
+                const s = resizeStart.current; if (!s) return;
+                setZapW(Math.min(1200, Math.max(320, s.sw + (s.sx - e.clientX))));
+                setZapH(Math.min(1100, Math.max(420, s.sh + (s.sy - e.clientY))));
+            };
+            const onResizeUp = () => { setResizandoZap(false); resizeStart.current = null; };
             useEffect(() => {
                 if (!isElectron) return;
+                // Fallback: clica no botão Enviar (usado quando precisamos recarregar pela URL)
                 const SCRIPT = 'new Promise(function(resolve){var t=0;var iv=setInterval(function(){t++;var ic=document.querySelector(\'button[aria-label="Enviar"], button[aria-label="Send"]\')||document.querySelector(\'span[data-icon="send"]\')||document.querySelector(\'[data-testid="send"]\');if(ic){var b=ic;for(var i=0;i<4&&b;i++){if(b.tagName===\'BUTTON\'||(b.getAttribute&&b.getAttribute(\'role\')===\'button\'))break;b=b.parentElement;}try{(b||ic).click();}catch(e){}clearInterval(iv);resolve(\'ok\');return;}if(t>60){clearInterval(iv);resolve(\'timeout\');}},300);});';
-                let zapPreparedNum = null; // número já pré-carregado (chat aberto + texto pronto) p/ enviar sem recarregar
                 const zapURL = (num, msg) => 'https://web.whatsapp.com/send?phone=' + num + '&text=' + encodeURIComponent(msg);
+                // ⚡ Abre a conversa POR DENTRO do WhatsApp já carregado (busca o número, abre, escreve e envia) — SEM recarregar.
+                const scriptInApp = (num, texto) => {
+                    const N = JSON.stringify(String(num)), T = JSON.stringify(String(texto));
+                    return 'new Promise(function(resolve){'
+                        + 'var numero=' + N + ', texto=' + T + ';'
+                        + 'var passo="busca",t=0,marco=0;'
+                        + 'function q(s){return document.querySelector(s);}'
+                        + 'function caixaBusca(){return q(\'div[contenteditable="true"][data-tab="3"]\')||q(\'#side div[contenteditable="true"]\')||q(\'div[role="textbox"][contenteditable="true"]\');}'
+                        + 'function composer(){return q(\'#main div[contenteditable="true"][data-tab="10"]\')||q(\'#main footer div[contenteditable="true"]\')||q(\'footer div[contenteditable="true"]\');}'
+                        + 'function btnEnviar(){return q(\'button[aria-label="Enviar"]\')||q(\'button[aria-label="Send"]\')||q(\'span[data-icon="send"]\')||q(\'[data-testid="send"]\');}'
+                        + 'function digitar(el,val){el.focus();try{document.execCommand("selectAll",false,null);document.execCommand("delete",false,null);}catch(e){}try{document.execCommand("insertText",false,val);}catch(e){}}'
+                        + 'var iv=setInterval(function(){t++;try{'
+                        +   'if(passo==="busca"){var cx=caixaBusca();if(cx){digitar(cx,numero);passo="abrir";marco=t;}else if(t>16){clearInterval(iv);resolve("nao_carregado");}}'
+                        +   'else if(passo==="abrir"){if(t-marco<3)return;var itens=document.querySelectorAll(\'#pane-side div[role="listitem"]\');if(itens&&itens.length){var alvo=itens[0].querySelector(\'[role="button"]\')||itens[0].querySelector(\'div[tabindex]\')||itens[0];try{alvo.click();}catch(e){try{itens[0].click();}catch(e2){}}passo="abriu";marco=t;}else if(t-marco>14){clearInterval(iv);resolve("nao_achou");}}'
+                        +   'else if(passo==="abriu"){var cx2=caixaBusca();var vazia=!cx2||((cx2.textContent||"").trim()==="");if(vazia&&q("#main")){passo="escrever";marco=t;}else if(t-marco>16){passo="escrever";marco=t;}}'
+                        +   'else if(passo==="escrever"){var cp=composer();if(cp){digitar(cp,texto);passo="enviar";marco=t;}else if(t-marco>16){clearInterval(iv);resolve("sem_composer");}}'
+                        +   'else if(passo==="enviar"){if(t-marco<2)return;var b=btnEnviar();if(b){var x=b;for(var i=0;i<4&&x;i++){if(x.tagName==="BUTTON"){break;}x=x.parentElement;}try{(x||b).click();}catch(e){}clearInterval(iv);resolve("ok");}else if(t-marco>16){clearInterval(iv);resolve("sem_botao");}}'
+                        + '}catch(e){}if(t>140){clearInterval(iv);resolve("timeout");}},250);'
+                        + '});';
+                };
+                const fallbackURL = (wv, num, msg, cb) => {
+                    try { wv.loadURL(zapURL(num, msg)); } catch (e) {}
+                    setTimeout(() => { wv.executeJavaScript(SCRIPT).then(r => cb && cb(r === 'ok')).catch(() => cb && cb(false)); }, 2800);
+                };
                 window.__frigZap = {
                     abrir: () => setZapAberto(true),
                     fechar: () => setZapAberto(false),
-                    // 💨 Pré-carrega a conversa em segundo plano (enquanto você lê o card), SEM enviar
-                    preparar: (num, msg) => {
-                        const wv = appZapRef.current; if (!wv || !num) return;
-                        setZapAberto(true);
-                        try { wv.loadURL(zapURL(num, msg)); zapPreparedNum = num; } catch (e) {}
-                    },
                     enviar: (num, msg, cb) => {
                         const wv = appZapRef.current; if (!wv) { cb && cb(false); return; }
                         setZapAberto(true);
-                        const jaPronto = (num && num === zapPreparedNum); // já pré-carregado? então não recarrega
-                        zapPreparedNum = null; // consome (evita reenvio / duplo-clique sem recarregar)
-                        if (!jaPronto) { try { wv.loadURL(zapURL(num, msg)); } catch (e) {} }
-                        setTimeout(() => { wv.executeJavaScript(SCRIPT).then(r => cb && cb(r === 'ok')).catch(() => cb && cb(false)); }, jaPronto ? 150 : 2800);
+                        try {
+                            wv.executeJavaScript(scriptInApp(num, msg)).then(r => {
+                                if (r === 'ok') { cb && cb(true); }
+                                else { fallbackURL(wv, num, msg, cb); } // não achou pela busca → recarrega pelo link (garante o destinatário)
+                            }).catch(() => fallbackURL(wv, num, msg, cb));
+                        } catch (e) { fallbackURL(wv, num, msg, cb); }
                     }
                 };
             }, []);
@@ -3832,11 +3887,18 @@
                         </div>
                     )}
 
+                    {/* Overlay que captura o mouse por cima do WhatsApp enquanto redimensiona */}
+                    {isElectron && resizandoZap && (
+                        <div onMouseMove={onResizeMove} onMouseUp={onResizeUp} onMouseLeave={onResizeUp} style={{ position: 'fixed', inset: 0, zIndex: 9998, cursor: 'nwse-resize' }} />
+                    )}
+
                     {/* 🟢 WhatsApp embutido SEMPRE montado (só Electron) — fica logado e nunca recarrega */}
                     {isElectron && (
-                        <div style={{ position: 'fixed', zIndex: 95, bottom: '14px', right: zapAberto ? '14px' : '-4000px', width: zapW + 'px', height: zapH + 'px', maxWidth: '98vw', maxHeight: '94vh', boxShadow: '0 12px 48px rgba(0,0,0,.4)', borderRadius: '16px', overflow: 'hidden', background: '#fff', display: 'flex', flexDirection: 'column', transition: 'right .2s' }}>
+                        <div style={{ position: 'fixed', zIndex: 95, bottom: '14px', right: zapAberto ? '14px' : '-4000px', width: zapW + 'px', height: zapH + 'px', maxWidth: '98vw', maxHeight: '94vh', boxShadow: '0 12px 48px rgba(0,0,0,.4)', borderRadius: '16px', overflow: 'hidden', background: '#fff', display: 'flex', flexDirection: 'column', transition: resizandoZap ? 'none' : 'right .2s' }}>
+                            {/* alça de redimensionar — arraste o canto superior esquerdo */}
+                            <div onMouseDown={onResizeDown} title="Arraste para redimensionar a janela" style={{ position: 'absolute', top: 0, left: 0, width: '22px', height: '22px', cursor: 'nwse-resize', zIndex: 6, background: 'linear-gradient(135deg, rgba(255,255,255,.9) 0 45%, transparent 45%)', borderTopLeftRadius: '16px' }} />
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px', background: '#075e54', color: '#fff' }}>
-                                <span style={{ fontWeight: 'bold', fontSize: '12px', flex: 1 }}>💬 WhatsApp</span>
+                                <span style={{ fontWeight: 'bold', fontSize: '12px', flex: 1, paddingLeft: '16px' }}>💬 WhatsApp</span>
                                 <button onClick={() => mudarZap(-80, -80)} title="Diminuir janela" style={{ width: '24px', height: '24px', border: 'none', borderRadius: '6px', background: 'rgba(255,255,255,.2)', color: '#fff', fontWeight: 'bold', fontSize: '15px', cursor: 'pointer', marginRight: '3px' }}>−</button>
                                 <button onClick={() => mudarZap(80, 80)} title="Aumentar janela" style={{ width: '24px', height: '24px', border: 'none', borderRadius: '6px', background: 'rgba(255,255,255,.2)', color: '#fff', fontWeight: 'bold', fontSize: '15px', cursor: 'pointer', marginRight: '8px' }}>+</button>
                                 <button onClick={() => setZapAberto(false)} title="Fechar" style={{ color: '#fff', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', lineHeight: 1 }}>✕</button>
