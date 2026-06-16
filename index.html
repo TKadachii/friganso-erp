@@ -205,6 +205,8 @@
             if (value === null || value === undefined) return 'R$ 0,00';
             return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 });
         };
+        // true quando rodando dentro do programa de PC (Electron) — habilita o navegador embutido
+        const isElectron = (typeof window !== 'undefined') && (!!window.electronBridge || (navigator.userAgent || '').indexOf('Electron') !== -1);
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             let hasDiscount = true;
@@ -3357,6 +3359,72 @@
             );
         };
 
+        // 🌐 Navegador embutido (só no programa de PC / Electron) — Chrome dentro do app
+        const NavegadorScreen = () => {
+            const wvRef = useRef(null);
+            const INICIAL = 'http://spd1.friganso.com.br/rdm-business/';
+            const [barra, setBarra] = useState(INICIAL);
+            const [carregando, setCarregando] = useState(false);
+            const [urlAtual, setUrlAtual] = useState(INICIAL);
+
+            useEffect(() => {
+                const wv = wvRef.current; if (!wv) return;
+                const onStart = () => setCarregando(true);
+                const onStop = () => { setCarregando(false); try { const u = wv.getURL(); setUrlAtual(u); setBarra(u); } catch (e) {} };
+                wv.addEventListener('did-start-loading', onStart);
+                wv.addEventListener('did-stop-loading', onStop);
+                return () => { try { wv.removeEventListener('did-start-loading', onStart); wv.removeEventListener('did-stop-loading', onStop); } catch (e) {} };
+            }, []);
+
+            const irPara = (u) => {
+                let x = (u || '').trim(); if (!x) return;
+                if (!/^https?:\/\//i.test(x) && !/^[a-z]+:\/\//i.test(x)) x = 'https://' + x;
+                setBarra(x);
+                try { wvRef.current.loadURL(x); } catch (e) {}
+            };
+            const voltar = () => { try { if (wvRef.current.canGoBack()) wvRef.current.goBack(); } catch (e) {} };
+            const avancar = () => { try { if (wvRef.current.canGoForward()) wvRef.current.goForward(); } catch (e) {} };
+            const recarregar = () => { try { wvRef.current.reload(); } catch (e) {} };
+
+            if (!isElectron) {
+                return (
+                    <div className="max-w-xl mx-auto bg-amber-50 border border-amber-200 rounded-2xl p-6 text-amber-800 text-sm">
+                        🌐 O <b>Navegador embutido</b> só funciona no <b>programa de PC</b> (Friganso ERP Desktop). No site/celular, use as abas normais do navegador.
+                    </div>
+                );
+            }
+
+            const Btn = ({ onClick, children, title }) => (
+                <button onClick={onClick} title={title} className="h-9 w-9 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex-shrink-0">{children}</button>
+            );
+
+            return (
+                <div className="animate-in fade-in flex flex-col" style={{ height: 'calc(100vh - 80px)' }}>
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <Btn onClick={voltar} title="Voltar">←</Btn>
+                        <Btn onClick={avancar} title="Avançar">→</Btn>
+                        <Btn onClick={recarregar} title="Recarregar">{carregando ? '×' : '⟳'}</Btn>
+                        <input
+                            type="text" value={barra}
+                            onChange={e => setBarra(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') irPara(barra); }}
+                            className="flex-1 min-w-[200px] px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-rose-500"
+                            placeholder="Digite um endereço e Enter..."
+                        />
+                        <button onClick={() => irPara(barra)} className="px-3 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-sm font-bold">Ir</button>
+                    </div>
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <button onClick={() => irPara('http://spd1.friganso.com.br/rdm-business/')} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-900">🏢 SPAmov</button>
+                        <button onClick={() => irPara('https://web.whatsapp.com')} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">💬 WhatsApp Web</button>
+                        {carregando && <span className="text-xs text-slate-400">carregando...</span>}
+                    </div>
+                    <div className="flex-1 rounded-2xl overflow-hidden border border-slate-200 bg-white">
+                        <webview ref={wvRef} src={INICIAL} partition="persist:friganso-nav" allowpopups="true" style={{ width: '100%', height: '100%', display: 'inline-flex' }}></webview>
+                    </div>
+                </div>
+            );
+        };
+
         const App = () => {
             const [user, setUser] = useState(() => { const s = window.localStorage.getItem('friganso_loggedUser'); return s ? JSON.parse(s) : null; });
             const [activeRoute, setActiveRoute] = useState(() => {
@@ -3434,6 +3502,7 @@
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
+                    case 'navegador': return <NavegadorScreen />;
                     case 'tutorial': return <TutorialScreen setActiveRoute={setActiveRoute} />;
                     case 'debug': return user.role === 'admin' ? <DebugScreen user={user} showMessage={showMessage} /> : <DashboardScreen user={user} />;
                     default: return <DashboardScreen user={user} />;
@@ -3507,6 +3576,7 @@
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Vendas Diárias</p>
                             <NavButton route="pdf" icon={IconFileText} label="Tabela do Dia (PDF)" />
                             <NavButton route="pedido" icon={IconReceipt} label="Fazer Pedido" />
+                            {isElectron && <NavButton route="navegador" icon={IconWhatsApp} label="🌐 Navegador" />}
                             <NavButton route="resumo" icon={IconReceipt} label="Resumo de Pedido" />
                             <NavButton route="orcamentos" icon={IconWhatsApp} label="Gerador de Zap" />
                             <NavButton route="disparos" icon={IconWhatsApp} label="Disparos WhatsApp" />
