@@ -207,6 +207,8 @@
         };
         // true quando rodando dentro do programa de PC (Electron) — habilita o navegador embutido
         const isElectron = (typeof window !== 'undefined') && (!!window.electronBridge || (navigator.userAgent || '').indexOf('Electron') !== -1);
+        // 📱 App Android nativo (Capacitor): tem o navegador controlado pra automação do SPAmov
+        const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             let hasDiscount = true;
@@ -2742,6 +2744,18 @@
                     window.electronAuto.lancar(pedido, { usuario: u, senha: s });
                     window.__frigNav.abrir(SPURL);
                     showMessage('Abrindo no navegador do programa... vou logar, navegar e lançar sozinho. 🤖', 'success');
+                    return;
+                }
+                // 📱 APP ANDROID: lança no navegador nativo controlado (user-agent de PC, sem extensão, sem Firefox)
+                if (isCapacitor) {
+                    const P = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.SpamovAuto : null;
+                    if (P && P.lancar) {
+                        P.lancar({ url: SPURL, creds: { usuario: u, senha: s }, pedido: pedido });
+                        showMessage('Abrindo o SPAmov no app... vou logar, navegar e lançar sozinho. 🤖', 'success');
+                    } else {
+                        setEnviado(false);
+                        showMessage('Automação nativa indisponível nesta versão do app. Me avise pra corrigir.', 'error');
+                    }
                     return;
                 }
                 // 📱 Celular: o modo PC do Firefox é POR ABA — aba nova nasce em modo celular e quebra o robô.
