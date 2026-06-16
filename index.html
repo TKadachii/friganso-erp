@@ -19,7 +19,7 @@
     <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
     <!-- PDF.js para leitura de PDFs offline -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <!-- SheetJS para importar planilhas Excel/CSV de clientes -->
@@ -2737,6 +2737,13 @@
                 const SPURL = 'http://spd1.friganso.com.br/rdm-business/';
                 const msg = { source: 'friganso-app', type: 'LANCAR_AUTO', usuario: u, senha: s, pedido: pedido };
                 setEnviado(true);
+                // 💻 PROGRAMA DE PC: lança DENTRO do navegador embutido (sem abrir o Chrome / sem extensão)
+                if (isElectron && window.electronAuto && window.__frigNav) {
+                    window.electronAuto.lancar(pedido, { usuario: u, senha: s });
+                    window.__frigNav.abrir(SPURL);
+                    showMessage('Abrindo no navegador do programa... vou logar, navegar e lançar sozinho. 🤖', 'success');
+                    return;
+                }
                 // 📱 Celular: o modo PC do Firefox é POR ABA — aba nova nasce em modo celular e quebra o robô.
                 // Então no celular a gente NAVEGA A MESMA ABA (mantém o modo PC). No PC, abre aba nova (mantém o app aberto).
                 const ehCelular = (navigator.maxTouchPoints > 0) || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || window.innerWidth < 820;
@@ -3503,6 +3510,40 @@
                 };
             }, []);
 
+            // 🌐 Navegador embutido SEMPRE montado (não recarrega ao trocar de aba) — só no programa de PC.
+            // Fica escondido fora da tela quando você sai da aba "Navegador" e reaparece no mesmo lugar onde parou.
+            const NAV_INICIAL = 'http://spd1.friganso.com.br/rdm-business/';
+            const NAV_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+            const navWvRef = useRef(null);
+            const [navBarra, setNavBarra] = useState(NAV_INICIAL);
+            const [navCarregando, setNavCarregando] = useState(false);
+            useEffect(() => {
+                if (!isElectron) return;
+                const wv = navWvRef.current; if (!wv) return;
+                const onStart = () => setNavCarregando(true);
+                const onStop = () => { setNavCarregando(false); try { const u = wv.getURL(); setNavBarra(u); } catch (e) {} };
+                wv.addEventListener('did-start-loading', onStart);
+                wv.addEventListener('did-stop-loading', onStop);
+                return () => { try { wv.removeEventListener('did-start-loading', onStart); wv.removeEventListener('did-stop-loading', onStop); } catch (e) {} };
+            }, []);
+            const navIrPara = (u) => {
+                let x = (u || '').trim(); if (!x) return;
+                if (!/^https?:\/\//i.test(x) && !/^[a-z]+:\/\//i.test(x)) x = 'https://' + x;
+                setNavBarra(x);
+                try { navWvRef.current.loadURL(x); } catch (e) {}
+            };
+            const navVoltar = () => { try { if (navWvRef.current.canGoBack()) navWvRef.current.goBack(); } catch (e) {} };
+            const navAvancar = () => { try { if (navWvRef.current.canGoForward()) navWvRef.current.goForward(); } catch (e) {} };
+            const navRecarregar = () => { try { navWvRef.current.reload(); } catch (e) {} };
+
+            // 🌐 API global pra outras telas abrirem o navegador embutido e mandarem ele navegar
+            useEffect(() => {
+                if (!isElectron) return;
+                window.__frigNav = {
+                    abrir: (url) => { setActiveRoute('navegador'); if (url) setTimeout(() => navIrPara(url), 250); }
+                };
+            }, []);
+
             // Aplica o tema (claro/escuro) e salva a preferência
             useEffect(() => {
                 document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -3568,7 +3609,7 @@
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
-                    case 'navegador': return <NavegadorScreen />;
+                    case 'navegador': return isElectron ? null : <NavegadorScreen />;
                     case 'tutorial': return <TutorialScreen setActiveRoute={setActiveRoute} />;
                     case 'debug': return user.role === 'admin' ? <DebugScreen user={user} showMessage={showMessage} /> : <DashboardScreen user={user} />;
                     default: return <DashboardScreen user={user} />;
@@ -3678,6 +3719,27 @@
                         <div className="relative z-10 max-w-7xl mx-auto">
                             {renderContent()}
                         </div>
+
+                        {/* 🌐 Navegador embutido SEMPRE montado (só Electron) — preserva a página ao trocar de aba */}
+                        {isElectron && (
+                            <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: activeRoute === 'navegador' ? 30 : -1, background: '#f1f5f9', display: 'flex', flexDirection: 'column', padding: '12px', visibility: activeRoute === 'navegador' ? 'visible' : 'hidden' }}>
+                                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                    <button onClick={navVoltar} title="Voltar" className="h-9 w-9 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex-shrink-0">←</button>
+                                    <button onClick={navAvancar} title="Avançar" className="h-9 w-9 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex-shrink-0">→</button>
+                                    <button onClick={navRecarregar} title="Recarregar" className="h-9 w-9 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex-shrink-0">{navCarregando ? '×' : '⟳'}</button>
+                                    <input type="text" value={navBarra} onChange={e => setNavBarra(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') navIrPara(navBarra); }} className="flex-1 min-w-[200px] px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-rose-500" placeholder="Digite um endereço e Enter..." />
+                                    <button onClick={() => navIrPara(navBarra)} className="px-3 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-sm font-bold">Ir</button>
+                                </div>
+                                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                    <button onClick={() => navIrPara('http://spd1.friganso.com.br/rdm-business/')} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-900">🏢 SPAmov</button>
+                                    <button onClick={() => navIrPara('https://web.whatsapp.com')} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700">💬 WhatsApp Web</button>
+                                    {navCarregando && <span className="text-xs text-slate-400">carregando...</span>}
+                                </div>
+                                <div className="flex-1 rounded-2xl overflow-hidden border border-slate-200 bg-white">
+                                    <webview ref={navWvRef} src={NAV_INICIAL} partition="persist:friganso-nav" useragent={NAV_UA} allowpopups="true" style={{ width: '100%', height: '100%', display: 'inline-flex' }}></webview>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* 🔍 Zoom do layout (canto superior direito) — só no programa de PC */}
