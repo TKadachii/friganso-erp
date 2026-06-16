@@ -3362,6 +3362,7 @@
         // 🌐 Navegador embutido (só no programa de PC / Electron) — Chrome dentro do app
         const NavegadorScreen = () => {
             const wvRef = useRef(null);
+            const UA_CHROME = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
             const INICIAL = 'http://spd1.friganso.com.br/rdm-business/';
             const [barra, setBarra] = useState(INICIAL);
             const [carregando, setCarregando] = useState(false);
@@ -3419,7 +3420,7 @@
                         {carregando && <span className="text-xs text-slate-400">carregando...</span>}
                     </div>
                     <div className="flex-1 rounded-2xl overflow-hidden border border-slate-200 bg-white">
-                        <webview ref={wvRef} src={INICIAL} partition="persist:friganso-nav" allowpopups="true" style={{ width: '100%', height: '100%', display: 'inline-flex' }}></webview>
+                        <webview ref={wvRef} src={INICIAL} partition="persist:friganso-nav" useragent={UA_CHROME} allowpopups="true" style={{ width: '100%', height: '100%', display: 'inline-flex' }}></webview>
                     </div>
                 </div>
             );
