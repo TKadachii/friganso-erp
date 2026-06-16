@@ -2987,6 +2987,9 @@
             const [busca, setBusca] = useState('');
             const [selecionados, setSelecionados] = useState(new Set());
             const [emCampanha, setEmCampanha] = useState(false);
+            const zapWvRef = useRef(null);      // webview do WhatsApp embutido (só Electron)
+            const [enviando, setEnviando] = useState(false);
+            const UA_CHROME = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
             const [idx, setIdx] = useState(0);
             const [enviados, setEnviados] = useState(new Set());
             const [phoneEditId, setPhoneEditId] = useState(null);
@@ -3118,6 +3121,40 @@
             };
             const voltar = () => { if (idx > 0) setIdx(idx - 1); };
 
+            // Script injetado DENTRO do WhatsApp Web (embutido): espera a conversa carregar e clica em Enviar
+            const SCRIPT_ENVIAR = `new Promise(function(resolve){
+                var tries = 0;
+                var iv = setInterval(function(){
+                    tries++;
+                    var icon = document.querySelector('button[aria-label="Enviar"], button[aria-label="Send"]') || document.querySelector('span[data-icon="send"]') || document.querySelector('[data-testid="send"]');
+                    if (icon) {
+                        var btn = icon; for (var i=0;i<4 && btn;i++){ if (btn.tagName==='BUTTON' || (btn.getAttribute && btn.getAttribute('role')==='button')) break; btn = btn.parentElement; }
+                        try { (btn||icon).click(); } catch(e){}
+                        clearInterval(iv); resolve('ok'); return;
+                    }
+                    if (tries > 60) { clearInterval(iv); resolve('timeout'); }
+                }, 300);
+            });`;
+
+            // Envia AUTOMÁTICO pelo WhatsApp embutido (só no programa de PC)
+            const enviarAutomatico = () => {
+                const wv = zapWvRef.current;
+                if (!wv) { showMessage('Navegador do WhatsApp não está pronto.', 'error'); return; }
+                const cli = atual;
+                const num = waNumber(cli.phone);
+                const msg = personalizar(cli);
+                setEnviando(true);
+                try { wv.loadURL('https://web.whatsapp.com/send?phone=' + num + '&text=' + encodeURIComponent(msg)); } catch (e) {}
+                // dá um tempo pra abrir a conversa e então clica em Enviar (o script espera o botão aparecer)
+                setTimeout(() => {
+                    wv.executeJavaScript(SCRIPT_ENVIAR).then((r) => {
+                        setEnviando(false);
+                        if (r === 'ok') { avancar(true); }
+                        else { showMessage('Não achei o botão enviar. Se for a 1ª vez, escaneie o QR na janela do WhatsApp abaixo.', 'error'); }
+                    }).catch(() => { setEnviando(false); });
+                }, 2500);
+            };
+
             // ===== MODO CAMPANHA (passo a passo) =====
             if (emCampanha && atual) {
                 const prodsRec = incluirProduto ? recomendarProdutos(atual, qtdProdutos) : [];
@@ -3142,24 +3179,34 @@
                             <div className="bg-[#e1ffc7] rounded-2xl p-4 border border-[#d3f4b8] mb-4">
                                 <pre className="font-sans text-sm whitespace-pre-wrap text-slate-800">{personalizar(atual)}</pre>
                             </div>
-                            <button onClick={() => {
-                                // Abre o APP do WhatsApp Desktop via protocolo (whatsapp://) — o Chrome NÃO sai do site.
+                            <button disabled={enviando} onClick={() => {
+                                if (isElectron) { enviarAutomatico(); return; } // auto-envio no programa de PC
+                                // Fora do programa: abre o app do WhatsApp Desktop via protocolo
                                 const a = document.createElement('a');
                                 a.href = 'whatsapp://send?phone=' + waNumber(atual.phone) + '&text=' + encodeURIComponent(personalizar(atual));
                                 document.body.appendChild(a);
                                 a.click();
                                 setTimeout(() => { try { a.remove(); } catch (e) {} }, 500);
-                                avancar(true); // já marca como enviado e pula pro próximo cliente
-                            }} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
-                                <div className="h-6 w-6"><IconWhatsApp/></div> Abrir WhatsApp e Enviar
+                                avancar(true);
+                            }} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
+                                <div className="h-6 w-6"><IconWhatsApp/></div> {enviando ? 'Enviando...' : (isElectron ? 'Enviar automático ✨' : 'Abrir WhatsApp e Enviar')}
                             </button>
                             <div className="flex items-center gap-2">
                                 <button onClick={voltar} disabled={idx === 0} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-600 font-black text-xl rounded-xl transition-colors flex items-center justify-center gap-2" title="Voltar">← <span className="text-sm font-bold">Voltar</span></button>
                                 <span className="text-xs font-bold text-slate-400 px-1 flex-shrink-0">{idx + 1}/{comTelefone.length}</span>
                                 <button onClick={() => avancar(false)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-900 text-white font-black text-xl rounded-xl transition-colors flex items-center justify-center gap-2" title="Avançar (pular)"><span className="text-sm font-bold">Avançar</span> →</button>
                             </div>
+                            {/* WhatsApp Web embutido (só no programa de PC) — onde o auto-envio acontece */}
+                            {isElectron && (
+                                <div className="mt-4">
+                                    <p className="text-[11px] text-slate-400 mb-1">📲 WhatsApp embutido — <b>na 1ª vez, escaneie o QR aqui</b> (depois fica logado):</p>
+                                    <div className="rounded-2xl overflow-hidden border border-slate-200" style={{ height: '380px' }}>
+                                        <webview ref={zapWvRef} src="https://web.whatsapp.com" partition="persist:friganso-nav" useragent={UA_CHROME} allowpopups="true" style={{ width: '100%', height: '100%', display: 'inline-flex' }}></webview>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                        <p className="text-center text-xs text-slate-400 mt-4">Clica em <b>Abrir WhatsApp</b> → dá <b>Enter</b> no app pra enviar. O site <b>já pula pro próximo</b> sozinho. Use as setas <b>← →</b> se quiser voltar/avançar na mão. 🎉</p>
+                        <p className="text-center text-xs text-slate-400 mt-4">{isElectron ? <>Clica em <b>Enviar automático</b> → ele abre a conversa e <b>envia sozinho</b>, já pulando pro próximo. 🎉</> : <>Clica em <b>Abrir WhatsApp</b> → <b>Enter</b> no app. Usa as setas <b>← →</b> pra navegar.</>}</p>
                     </div>
                 );
             }
