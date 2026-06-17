@@ -3251,6 +3251,16 @@
 
             const iniciar = () => {
                 if (comTelefone.length === 0) { showMessage('Selecione ao menos 1 cliente com telefone cadastrado.', 'error'); return; }
+                // 📱 APP ANDROID: usa o balão flutuante (overlay) — você toca e ele abre cada cliente no WhatsApp
+                const ZB = (isCapacitor && window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.ZapBolha : null;
+                if (ZB && ZB.iniciar) {
+                    const contatos = comTelefone.map(c => ({ nome: c.name || ('Cliente ' + (c.code || '')), telefone: waNumber(c.phone), mensagem: personalizar(c) }));
+                    ZB.iniciar({ contatos }).then(res => {
+                        if (res && res.semPermissao) showMessage('Ative "Exibir sobre outros apps" pro Friganso (abriu a tela) e toque em Iniciar de novo. 🎈', 'error');
+                        else showMessage('Balão ativado! Vá pro WhatsApp e toque no balão verde pra ir enviando, um por um. 🎈', 'success');
+                    }).catch(() => showMessage('Não consegui ativar o balão.', 'error'));
+                    return;
+                }
                 setIdx(0); setEnviados(new Set()); setEmCampanha(true);
             };
             const atual = comTelefone[idx];
