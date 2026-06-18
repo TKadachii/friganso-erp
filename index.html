@@ -879,6 +879,37 @@
                 } catch(e) { showMessage('Erro ao baixar tabela da nuvem.', 'error'); } finally { setIsLoading(false); }
             };
 
+            // 📊 Compara duas tabelas: o que mudou de preço, o que é novo e o que saiu (de "base" → "atual")
+            const gerarComparacao = (baseArr, atualArr) => {
+                const base = new Map((baseArr || []).map(p => [String(p.code), p]));
+                const changes = [], novos = [];
+                (atualArr || []).forEach(np => {
+                    const op = base.get(String(np.code));
+                    if (!op) { novos.push({ code: np.code, name: np.name, price: Number(np.originalPrice) || 0 }); return; }
+                    const oldP = Number(op.originalPrice) || 0, newP = Number(np.originalPrice) || 0;
+                    if (Math.abs(oldP - newP) >= 0.01) changes.push({ code: np.code, name: np.name, oldPrice: oldP, newPrice: newP });
+                });
+                const removidos = (baseArr || []).filter(p => !(atualArr || []).some(np => String(np.code) === String(p.code))).length;
+                return { changes, novos, removidos };
+            };
+
+            // Botão "Comparar com a anterior": compara a tabela carregada com a última da nuvem;
+            // se forem iguais (você baixou a atual), compara com a versão de antes.
+            const compararComAnterior = async () => {
+                if (!products || !products.length) { showMessage('Abra/baixe uma tabela primeiro.', 'error'); return; }
+                try {
+                    setIsLoading(true);
+                    const snap = await db.collection('pdf_versions').orderBy('updatedAt', 'desc').limit(5).get();
+                    const vers = snap.docs.map(d => d.data());
+                    if (!vers.length) { showMessage('Não há tabela anterior na nuvem pra comparar.', 'error'); return; }
+                    let comp = gerarComparacao(vers[0].products, products);
+                    const vazio = comp.changes.length === 0 && comp.novos.length === 0 && comp.removidos === 0;
+                    if (vazio && vers.length >= 2) comp = gerarComparacao(vers[1].products, products); // a atual é a v0 → compara com a real anterior
+                    setPriceChanges(comp);
+                    showMessage('Comparação com a tabela anterior pronta. Veja abaixo. 👇', 'success');
+                } catch (e) { showMessage('Erro ao comparar com a anterior.', 'error'); } finally { setIsLoading(false); }
+            };
+
             const filteredProducts = useMemo(() => {
                 if (!searchTerm) return products;
                 return products.filter(p => matchProduto(p, searchTerm.trim()));
@@ -890,7 +921,7 @@
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
                             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md flex flex-col max-h-[70vh] overflow-hidden">
                                 <div className="p-5 border-b bg-slate-50 flex justify-between items-center">
-                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><div className="h-5 w-5"><IconCloudDownload/></div> Histórico de Tabelas</h2>
+                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><div className="h-5 w-5"><IconCloudDownload/></div> Histórico de Tabelas <span className="text-xs font-medium text-slate-400">(carregar ou comparar)</span></h2>
                                     <button onClick={() => setShowCloudModal(false)} className="h-8 w-8 flex items-center justify-center rounded-full bg-slate-200 hover:bg-slate-300 transition-colors"><div className="h-4 w-4"><IconX/></div></button>
                                 </div>
                                 <div className="overflow-y-auto flex-1 p-4 space-y-2">
@@ -904,7 +935,10 @@
                                                 <p className="font-bold text-slate-700 text-sm">{i === 0 ? '🟢 Versão Atual' : `Versão ${pdfVersions.length - i}`}</p>
                                                 <p className="text-xs text-slate-500 mt-0.5">{v.date ? v.date.toLocaleDateString('pt-BR') + ' às ' + v.date.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'}) : 'Data desconhecida'} • {v.productCount || (v.products?.length || 0)} produtos</p>
                                             </div>
-                                            <button onClick={() => { setProducts(v.products); setShowCloudModal(false); showMessage('Tabela carregada com sucesso!', 'success'); }} className="text-xs bg-rose-700 hover:bg-rose-800 text-white px-3 py-1.5 rounded-lg font-bold shadow-sm transition-colors">Carregar</button>
+                                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                                                {products.length > 0 && <button onClick={() => { setPriceChanges(gerarComparacao(v.products, products)); setShowCloudModal(false); showMessage('Comparação com essa versão pronta — veja abaixo. 👇', 'success'); }} className="text-xs bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg font-bold shadow-sm transition-colors" title="Compara a tabela atual com esta versão">📊 Comparar</button>}
+                                                <button onClick={() => { setProducts(v.products); setShowCloudModal(false); showMessage('Tabela carregada com sucesso!', 'success'); }} className="text-xs bg-rose-700 hover:bg-rose-800 text-white px-3 py-1.5 rounded-lg font-bold shadow-sm transition-colors">Carregar</button>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
@@ -927,6 +961,11 @@
                             <button onClick={() => { fetchPdfVersions(); setShowCloudModal(true); }} disabled={isLoading} className="bg-slate-800 hover:bg-slate-900 text-white px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md">
                                 <div className="h-5 w-5"><IconCloudDownload /></div> Nuvem
                             </button>
+                            {products.length > 0 && (
+                                <button onClick={compararComAnterior} disabled={isLoading} title="Compara a tabela atual com a anterior da nuvem" className="bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md">
+                                    📊 Comparar com anterior
+                                </button>
+                            )}
                             <div className="relative flex-1 sm:flex-none">
                                 <input type="file" accept=".pdf" onChange={handleFileUpload} disabled={isLoading} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                                 <button disabled={isLoading} className="w-full bg-rose-700 hover:bg-rose-800 text-white px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md">
