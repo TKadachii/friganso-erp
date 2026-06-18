@@ -3714,32 +3714,27 @@
             const onResizeUp = () => { setResizandoZap(false); resizeStart.current = null; };
             useEffect(() => {
                 if (!isElectron) return;
-                // Fallback: clica no botão Enviar (usado quando precisamos recarregar pela URL)
-                const SCRIPT = 'new Promise(function(resolve){var t=0;var iv=setInterval(function(){t++;var ic=document.querySelector(\'button[aria-label="Enviar"], button[aria-label="Send"]\')||document.querySelector(\'span[data-icon="send"]\')||document.querySelector(\'[data-testid="send"]\');if(ic){var b=ic;for(var i=0;i<4&&b;i++){if(b.tagName===\'BUTTON\'||(b.getAttribute&&b.getAttribute(\'role\')===\'button\'))break;b=b.parentElement;}try{(b||ic).click();}catch(e){}clearInterval(iv);resolve(\'ok\');return;}if(t>60){clearInterval(iv);resolve(\'timeout\');}},300);});';
-                const zapURL = (num, msg) => 'https://web.whatsapp.com/send?phone=' + num + '&text=' + encodeURIComponent(msg);
-                // ⚡ Abre a conversa POR DENTRO do WhatsApp já carregado (busca o número, abre, escreve e envia) — SEM recarregar.
+                // ⚡ Envia pela BUSCA do próprio WhatsApp (sem recarregar nunca): pesquisa o número,
+                // abre o contato, escreve e envia — e limpa a busca/caixa entre um e outro (sem vazar nº).
                 const scriptInApp = (num, texto) => {
                     const N = JSON.stringify(String(num)), T = JSON.stringify(String(texto));
-                    return 'new Promise(function(resolve){'
-                        + 'var numero=' + N + ', texto=' + T + ';'
-                        + 'var passo="busca",t=0,marco=0;'
-                        + 'function q(s){return document.querySelector(s);}'
-                        + 'function caixaBusca(){return q(\'div[contenteditable="true"][data-tab="3"]\')||q(\'#side div[contenteditable="true"]\')||q(\'div[role="textbox"][contenteditable="true"]\');}'
-                        + 'function composer(){return q(\'#main div[contenteditable="true"][data-tab="10"]\')||q(\'#main footer div[contenteditable="true"]\')||q(\'footer div[contenteditable="true"]\');}'
-                        + 'function btnEnviar(){return q(\'button[aria-label="Enviar"]\')||q(\'button[aria-label="Send"]\')||q(\'span[data-icon="send"]\')||q(\'[data-testid="send"]\');}'
-                        + 'function digitar(el,val){el.focus();try{document.execCommand("selectAll",false,null);document.execCommand("delete",false,null);}catch(e){}try{document.execCommand("insertText",false,val);}catch(e){}}'
-                        + 'var iv=setInterval(function(){t++;try{'
-                        +   'if(passo==="busca"){var cx=caixaBusca();if(cx){digitar(cx,numero);passo="abrir";marco=t;}else if(t>16){clearInterval(iv);resolve("nao_carregado");}}'
-                        +   'else if(passo==="abrir"){if(t-marco<3)return;var itens=document.querySelectorAll(\'#pane-side div[role="listitem"]\');if(itens&&itens.length){var alvo=itens[0].querySelector(\'[role="button"]\')||itens[0].querySelector(\'div[tabindex]\')||itens[0];try{alvo.click();}catch(e){try{itens[0].click();}catch(e2){}}passo="abriu";marco=t;}else if(t-marco>14){clearInterval(iv);resolve("nao_achou");}}'
-                        +   'else if(passo==="abriu"){var cx2=caixaBusca();var vazia=!cx2||((cx2.textContent||"").trim()==="");if(vazia&&q("#main")){passo="escrever";marco=t;}else if(t-marco>16){passo="escrever";marco=t;}}'
-                        +   'else if(passo==="escrever"){var cp=composer();if(cp){digitar(cp,texto);passo="enviar";marco=t;}else if(t-marco>16){clearInterval(iv);resolve("sem_composer");}}'
-                        +   'else if(passo==="enviar"){if(t-marco<2)return;var b=btnEnviar();if(b){var x=b;for(var i=0;i<4&&x;i++){if(x.tagName==="BUTTON"){break;}x=x.parentElement;}try{(x||b).click();}catch(e){}clearInterval(iv);resolve("ok");}else if(t-marco>16){clearInterval(iv);resolve("sem_botao");}}'
-                        + '}catch(e){}if(t>140){clearInterval(iv);resolve("timeout");}},250);'
-                        + '});';
-                };
-                const fallbackURL = (wv, num, msg, cb) => {
-                    try { wv.loadURL(zapURL(num, msg)); } catch (e) {}
-                    setTimeout(() => { wv.executeJavaScript(SCRIPT).then(r => cb && cb(r === 'ok')).catch(() => cb && cb(false)); }, 2800);
+                    return `new Promise(function(resolve){
+                        var numero=${N}, texto=${T};
+                        var passo="busca", t=0, marco=0;
+                        function vis(el){ if(!el) return false; var r=el.getBoundingClientRect(); return r.width>4&&r.height>4; }
+                        function caixaBusca(){ var c=document.querySelectorAll('#side div[contenteditable="true"], div[contenteditable="true"][data-tab="3"]'); for(var i=0;i<c.length;i++){ if(vis(c[i])) return c[i]; } return null; }
+                        function composer(){ var c=document.querySelectorAll('#main footer div[contenteditable="true"], footer div[contenteditable="true"][data-tab="10"]'); for(var i=0;i<c.length;i++){ if(vis(c[i])) return c[i]; } return null; }
+                        function btnEnviar(){ return document.querySelector('[data-icon="send"]')||document.querySelector('button[aria-label="Enviar"]')||document.querySelector('button[aria-label="Send"]'); }
+                        function digitar(el,val){ try{el.focus();}catch(e){} try{document.execCommand("selectAll",false,null);document.execCommand("delete",false,null);}catch(e){} var ls=String(val).split(String.fromCharCode(10)); for(var i=0;i<ls.length;i++){ if(i>0){ try{document.execCommand("insertLineBreak");}catch(e){} } try{document.execCommand("insertText",false,ls[i]);}catch(e){} } }
+                        var iv=setInterval(function(){ t++; try{
+                            if(passo==="busca"){ var cx=caixaBusca(); if(cx){ digitar(cx,numero); passo="abrir"; marco=t; } else if(t>20){ clearInterval(iv); resolve("nao_carregado"); } }
+                            else if(passo==="abrir"){ if(t-marco<4) return; var it=document.querySelectorAll('#pane-side [role="listitem"]'); if(it&&it.length){ var a=it[0].querySelector('[role="button"]')||it[0].querySelector('div[role="row"]')||it[0]; try{a.click();}catch(e){try{it[0].click();}catch(e2){}} passo="abriu"; marco=t; } else if(t-marco>16){ clearInterval(iv); resolve("nao_achou"); } }
+                            else if(passo==="abriu"){ if(composer()&&document.querySelector("#main")){ passo="escrever"; marco=t; } else if(t-marco>24){ clearInterval(iv); resolve("sem_chat"); } }
+                            else if(passo==="escrever"){ var cp=composer(); if(cp){ digitar(cp,texto); passo="enviar"; marco=t; } else if(t-marco>16){ clearInterval(iv); resolve("sem_composer"); } }
+                            else if(passo==="enviar"){ if(t-marco<3) return; var b=btnEnviar(); if(b){ var x=b; for(var i=0;i<5&&x;i++){ if(x.tagName==="BUTTON"||(x.getAttribute&&x.getAttribute("role")==="button")) break; x=x.parentElement; } try{(x||b).click();}catch(e){} passo="limpar"; marco=t; } else if(t-marco>16){ clearInterval(iv); resolve("sem_botao"); } }
+                            else if(passo==="limpar"){ if(t-marco<2) return; try{ var c2=caixaBusca(); if(c2){ c2.focus(); document.execCommand("selectAll",false,null); document.execCommand("delete",false,null); } }catch(e){} clearInterval(iv); resolve("ok"); }
+                        }catch(e){} if(t>180){ clearInterval(iv); resolve("timeout"); } },250);
+                    });`;
                 };
                 window.__frigZap = {
                     abrir: () => setZapAberto(true),
@@ -3748,11 +3743,8 @@
                         const wv = appZapRef.current; if (!wv) { cb && cb(false); return; }
                         setZapAberto(true);
                         try {
-                            wv.executeJavaScript(scriptInApp(num, msg)).then(r => {
-                                if (r === 'ok') { cb && cb(true); }
-                                else { fallbackURL(wv, num, msg, cb); } // não achou pela busca → recarrega pelo link (garante o destinatário)
-                            }).catch(() => fallbackURL(wv, num, msg, cb));
-                        } catch (e) { fallbackURL(wv, num, msg, cb); }
+                            wv.executeJavaScript(scriptInApp(num, msg)).then(r => cb && cb(r === 'ok')).catch(() => cb && cb(false));
+                        } catch (e) { cb && cb(false); }
                     }
                 };
             }, []);
