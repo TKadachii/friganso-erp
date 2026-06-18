@@ -810,16 +810,24 @@
                                 }
                                 const rawPrice = parsePrice(rawPriceStr) || 0; 
                                 
-                                // Nome do produto = tudo até o PRIMEIRO PREÇO (número com vírgula, ex 12,22),
-                                // mas mantendo os pesos/embalagem (ex CX/+-28KG, PC/1,05KG) que fazem parte do nome.
-                                let finalName = rest;
-                                // primeiro número com vírgula que NÃO seja um peso (não é seguido por kg/g)
-                                const precoNoNome = rest.match(/\d{1,3}(?:\.\d{3})*,\d{2}(?!\s*k?g\b)/i);
-                                if (precoNoNome) finalName = rest.slice(0, precoNoNome.index);
-                                // remove marcadores de coluna que sobrarem no fim
-                                finalName = finalName.split(/Vista\s*\/\s*PIX/i)[0];
-                                finalName = finalName.replace(/\s*\[?\s*L\s*\]?\s*$/i, '');
-                                finalName = finalName.replace(/[-—.,\s]+$/, '').trim();
+                                // 🏷️ Nome = COLUNA DO NOME (x≈70..300). No PDF o nome é "alto" e transborda
+                                // pra linha de cima/baixo do código (y±6), enquanto código e preço ficam só no
+                                // meio — por isso juntamos as 3 linhas dessa coluna (antes pegava só o meio = embalagem).
+                                const nomeItens = [];
+                                [y + 6, y, y - 6].forEach(yy => {
+                                    const arr = linesMap.get(yy);
+                                    if (!arr) return;
+                                    arr.forEach(it => { const x = it.transform[4]; if (x >= 60 && x <= 300 && it.str && it.str.trim()) nomeItens.push({ y: yy, x: x, s: it.str }); });
+                                });
+                                nomeItens.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+                                let finalName = nomeItens.map(n => n.s).join(' ').replace(/\s+/g, ' ').trim();
+                                // fallback (jeito antigo): se a coluna do nome vier vazia, usa o texto após o código
+                                if (!finalName) {
+                                    finalName = rest;
+                                    const precoNoNome = rest.match(/\d{1,3}(?:\.\d{3})*,\d{2}(?!\s*k?g\b)/i);
+                                    if (precoNoNome) finalName = rest.slice(0, precoNoNome.index);
+                                    finalName = finalName.split(/Vista\s*\/\s*PIX/i)[0].replace(/\s*\[?\s*L\s*\]?\s*$/i, '').replace(/[-—.,\s]+$/, '').trim();
+                                }
 
                                 const { hasDiscount, unitFinalPrice } = checkDiscountRules(code, finalName, rawPrice);
                                 const cand = { code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice };
