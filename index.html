@@ -798,30 +798,28 @@
                             
                             const match = lineText.match(/(?:^|\s)(\d{4,7})\s+([A-Z0-9ÇÃÕÁÉÍÓÚÂÊÔ].*)/i);
                             if (match) {
-                                const code = match[1]; 
-                                let rest = match[2].trim(); 
-                                
-                                // O grande truque de limpeza de preço: achar o último número com vírgula de verdade!
-                                // (?!\s*k?g\b) ignora PESO (ex: "+-16,00 KG") pra não confundir peso com preço.
-                                const priceMatches = [...rest.matchAll(/\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})\b(?!\s*k?g\b)/gi)];
-                                let rawPriceStr = null;
-                                if (priceMatches.length > 0) { 
-                                    rawPriceStr = priceMatches[priceMatches.length - 1][1]; 
-                                }
-                                const rawPrice = parsePrice(rawPriceStr) || 0; 
-                                
-                                // 🏷️ Nome = COLUNA DO NOME (x≈70..300). No PDF o nome é "alto" e transborda
-                                // pra linha de cima/baixo do código (y±6), enquanto código e preço ficam só no
-                                // meio — por isso juntamos as 3 linhas dessa coluna (antes pegava só o meio = embalagem).
-                                const nomeItens = [];
-                                [y + 6, y, y - 6].forEach(yy => {
-                                    const arr = linesMap.get(yy);
-                                    if (!arr) return;
-                                    arr.forEach(it => { const x = it.transform[4]; if (x >= 60 && x <= 300 && it.str && it.str.trim()) nomeItens.push({ y: yy, x: x, s: it.str }); });
-                                });
-                                nomeItens.sort((a, b) => (b.y - a.y) || (a.x - b.x));
-                                let finalName = nomeItens.map(n => n.s).join(' ').replace(/\s+/g, ' ').trim();
-                                // fallback (jeito antigo): se a coluna do nome vier vazia, usa o texto após o código
+                                const code = match[1];
+                                let rest = match[2].trim();
+
+                                // 📐 Leitura por COLUNA (posição X), juntando a janela do produto (linha do código + de cima + de baixo).
+                                // No PDF cada coluna tem um X fixo; o nome "transborda" pras linhas vizinhas e, em alguns casos,
+                                // o código fica numa linha e os números (preço!) noutra — por isso varremos as 3 linhas.
+                                const janela = [].concat(...[y + 6, y, y - 6].map(yy => linesMap.get(yy) || []));
+                                const col = (xmin, xmax) => janela
+                                    .filter(it => { const x = it.transform[4]; return x >= xmin && x < xmax && it.str && it.str.trim(); })
+                                    .sort((a, b) => (Math.round(b.transform[5]) - Math.round(a.transform[5])) || (a.transform[4] - b.transform[4]))
+                                    .map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
+
+                                let finalName = col(60, 305);                 // 🔴 nome inteiro
+                                const tipo = col(305, 325);                    // 🟤 CX / PC / UN / FD / SC...
+                                const meio = col(325, 412);                    // 🟢 peso + 🩷 peças (separa por marcador Kg/Pç)
+                                const pesoItem = (meio.match(/[\d.,]+(?:\s*à\s*[\d.,]+)?\s*Kg/i) || [''])[0].trim();
+                                const pcsItem = (meio.match(/[\d.,]+(?:\s*à\s*[\d.,]+)?\s*P[çc]/i) || [''])[0].trim();
+                                const unidade = col(412, 456);                 // Kg [L] / UN / Kg [B]
+                                const kgUn = col(456, 535);                    // 🟣 ex: 459.25 Kg/23 Un
+                                const rawPrice = parsePrice(col(535, 99999)) || 0; // ⬛ preço à vista (corrige o 00,00 do morango)
+
+                                // fallback (jeito antigo) só se a coluna do nome vier vazia
                                 if (!finalName) {
                                     finalName = rest;
                                     const precoNoNome = rest.match(/\d{1,3}(?:\.\d{3})*,\d{2}(?!\s*k?g\b)/i);
@@ -830,7 +828,7 @@
                                 }
 
                                 const { hasDiscount, unitFinalPrice } = checkDiscountRules(code, finalName, rawPrice);
-                                const cand = { code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice };
+                                const cand = { code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice, tipo, pesoItem, pcsItem, unidade, kgUn };
                                 const prev = byCode.get(code);
                                 // código repetido = um deles é fragmento mal lido: fica com o de nome mais "de produto" (mais letras)
                                 if (!prev || letterScore(cand.name) > letterScore(prev.name)) byCode.set(code, cand);
@@ -1042,10 +1040,20 @@
                                     <tbody>
                                         {filteredProducts.map((p, i) => (
                                             <tr key={i} className="hover:bg-slate-50 border-b border-slate-50">
-                                                <td className="p-4 text-slate-500 font-bold">{p.code}</td>
-                                                <td className="p-4 text-slate-800 font-medium">{p.name}</td>
-                                                <td className="p-4 text-right text-slate-600">{formatPrice(p.originalPrice)}</td>
-                                                <td className="p-4 text-right font-bold text-rose-700 bg-rose-50/30">{formatPrice(p.discountedPrice)}</td>
+                                                <td className="p-4 text-slate-500 font-bold align-top">{p.code}</td>
+                                                <td className="p-4 text-slate-800 font-medium align-top">
+                                                    {p.name}
+                                                    {(p.tipo || p.pesoItem || p.pcsItem || p.kgUn) && (
+                                                        <div className="text-[11px] text-slate-400 font-normal mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                                                            {p.tipo && <span>📦 {p.tipo}</span>}
+                                                            {p.pesoItem && <span>⚖️ {p.pesoItem}/item</span>}
+                                                            {p.pcsItem && <span>🔢 {p.pcsItem}</span>}
+                                                            {p.kgUn && <span>📊 {p.kgUn}</span>}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td className="p-4 text-right text-slate-600 align-top">{formatPrice(p.originalPrice)}</td>
+                                                <td className="p-4 text-right font-bold text-rose-700 bg-rose-50/30 align-top">{formatPrice(p.discountedPrice)}</td>
                                             </tr>
                                         ))}
                                     </tbody>
