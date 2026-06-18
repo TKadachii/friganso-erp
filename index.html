@@ -738,7 +738,9 @@
             const [showCloudModal, setShowCloudModal] = useState(false);
             const [pdfVersions, setPdfVersions] = useState([]);
             const [isLoadingVersions, setIsLoadingVersions] = useState(false);
-            const [priceChanges, setPriceChanges] = useState(null); // {changes:[...], novos:[...], removidos:n} ao carregar tabela nova
+            // {changes:[...], novos:[...], removidos:n} — PERSISTE no aparelho (não some ao trocar de tela)
+            const [priceChanges, setPriceChanges] = useState(() => { try { const r = window.localStorage.getItem('friganso_price_changes'); return r ? JSON.parse(r) : null; } catch (e) { return null; } });
+            useEffect(() => { try { if (priceChanges) window.localStorage.setItem('friganso_price_changes', JSON.stringify(priceChanges)); else window.localStorage.removeItem('friganso_price_changes'); } catch (e) {} }, [priceChanges]);
 
             useEffect(() => { 
                 if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; 
@@ -3223,6 +3225,23 @@
                 // ao escolher um produto, a oferta já passa a ser esse produto
                 if (s.size > 0) { setIncluirProduto(true); setOfertaModo('selecionados'); }
             };
+            // 📉 produtos que ABAIXARAM de preço (da comparação entre a tabela nova e a anterior, persistida)
+            const baixaram = useMemo(() => {
+                try {
+                    const r = window.localStorage.getItem('friganso_price_changes');
+                    const pc = r ? JSON.parse(r) : null;
+                    if (!pc || !Array.isArray(pc.changes)) return [];
+                    return pc.changes.filter(c => Number(c.newPrice) < Number(c.oldPrice)).map(c => String(c.code));
+                } catch (e) { return []; }
+            }, []);
+            // escolhe o filtro; "baixou" já marca os produtos que abaixaram e ajusta a oferta
+            const escolherFiltro = (k) => {
+                setFiltro(k);
+                if (k === 'baixou') {
+                    setProdutosAlvo(new Set(baixaram));
+                    if (baixaram.length) { setIncluirProduto(true); setOfertaModo('selecionados'); }
+                }
+            };
 
             // --- audiência filtrada ---
             const lista = useMemo(() => {
@@ -3235,7 +3254,7 @@
                 else if (filtro === 'comtel') base = clients.filter(c => temTel(c));
                 else if (filtro === 'semtel') base = clients.filter(c => !temTel(c));
                 else if (filtro === 'comhist') base = clients.filter(c => lvl(c) > 0);
-                else if (filtro === 'produto') base = produtosAlvo.size === 0 ? [] : clients.filter(c => (c.history || []).some(code => produtosAlvo.has(String(code))));
+                else if (filtro === 'produto' || filtro === 'baixou') base = produtosAlvo.size === 0 ? [] : clients.filter(c => (c.history || []).some(code => produtosAlvo.has(String(code))));
                 const q = busca.trim().toLowerCase();
                 if (q) base = base.filter(c => (c.name || '').toLowerCase().includes(q) || String(c.code || '').toLowerCase().includes(q));
                 return base;
@@ -3471,14 +3490,16 @@
                                 <span className="text-xs font-bold text-emerald-600">{selecionados.size} selecionado(s)</span>
                             </div>
                             <div className="flex flex-wrap gap-1.5 mb-3">
-                                {[['todos', 'Todos'], ['produto', '📦 Por produto'], ['top', '🔥 Compra mais'], ['comhist', '🛒 Com histórico'], ['atencao', '⚠️ Atenção'], ['inativos', '🚨 Inativos'], ['comtel', '📱 Com número'], ['semtel', '📵 Sem número']].map(([k, lbl]) => (
-                                    <button key={k} onClick={() => setFiltro(k)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${filtro === k ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{lbl}</button>
+                                {[['todos', 'Todos'], ['produto', '📦 Por produto'], ['baixou', '📉 Abaixou de preço'], ['top', '🔥 Compra mais'], ['comhist', '🛒 Com histórico'], ['atencao', '⚠️ Atenção'], ['inativos', '🚨 Inativos'], ['comtel', '📱 Com número'], ['semtel', '📵 Sem número']].map(([k, lbl]) => (
+                                    <button key={k} onClick={() => escolherFiltro(k)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${filtro === k ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{lbl}{k === 'baixou' && baixaram.length ? ' (' + baixaram.length + ')' : ''}</button>
                                 ))}
                             </div>
-                            {/* 📦 Seletor de produtos: escolhe um produto e o sistema lista quem já compra */}
-                            {filtro === 'produto' && (
+                            {/* 📦/📉 Seletor de produtos: escolhe produtos (ou os que abaixaram) e o sistema lista quem já compra */}
+                            {(filtro === 'produto' || filtro === 'baixou') && (
                                 <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-3 space-y-2">
-                                    <p className="text-xs font-bold text-rose-700">📦 Escolha o(s) produto(s) — eu acho quem já comprou e a oferta vai com esse produto</p>
+                                    {filtro === 'baixou'
+                                        ? <p className="text-xs font-bold text-rose-700">📉 {baixaram.length ? baixaram.length + ' produto(s) abaixaram de preço (já selecionados). Quem compra eles aparece abaixo — desmarque se quiser.' : 'Nenhum produto abaixou de preço ainda. Carregue uma nova Tabela do Dia (PDF) pra comparar com a anterior.'}</p>
+                                        : <p className="text-xs font-bold text-rose-700">📦 Escolha o(s) produto(s) — eu acho quem já comprou e a oferta vai com esse produto</p>}
                                     <input type="text" value={buscaProd} onChange={e => setBuscaProd(e.target.value)} placeholder="Buscar produto (ex: dianteiro)..." className="w-full px-2.5 py-1.5 bg-white border border-rose-200 rounded-lg text-sm outline-none focus:border-rose-400"/>
                                     {produtosAlvo.size > 0 && (
                                         <div className="flex flex-wrap gap-1">
@@ -3534,7 +3555,7 @@
                                         </div>
                                     );
                                 })}
-                                {lista.length === 0 && <p className="text-center text-slate-400 text-sm py-6">{filtro === 'produto' && produtosAlvo.size === 0 ? 'Escolha um produto acima ☝️ pra ver quem compra.' : 'Nenhum cliente neste filtro.'}</p>}
+                                {lista.length === 0 && <p className="text-center text-slate-400 text-sm py-6">{(filtro === 'produto' || filtro === 'baixou') && produtosAlvo.size === 0 ? (filtro === 'baixou' ? 'Nenhum produto abaixou de preço (ou ninguém compra os que caíram). Carregue uma nova Tabela do Dia.' : 'Escolha um produto acima ☝️ pra ver quem compra.') : 'Nenhum cliente neste filtro.'}</p>}
                             </div>
                         </div>
                     </div>
