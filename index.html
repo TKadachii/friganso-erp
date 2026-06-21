@@ -85,10 +85,58 @@
         .dark .bg-\[\#e1ffc7\] { background-color: #005c4b !important; border-color: #036c5a !important; }
         .dark .bg-\[\#e1ffc7\], .dark .bg-\[\#e1ffc7\] * { color: #e9edef !important; }
         .dark [style*="28719144"] { background-image: none !important; background-color: #0b141a !important; }
+
+        /* ===== 🌸 TEMA SAKURA (vermelho/preto) — dias especiais ===== */
+        .tema-sakura body {
+            background-color: #0a0305 !important;
+            background-image:
+                radial-gradient(130% 90% at 50% -10%, rgba(150,12,24,.55), rgba(10,2,4,.97) 55%),
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 210'%3E%3Cg fill='%23000000' opacity='0.5'%3E%3Crect x='18' y='38' width='204' height='15' rx='4'/%3E%3Crect x='34' y='61' width='172' height='9'/%3E%3Crect x='48' y='38' width='15' height='160'/%3E%3Crect x='177' y='38' width='15' height='160'/%3E%3Crect x='112' y='61' width='16' height='50'/%3E%3C/g%3E%3C/svg%3E");
+            background-repeat: no-repeat, no-repeat;
+            background-position: center top, center 78%;
+            background-size: cover, 340px;
+            background-attachment: fixed, fixed;
+            color: #f0d8da !important;
+        }
+        .tema-sakura .bg-white { background-color: rgba(26,9,13,0.92) !important; }
+        .tema-sakura .bg-slate-50 { background-color: rgba(38,12,18,0.9) !important; }
+        .tema-sakura .bg-slate-100 { background-color: rgba(50,16,23,0.9) !important; }
+        .tema-sakura .bg-slate-200 { background-color: #3c1620 !important; }
+        .tema-sakura .border, .tema-sakura .border-slate-100, .tema-sakura .border-slate-200 { border-color: rgba(225,29,72,0.30) !important; }
+        .tema-sakura .text-slate-800, .tema-sakura .text-slate-700 { color: #f7e3e5 !important; }
+        .tema-sakura .text-slate-600 { color: #e6bcc2 !important; }
+        .tema-sakura .text-slate-500, .tema-sakura .text-slate-400 { color: #c48d95 !important; }
+        .tema-sakura .text-rose-800, .tema-sakura .text-rose-700 { color: #ff6b81 !important; }
+        .tema-sakura .text-rose-600 { color: #ff8a9c !important; }
+        .tema-sakura .bg-rose-700 { background-color: #c20f2f !important; }
+        .tema-sakura .bg-rose-50, .tema-sakura .bg-rose-100, .tema-sakura .bg-rose-50\/30 { background-color: rgba(120,16,28,0.45) !important; }
+        .tema-sakura .glass { background: rgba(20,6,10,0.93) !important; }
+        .tema-sakura ::-webkit-scrollbar-thumb { background: #7a1020; }
+        /* pétalas de sakura caindo */
+        .sakura-petals { position: fixed; inset: 0; pointer-events: none; z-index: 9998; overflow: hidden; }
+        .sakura-petals span { position: absolute; top: -24px; display: block; background: radial-gradient(circle at 30% 30%, #ffd6df, #ff5d7e); border-radius: 100% 0 100% 0; opacity: .82; box-shadow: 0 0 6px rgba(255,93,126,.5); animation-name: sakuraCair; animation-timing-function: linear; animation-iteration-count: infinite; }
+        @keyframes sakuraCair { 0% { transform: translateY(-24px) translateX(0) rotate(0deg); } 100% { transform: translateY(106vh) translateX(40px) rotate(540deg); } }
     </style>
 </head>
 <body>
     <script>(function(){try{if(localStorage.getItem('friganso_theme')==='dark')document.documentElement.classList.add('dark');}catch(e){}})();</script>
+    <!-- 🌸 Tema Sakura (vermelho/preto) — ativa sozinho nos dias 21 e 27 de junho. Pra forçar: localStorage friganso_tema_sakura = '1' (liga) ou '0' (desliga). -->
+    <script>
+        window.ehTemaSakura = function () {
+            try { var f = localStorage.getItem('friganso_tema_sakura'); if (f === '1') return true; if (f === '0') return false; } catch (e) {}
+            var d = new Date(); return d.getMonth() === 5 && (d.getDate() === 21 || d.getDate() === 27); // junho (mês 5), dias 21 e 27
+        };
+        try {
+            if (window.ehTemaSakura()) {
+                document.documentElement.classList.add('tema-sakura', 'dark'); // sakura usa a base escura + tom vermelho
+                document.addEventListener('DOMContentLoaded', function () {
+                    var ov = document.createElement('div'); ov.className = 'sakura-petals';
+                    for (var i = 0; i < 14; i++) { var s = document.createElement('span'); s.style.left = (Math.random() * 100) + 'vw'; s.style.animationDuration = (6 + Math.random() * 8) + 's'; s.style.animationDelay = (-Math.random() * 12) + 's'; var sz = 8 + Math.random() * 10; s.style.width = sz + 'px'; s.style.height = sz + 'px'; ov.appendChild(s); }
+                    document.body.appendChild(ov);
+                });
+            }
+        } catch (e) {}
+    </script>
     <div id="root"></div>
 
     <script type="text/babel">
@@ -137,14 +185,34 @@
             return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         };
 
-        const FrigansoLogo = ({ className }) => (
-            <svg className={className} viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-                <g transform="translate(-10 3) scale(1.9)" fill="#FB4B3A">
-                    <path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z" />
-                    <path d="M89,19 L97,17 L91,24 Z" />
-                </g>
-            </svg>
-        );
+        const FrigansoLogo = ({ className }) => {
+            // 🌸 Nos dias do tema sakura, a logo vira uma flor de cerejeira minimalista.
+            if (typeof window !== 'undefined' && window.ehTemaSakura && window.ehTemaSakura()) {
+                return (
+                    <svg className={className} viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+                        <g transform="translate(100,100)">
+                            <g fill="#ff5d7e">
+                                {[0, 72, 144, 216, 288].map(a => (
+                                    <path key={a} transform={`rotate(${a})`} d="M0,-16 C -22,-30 -27,-56 -13,-72 C -6,-79 -4,-67 0,-72 C 4,-67 6,-79 13,-72 C 27,-56 22,-30 0,-16 Z" />
+                                ))}
+                            </g>
+                            <circle r="10" fill="#ffd6df" />
+                            {[0, 72, 144, 216, 288].map(a => (
+                                <circle key={'s' + a} transform={`rotate(${a}) translate(0,-15)`} r="2.4" fill="#c9305a" />
+                            ))}
+                        </g>
+                    </svg>
+                );
+            }
+            return (
+                <svg className={className} viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+                    <g transform="translate(-10 3) scale(1.9)" fill="#FB4B3A">
+                        <path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z" />
+                        <path d="M89,19 L97,17 L91,24 Z" />
+                    </g>
+                </svg>
+            );
+        };
 
         const BG_IMAGE = "https://images.unsplash.com/photo-1607623814075-e51df1bd682f?q=80&w=2000&auto=format&fit=crop";
 
@@ -3861,7 +3929,7 @@
 
             // Aplica o tema (claro/escuro) e salva a preferência
             useEffect(() => {
-                document.documentElement.classList.toggle('dark', theme === 'dark');
+                document.documentElement.classList.toggle('dark', theme === 'dark' || (window.ehTemaSakura && window.ehTemaSakura()));
                 try { window.localStorage.setItem('friganso_theme', theme); } catch (e) {}
             }, [theme]);
             const [clients, setClients] = useState([]);
