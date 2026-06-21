@@ -116,26 +116,64 @@
         .sakura-petals { position: fixed; inset: 0; pointer-events: none; z-index: 9998; overflow: hidden; }
         .sakura-petals span { position: absolute; top: -24px; display: block; background: radial-gradient(circle at 30% 30%, #ffd6df, #ff5d7e); border-radius: 100% 0 100% 0; opacity: .82; box-shadow: 0 0 6px rgba(255,93,126,.5); animation-name: sakuraCair; animation-timing-function: linear; animation-iteration-count: infinite; }
         @keyframes sakuraCair { 0% { transform: translateY(-24px) translateX(0) rotate(0deg); } 100% { transform: translateY(106vh) translateX(40px) rotate(540deg); } }
+
+        /* ===== 🌊 TEMA OCEANO (azul/preto) ===== */
+        .tema-oceano body { background-color: #040a14 !important; background-image: radial-gradient(130% 90% at 50% -10%, rgba(12,74,140,.5), rgba(4,8,18,.97) 55%) !important; background-attachment: fixed !important; }
+        .tema-oceano .text-rose-800, .tema-oceano .text-rose-700 { color: #7dd3fc !important; }
+        .tema-oceano .text-rose-600 { color: #38bdf8 !important; }
+        .tema-oceano .bg-rose-700 { background-color: #0369a1 !important; }
+        .tema-oceano .bg-rose-800 { background-color: #075985 !important; }
+        .tema-oceano .bg-rose-50, .tema-oceano .bg-rose-100, .tema-oceano .bg-rose-50\/30 { background-color: rgba(12,74,140,.35) !important; }
+        .tema-oceano .border, .tema-oceano .border-slate-100, .tema-oceano .border-slate-200 { border-color: rgba(56,189,248,.25) !important; }
+
+        /* ===== 🌿 TEMA ESMERALDA (verde/preto) ===== */
+        .tema-esmeralda body { background-color: #04140d !important; background-image: radial-gradient(130% 90% at 50% -10%, rgba(12,120,78,.45), rgba(4,16,11,.97) 55%) !important; background-attachment: fixed !important; }
+        .tema-esmeralda .text-rose-800, .tema-esmeralda .text-rose-700 { color: #6ee7b7 !important; }
+        .tema-esmeralda .text-rose-600 { color: #34d399 !important; }
+        .tema-esmeralda .bg-rose-700 { background-color: #047857 !important; }
+        .tema-esmeralda .bg-rose-800 { background-color: #065f46 !important; }
+        .tema-esmeralda .bg-rose-50, .tema-esmeralda .bg-rose-100, .tema-esmeralda .bg-rose-50\/30 { background-color: rgba(12,120,78,.32) !important; }
+        .tema-esmeralda .border, .tema-esmeralda .border-slate-100, .tema-esmeralda .border-slate-200 { border-color: rgba(52,211,153,.25) !important; }
     </style>
 </head>
 <body>
-    <script>(function(){try{if(localStorage.getItem('friganso_theme')==='dark')document.documentElement.classList.add('dark');}catch(e){}})();</script>
-    <!-- 🌸 Tema Sakura (vermelho/preto) — ativa sozinho nos dias 21 e 27 de junho. Pra forçar: localStorage friganso_tema_sakura = '1' (liga) ou '0' (desliga). -->
+    <!-- 🎨 Tema do sistema (Claro/Escuro/Sakura/Oceano/Esmeralda). Escolha salva em friganso_tema.
+         'auto' = claro no dia a dia, e Sakura nos dias especiais (21 e 27 de junho). -->
     <script>
-        window.ehTemaSakura = function () {
-            try { var f = localStorage.getItem('friganso_tema_sakura'); if (f === '1') return true; if (f === '0') return false; } catch (e) {}
-            var d = new Date(); return d.getMonth() === 5 && (d.getDate() === 21 || d.getDate() === 27); // junho (mês 5), dias 21 e 27
-        };
-        try {
-            if (window.ehTemaSakura()) {
-                document.documentElement.classList.add('tema-sakura', 'dark'); // sakura usa a base escura + tom vermelho
-                document.addEventListener('DOMContentLoaded', function () {
-                    var ov = document.createElement('div'); ov.className = 'sakura-petals';
-                    for (var i = 0; i < 14; i++) { var s = document.createElement('span'); s.style.left = (Math.random() * 100) + 'vw'; s.style.animationDuration = (6 + Math.random() * 8) + 's'; s.style.animationDelay = (-Math.random() * 12) + 's'; var sz = 8 + Math.random() * 10; s.style.width = sz + 'px'; s.style.height = sz + 'px'; ov.appendChild(s); }
-                    document.body.appendChild(ov);
-                });
+        (function () {
+            function petalas(ligar) {
+                var ov = document.querySelector('.sakura-petals');
+                if (ligar) {
+                    if (!ov && document.body) {
+                        ov = document.createElement('div'); ov.className = 'sakura-petals';
+                        for (var i = 0; i < 14; i++) { var s = document.createElement('span'); s.style.left = (Math.random() * 100) + 'vw'; s.style.animationDuration = (6 + Math.random() * 8) + 's'; s.style.animationDelay = (-Math.random() * 12) + 's'; var sz = 8 + Math.random() * 10; s.style.width = sz + 'px'; s.style.height = sz + 'px'; ov.appendChild(s); }
+                        document.body.appendChild(ov);
+                    }
+                } else if (ov) { ov.remove(); }
             }
-        } catch (e) {}
+            window.aplicarTema = function (escolha) {
+                try { if (escolha) localStorage.setItem('friganso_tema', escolha); } catch (e) {}
+                var t = escolha; if (!t) { try { t = localStorage.getItem('friganso_tema') || 'auto'; } catch (e) { t = 'auto'; } }
+                var efetivo = t;
+                if (t === 'auto') {
+                    var d = new Date();
+                    if (d.getMonth() === 5 && (d.getDate() === 21 || d.getDate() === 27)) efetivo = 'sakura';
+                    else { var old = 'claro'; try { if (localStorage.getItem('friganso_theme') === 'dark') old = 'escuro'; } catch (e) {} efetivo = old; }
+                }
+                var el = document.documentElement;
+                el.classList.remove('dark', 'tema-sakura', 'tema-oceano', 'tema-esmeralda');
+                if (efetivo === 'escuro') el.classList.add('dark');
+                else if (efetivo === 'sakura') el.classList.add('dark', 'tema-sakura');
+                else if (efetivo === 'oceano') el.classList.add('dark', 'tema-oceano');
+                else if (efetivo === 'esmeralda') el.classList.add('dark', 'tema-esmeralda');
+                window.__temaEscolha = t; window.__temaEfetivo = efetivo;
+                petalas(efetivo === 'sakura');
+            };
+            // logo vira sakura só no tema sakura
+            window.ehTemaSakura = function () { return document.documentElement.classList.contains('tema-sakura'); };
+            try { window.aplicarTema(); } catch (e) {}
+            document.addEventListener('DOMContentLoaded', function () { try { window.aplicarTema(); } catch (e) {} });
+        })();
     </script>
     <div id="root"></div>
 
@@ -3828,7 +3866,8 @@
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             const [messageBox, setMessageBox] = useState(null);
             const [showSettings, setShowSettings] = useState(false);
-            const [theme, setTheme] = useState(() => { try { return window.localStorage.getItem('friganso_theme') || 'light'; } catch (e) { return 'light'; } });
+            // 🎨 Tema escolhido: auto | claro | escuro | sakura | oceano | esmeralda
+            const [tema, setTema] = useState(() => { try { return window.localStorage.getItem('friganso_tema') || 'auto'; } catch (e) { return 'auto'; } });
 
             // 🟢 WhatsApp embutido SEMPRE carregado (não recarrega ao trocar de tela) — só no programa de PC
             const appZapRef = useRef(null);
@@ -3927,11 +3966,8 @@
                 };
             }, []);
 
-            // Aplica o tema (claro/escuro) e salva a preferência
-            useEffect(() => {
-                document.documentElement.classList.toggle('dark', theme === 'dark' || (window.ehTemaSakura && window.ehTemaSakura()));
-                try { window.localStorage.setItem('friganso_theme', theme); } catch (e) {}
-            }, [theme]);
+            // Aplica o tema escolhido (e salva). aplicarTema cuida das classes + pétalas.
+            useEffect(() => { try { window.aplicarTema(tema); } catch (e) {} }, [tema]);
             const [clients, setClients] = useState([]);
 
             useEffect(() => {
@@ -4014,25 +4050,30 @@
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[90] animate-in fade-in" onClick={() => setShowSettings(false)}>
                             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                 <div className="p-5 border-b border-slate-200 flex justify-between items-center">
-                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><div className="h-5 w-5 text-slate-500"><IconSettings/></div> Configurações</h2>
+                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">🎨 Temas</h2>
                                     <button onClick={() => setShowSettings(false)} className="h-9 w-9 bg-slate-100 hover:bg-slate-200 rounded-full flex items-center justify-center text-slate-500"><div className="h-4 w-4"><IconX/></div></button>
                                 </div>
                                 <div className="p-5 space-y-4">
                                     <div>
-                                        <p className="text-sm font-bold text-slate-700 mb-1">Aparência</p>
-                                        <p className="text-xs text-slate-400 mb-3">Escolha o tema do sistema. O modo escuro é mais suave aos olhos.</p>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <button onClick={() => setTheme('light')} className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${theme === 'light' ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300'}`}>
-                                                <div className="h-12 w-full rounded-lg bg-gradient-to-br from-slate-50 to-white border border-slate-200 flex items-center justify-center text-2xl">☀️</div>
-                                                <span className={`text-sm font-bold ${theme === 'light' ? 'text-rose-700' : 'text-slate-600'}`}>Claro</span>
-                                            </button>
-                                            <button onClick={() => setTheme('dark')} className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${theme === 'dark' ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300'}`}>
-                                                <div className="h-12 w-full rounded-lg bg-gradient-to-br from-slate-800 to-slate-950 border border-slate-700 flex items-center justify-center text-2xl">🌙</div>
-                                                <span className={`text-sm font-bold ${theme === 'dark' ? 'text-rose-700' : 'text-slate-600'}`}>Escuro</span>
-                                            </button>
+                                        <p className="text-sm font-bold text-slate-700 mb-1">Escolha o visual do sistema</p>
+                                        <p className="text-xs text-slate-400 mb-3">Toque pra trocar na hora. Fica salvo neste aparelho.</p>
+                                        <div className="grid grid-cols-3 gap-3">
+                                            {[
+                                                { id: 'auto', nome: 'Automático', emoji: '✨', prev: 'linear-gradient(135deg,#f8fafc 50%,#0f172a 50%)' },
+                                                { id: 'claro', nome: 'Claro', emoji: '☀️', prev: 'linear-gradient(135deg,#f8fafc,#e2e8f0)' },
+                                                { id: 'escuro', nome: 'Escuro', emoji: '🌙', prev: 'linear-gradient(135deg,#1e293b,#020617)' },
+                                                { id: 'sakura', nome: 'Sakura', emoji: '🌸', prev: 'linear-gradient(135deg,#7a0f1d,#0a0305)' },
+                                                { id: 'oceano', nome: 'Oceano', emoji: '🌊', prev: 'linear-gradient(135deg,#0c4a8c,#040a14)' },
+                                                { id: 'esmeralda', nome: 'Esmeralda', emoji: '🌿', prev: 'linear-gradient(135deg,#0c784e,#04140d)' },
+                                            ].map(tt => (
+                                                <button key={tt.id} onClick={() => { try { window.aplicarTema(tt.id); } catch (e) {} setTema(tt.id); }} className={`p-2.5 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${tema === tt.id ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                                                    <div className="h-12 w-full rounded-lg border border-slate-200 flex items-center justify-center text-2xl" style={{ background: tt.prev }}>{tt.emoji}</div>
+                                                    <span className={`text-xs font-bold ${tema === tt.id ? 'text-rose-700' : 'text-slate-600'}`}>{tt.nome}</span>
+                                                </button>
+                                            ))}
                                         </div>
                                     </div>
-                                    <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-400 text-center">A preferência fica salva neste dispositivo. 🦢</div>
+                                    <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-400 text-center"><b>Automático</b> = claro no dia a dia e 🌸 Sakura nos dias especiais (21 e 27 de junho). 🦢</div>
                                 </div>
                             </div>
                         </div>
@@ -4072,6 +4113,9 @@
                             <NavButton route="disparos" icon={IconWhatsApp} label="Disparos WhatsApp" />
                             
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Sistema & Ajuda</p>
+                            <button onClick={() => { setShowSettings(true); setIsSidebarOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold transition-all duration-200 text-slate-400 hover:text-white hover:bg-slate-800/50">
+                                <div className="h-5 w-5 flex items-center justify-center text-base">🎨</div> Temas
+                            </button>
                             <NavButton route="tutorial" icon={IconBook} label="Tutorial" />
                             <NavButton route="support" icon={IconSupport} label="Suporte Técnico" />
                             <NavButton route="credits" icon={IconCode} label="Sobre o Desenvolvedor" />
@@ -4089,7 +4133,7 @@
                                 </div>
                             </div>
                             <button onClick={() => setShowSettings(true)} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 mb-2 text-sm font-bold text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition-colors border border-slate-800">
-                                <div className="h-4 w-4"><IconSettings/></div> Configurações
+                                <span className="text-base">🎨</span> Temas
                             </button>
                             <button onClick={() => handleSetUser(null)} className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-bold text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-lg transition-colors border border-transparent hover:border-red-400/20">
                                 <div className="h-4 w-4"><IconLogOut/></div> Sair da Conta
