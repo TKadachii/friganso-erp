@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.6.17.1221
+// @version      2026.6.22.1806
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -152,6 +152,8 @@
             let nome = "";
             cells.forEach(function (c) { const ct = (c.innerText || "").replace(/\s+/g, " ").trim(); if (/[A-Za-zÀ-Ú]{4,}/.test(ct) && ct.length > nome.length) nome = ct; });
             if (!nome || nome.replace(/[^A-Za-zÀ-Ú]/g, "").length < 4) return;
+            // 🚯 rejeita "nome" que na verdade é lixo de script/URL da página (não é produto)
+            if (nome.length > 70 || /[{}=;]|\bfunction\b|document\.|\.ajax|https?:|frm_|spa_|timezone|getTimezone|var\s|css\(|position\(|\.hide\(/i.test(nome)) return;
             const rr = (codeCell || row).getBoundingClientRect(); const prodY = rr.top + rr.height / 2;
             let qty = null, melhor = 1e9;
             campos.forEach(function (c) { const dy = Math.abs(c.y - prodY); if (dy > 16) return; const dx = (colX !== null) ? Math.abs(c.x - colX) : 0; const s = dx + dy; if (s < melhor) { melhor = s; qty = c.val; } });
