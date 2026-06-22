@@ -1480,6 +1480,16 @@
                             </div>
                         </div>
 
+                        {/* 📲 App Android: abre o SPAmov pra navegar e puxar o pedido (botão "Enviar pro Friganso ERP" lá dentro) */}
+                        {isCapacitor && (
+                            <div className="mb-4">
+                                <button onClick={() => window.__frigAbrirSpamov && window.__frigAbrirSpamov()} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3.5 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2">
+                                    🏢 Abrir SPAmov pra puxar pedido
+                                </button>
+                                <p className="text-[11px] text-slate-400 mt-1.5 text-center">Abre o SPAmov, você acha o pedido e toca em <b>📋 Enviar pro Friganso ERP</b> — ele volta pra cá com o resumo pronto.</p>
+                            </div>
+                        )}
+
                         <div className={`relative rounded-2xl border-2 transition-all duration-200 ${orderText.trim() ? 'border-rose-400 shadow-md shadow-rose-100' : 'border-slate-200'}`}>
                             <textarea
                                 value={orderText}
@@ -3866,6 +3876,38 @@
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             const [messageBox, setMessageBox] = useState(null);
             const [showSettings, setShowSettings] = useState(false);
+            const [resumoNonce, setResumoNonce] = useState(0); // força recarregar o Resumo quando chega um pedido do SPAmov (app)
+
+            // 📲 APP ANDROID: abrir o SPAmov pra pegar resumo + receber o pedido de volta (botão "Enviar pro Friganso ERP")
+            useEffect(() => {
+                if (!isCapacitor) return;
+                const P = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.SpamovAuto : null;
+                window.__frigAbrirSpamov = () => {
+                    const u = window.localStorage.getItem('friganso_spamov_user') || '';
+                    const s = window.localStorage.getItem('friganso_spamov_pass') || '';
+                    if (P && P.abrir) P.abrir({ url: 'http://spd1.friganso.com.br/rdm-business/', creds: { usuario: u, senha: s } });
+                    else showMessage('Recurso indisponível nesta versão do app.', 'error');
+                };
+                const puxarResumo = () => {
+                    if (!P || !P.pegarResumoPendente) return;
+                    P.pegarResumoPendente().then(r => {
+                        if (r && r.pedidojson) {
+                            try {
+                                const json = decodeURIComponent(escape(atob(r.pedidojson)));
+                                window.sessionStorage.setItem('friganso_pedido_json', json);
+                                setResumoNonce(n => n + 1);
+                                setActiveRoute('resumo');
+                                showMessage('Pedido trazido do SPAmov! 📋', 'success');
+                            } catch (e) {}
+                        }
+                    }).catch(() => {});
+                };
+                const onVis = () => { if (!document.hidden) puxarResumo(); };
+                document.addEventListener('visibilitychange', onVis);
+                window.addEventListener('focus', puxarResumo);
+                puxarResumo();
+                return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', puxarResumo); };
+            }, []);
             // 🎨 Tema escolhido: auto | claro | escuro | sakura | oceano | esmeralda
             const [tema, setTema] = useState(() => { try { return window.localStorage.getItem('friganso_tema') || 'auto'; } catch (e) { return 'auto'; } });
 
@@ -4024,7 +4066,7 @@
                     case 'credits': return <CreditsScreen />;
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} />;
-                    case 'resumo': return <ResumoScreen products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
+                    case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
