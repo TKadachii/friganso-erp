@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.6.22.1806
+// @version      2026.6.25.1804
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -110,7 +110,13 @@
         }
         return m ? { code: m[1].trim(), nome: m[2].trim() } : { code: "", nome: "" };
     }
-    function extrairSpamov() { const m = bodyText().match(/SPAmov[\s\S]{0,200}?(\d{6,8})/i); return m ? m[1] : ""; }
+    function extrairSpamov() {
+        const t = bodyText();
+        // número LOGO após o rótulo "SPAmov" (mais preciso; evita pegar limite de crédito/data por engano)
+        let m = t.match(/SPAmov\s*(?:n[ºo°.]?\s*|:|-|nº|n°)?\s*(\d{6,8})\b/i);
+        if (!m) m = t.match(/SPAmov[\s\S]{0,90}?(\d{6,8})/i); // fallback mais curto que antes (era 200)
+        return m ? m[1] : "";
+    }
     function extrairOrcamento() { const m = bodyText().match(/Or[çc]amento[\s\S]{0,40}?(\d{6,8})/i); return m ? m[1] : ""; }
 
     function acharTabelaItens() {
@@ -158,14 +164,20 @@
             let qty = null, melhor = 1e9;
             campos.forEach(function (c) { const dy = Math.abs(c.y - prodY); if (dy > 16) return; const dx = (colX !== null) ? Math.abs(c.x - colX) : 0; const s = dx + dy; if (s < melhor) { melhor = s; qty = c.val; } });
             if (qty === null) qty = 1;
+            try { console.log('[FRIG-LER] linha code=' + rawCode + ' qty=' + qty + ' nome="' + nome.slice(0, 50) + '"'); } catch (e) {}
             raw.push({ rawCode: rawCode, nome: nome, qty: qty });
         });
-        const temPrefixoLinha = raw.length > 0 && raw.every(function (r, i) { const p = String(i + 1); return r.rawCode.indexOf(p) === 0 && (r.rawCode.length - p.length) >= 3; });
+        // Lê o código COMO ESTÁ. (Antes tirava um suposto "prefixo de número de linha", o que
+        // quebrava códigos reais — ex: 1443 na linha 1 virava 443. Removido.)
         const itens = [], seen = new Set();
-        raw.forEach(function (r, i) { let code = temPrefixoLinha ? r.rawCode.slice(String(i + 1).length) : r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty }); });
+        raw.forEach(function (r) { const code = r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty }); });
         return itens;
     }
-    function montarPedidoLeitura() { const c = extrairCliente(); const sp = extrairSpamov(); return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: extrairItens(sp) }; }
+    function montarPedidoLeitura() {
+        const c = extrairCliente(); const sp = extrairSpamov(); const itens = extrairItens(sp);
+        try { console.log('[FRIG-LER] >>> cliente=' + c.code + ' (' + c.nome + ') | spamov=' + sp + ' | tabela=' + (acharTabelaItens() ? 'achada' : 'NAO achada') + ' | itens=' + JSON.stringify(itens.map(function (x) { return { c: x.code, q: x.qty, n: (x.nome || '').slice(0, 30) }; }))); } catch (e) {}
+        return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens };
+    }
     function temPedidoLeitura(p) { return p && (p.cliente || p.spamov || (p.itens && p.itens.length > 0)); }
     function enviarParaApp() {
         const p = montarPedidoLeitura();
