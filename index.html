@@ -837,7 +837,8 @@
             </div>
         );
 
-        const PdfScreen = ({ user, products, setProducts, showMessage }) => {
+        const PdfScreen = ({ user, products, setProducts, showMessage, listaNegra, toggleListaNegra }) => {
+            const lnSet = new Set((listaNegra || []).map(String));
             const [isLoading, setIsLoading] = useState(false);
             const [searchTerm, setSearchTerm] = useState('');
             const [cloudInfo, setCloudInfo] = useState(null);
@@ -1014,10 +1015,13 @@
                 } catch (e) { showMessage('Erro ao comparar com a anterior.', 'error'); } finally { setIsLoading(false); }
             };
 
+            const [soLista, setSoLista] = useState(false); // mostrar só os itens da lista negra
             const filteredProducts = useMemo(() => {
-                if (!searchTerm) return products;
-                return products.filter(p => matchProduto(p, searchTerm.trim()));
-            }, [products, searchTerm]);
+                let base = products;
+                if (soLista) base = base.filter(p => lnSet.has(String(p.code)));
+                if (!searchTerm) return base;
+                return base.filter(p => matchProduto(p, searchTerm.trim()));
+            }, [products, searchTerm, soLista, listaNegra]);
 
             return (
                 <div className="animate-in fade-in space-y-6">
@@ -1068,6 +1072,11 @@
                             {products.length > 0 && (
                                 <button onClick={compararComAnterior} disabled={isLoading} title="Compara a tabela atual com a anterior da nuvem" className="bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md">
                                     📊 Comparar com anterior
+                                </button>
+                            )}
+                            {products.length > 0 && (
+                                <button onClick={() => setSoLista(s => !s)} title="Itens que NÃO saem no Gerador de Zap / Disparos" className={`px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md ${soLista ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+                                    🚫 Lista Negra{lnSet.size ? ' (' + lnSet.size + ')' : ''}
                                 </button>
                             )}
                             <div className="relative flex-1 sm:flex-none">
@@ -1142,13 +1151,16 @@
                             <div className="p-4 border-b border-slate-100 bg-slate-50 relative"><div className="absolute left-7 top-1/2 -translate-y-1/2 text-slate-400 h-5 w-5"><IconSearch /></div><input type="text" placeholder="Pesquise por código ou nome..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:border-rose-500 outline-none font-medium" /></div>
                             <div className="overflow-auto flex-1">
                                 <table className="w-full text-left border-collapse">
-                                    <thead className="bg-white sticky top-0 shadow-sm"><tr><th className="p-4 font-bold text-slate-600 border-b">Cód</th><th className="p-4 font-bold text-slate-600 border-b">Produto</th><th className="p-4 font-bold text-slate-600 border-b text-right">Orig.</th><th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">À Vista (-3%)</th></tr></thead>
+                                    <thead className="bg-white sticky top-0 shadow-sm"><tr><th className="p-4 font-bold text-slate-600 border-b">Cód</th><th className="p-4 font-bold text-slate-600 border-b">Produto</th><th className="p-4 font-bold text-slate-600 border-b text-right">Orig.</th><th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">À Vista (-3%)</th><th className="p-4 font-bold text-slate-600 border-b text-center" title="Lista Negra: itens marcados não saem no Zap/Disparos">Zap</th></tr></thead>
                                     <tbody>
-                                        {filteredProducts.map((p, i) => (
-                                            <tr key={i} className="hover:bg-slate-50 border-b border-slate-50">
+                                        {filteredProducts.map((p, i) => {
+                                            const banido = lnSet.has(String(p.code));
+                                            return (
+                                            <tr key={i} className={`hover:bg-slate-50 border-b border-slate-50 ${banido ? 'opacity-60 bg-slate-50' : ''}`}>
                                                 <td className="p-4 text-slate-500 font-bold align-top">{p.code}</td>
                                                 <td className="p-4 text-slate-800 font-medium align-top">
-                                                    {p.name}
+                                                    <span className={banido ? 'line-through' : ''}>{p.name}</span>
+                                                    {banido && <span className="ml-2 text-[10px] font-bold bg-slate-700 text-white px-2 py-0.5 rounded-full align-middle whitespace-nowrap">🚫 fora do Zap</span>}
                                                     {(p.tipo || p.pesoItem || p.pcsItem || p.kgUn) && (
                                                         <div className="text-[11px] text-slate-400 font-normal mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
                                                             {p.tipo && <span>📦 {p.tipo}</span>}
@@ -1160,8 +1172,12 @@
                                                 </td>
                                                 <td className="p-4 text-right text-slate-600 align-top">{formatPrice(p.originalPrice)}</td>
                                                 <td className="p-4 text-right font-bold text-rose-700 bg-rose-50/30 align-top">{formatPrice(p.discountedPrice)}</td>
+                                                <td className="p-3 text-center align-top">
+                                                    <button onClick={() => toggleListaNegra(p.code)} title={banido ? 'Voltar a divulgar (tirar da lista negra)' : 'Não divulgar no Zap/Disparos (pôr na lista negra)'} className={`h-9 w-9 rounded-lg text-base transition-colors ${banido ? 'bg-emerald-100 hover:bg-emerald-200' : 'bg-slate-100 hover:bg-rose-100 grayscale opacity-60 hover:opacity-100 hover:grayscale-0'}`}>{banido ? '↩️' : '🚫'}</button>
+                                                </td>
                                             </tr>
-                                        ))}
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -1674,8 +1690,9 @@
             );
         };
 
-        const OrcamentosScreen = ({ products, showMessage, activeRoute }) => {
-            const [search, setSearch] = useState(''); 
+        const OrcamentosScreen = ({ products, showMessage, activeRoute, listaNegra }) => {
+            const lnSet = new Set((listaNegra || []).map(String)); // 🚫 lista negra: não aparece nem é ofertado
+            const [search, setSearch] = useState('');
             const [selectedCodes, setSelectedCodes] = useState(new Set());
             
             useEffect(() => {
@@ -1685,17 +1702,18 @@
                 }
             }, [activeRoute]);
 
-            const filtered = useMemo(() => { 
-                if (!search.trim() && selectedCodes.size > 0) return products.filter(p => selectedCodes.has(p.code));
-                if (!search.trim()) return []; return products.filter(p => matchProduto(p, search.trim()));
-            }, [products, search, selectedCodes]);
+            const filtered = useMemo(() => {
+                const semBanidos = (arr) => arr.filter(p => !lnSet.has(String(p.code)));
+                if (!search.trim() && selectedCodes.size > 0) return semBanidos(products.filter(p => selectedCodes.has(p.code)));
+                if (!search.trim()) return []; return semBanidos(products.filter(p => matchProduto(p, search.trim())));
+            }, [products, search, selectedCodes, listaNegra]);
 
             const toggleCode = code => { const s = new Set(selectedCodes); s.has(code) ? s.delete(code) : s.add(code); setSelectedCodes(s); };
             
             const generateText = () => {
                 if(selectedCodes.size === 0) return '';
                 let txt = search.trim() ? `🥩 *${search.toUpperCase()}*\n\n` : `🥩 *ORÇAMENTO*\n\n`;
-                products.filter(p => selectedCodes.has(p.code)).forEach(p => {
+                products.filter(p => selectedCodes.has(p.code) && !lnSet.has(String(p.code))).forEach(p => {
                     const { hasDiscount, origPrice, unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
                     txt += `Cod: ${p.code}\n\n${p.name}\n`;
                     if(hasDiscount) txt += `💰 Valor: ~${formatPrice(origPrice)}~ por *${formatPrice(unitFinalPrice)}/kg* 🔥 (Com 3% de Desconto)\n\n`;
@@ -3238,7 +3256,8 @@
         };
 
         // ===== DISPAROS WHATSAPP: campanha clicar-e-enviar =====
-        const DisparosScreen = ({ clients, products, user, showMessage, setActiveRoute }) => {
+        const DisparosScreen = ({ clients, products, user, showMessage, setActiveRoute, listaNegra }) => {
+            const lnSet = new Set((listaNegra || []).map(String)); // 🚫 itens da lista negra não entram em oferta
             const TEMPLATE_PADRAO = "🥩 *OFERTAS DO DIA*\n\n{ofertas}";
             const PRESETS_PADRAO = [
                 { id: 'p_ofertas', nome: 'Ofertas do Dia', texto: '🥩 *OFERTAS DO DIA*\n\n{ofertas}' },
@@ -3315,7 +3334,7 @@
 
                 // 📦 modo "os escolhidos": oferta exatamente o(s) produto(s) que você selecionou
                 if (ofertaModo === 'selecionados') {
-                    const sel = products.filter(p => produtosAlvo.has(String(p.code)));
+                    const sel = products.filter(p => produtosAlvo.has(String(p.code)) && !lnSet.has(String(p.code)));
                     const comprou = sel.filter(p => histSet.has(String(p.code)));
                     return comprou.length ? comprou : sel;
                 }
@@ -3333,6 +3352,7 @@
                     // só o que ele JÁ comprou e ainda existe na tabela atual
                     cands = histCodes.map(code => products.find(p => String(p.code) === code)).filter(Boolean);
                 }
+                cands = cands.filter(p => p && !lnSet.has(String(p.code))); // 🚫 remove itens da lista negra
                 if (!cands.length) return [];
 
                 // "todos" devolve a lista inteira; senão rotaciona uma janela de N pela data
@@ -3387,8 +3407,8 @@
             }, [clients]);
             // produtos ordenados pelos mais comprados (os que mais clientes têm aparecem em cima)
             const produtosOrdenados = useMemo(() =>
-                [...products].sort((a, b) => (clientesPorProduto[String(b.code)] || 0) - (clientesPorProduto[String(a.code)] || 0)),
-                [products, clientesPorProduto]);
+                products.filter(p => !lnSet.has(String(p.code))).sort((a, b) => (clientesPorProduto[String(b.code)] || 0) - (clientesPorProduto[String(a.code)] || 0)),
+                [products, clientesPorProduto, listaNegra]);
             const toggleProd = (code) => {
                 const s = new Set(produtosAlvo);
                 s.has(code) ? s.delete(code) : s.add(code);
@@ -3402,9 +3422,9 @@
                     const r = window.localStorage.getItem('friganso_price_changes');
                     const pc = r ? JSON.parse(r) : null;
                     if (!pc || !Array.isArray(pc.changes)) return [];
-                    return pc.changes.filter(c => Number(c.newPrice) < Number(c.oldPrice)).map(c => String(c.code));
+                    return pc.changes.filter(c => Number(c.newPrice) < Number(c.oldPrice)).map(c => String(c.code)).filter(code => !lnSet.has(code));
                 } catch (e) { return []; }
-            }, []);
+            }, [listaNegra]);
             // escolhe o filtro; "baixou" já marca os produtos que abaixaram e ajusta a oferta
             const escolherFiltro = (k) => {
                 setFiltro(k);
@@ -4017,6 +4037,25 @@
                 return () => unsubscribe();
             }, []);
 
+            // 🚫 Lista Negra (itens indisponíveis) — compartilhada na nuvem. Itens aqui NÃO saem em Gerador de Zap / Disparos.
+            const [listaNegra, setListaNegra] = useState([]);
+            useEffect(() => {
+                const unsub = db.collection('system_data').doc('lista_negra').onSnapshot(d => {
+                    const c = (d && d.exists && d.data()) ? (d.data().codes || []) : [];
+                    setListaNegra(c.map(String));
+                }, () => {});
+                return () => unsub();
+            }, []);
+            const toggleListaNegra = async (code) => {
+                code = String(code);
+                const s = new Set(listaNegra.map(String));
+                s.has(code) ? s.delete(code) : s.add(code);
+                const arr = Array.from(s);
+                setListaNegra(arr); // atualização otimista
+                try { await db.collection('system_data').doc('lista_negra').set({ codes: arr }); }
+                catch (e) { showMessage('Erro ao salvar na lista negra.', 'error'); }
+            };
+
             // 🧾 O histórico de compras NÃO carrega mais no boot (era pesado).
             // Agora é carregado só dentro da tela "Fazer Pedido", quando você abre ela.
             
@@ -4065,10 +4104,10 @@
                     case 'support': return <SupportScreen user={user} />;
                     case 'credits': return <CreditsScreen />;
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
-                    case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} />;
+                    case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
-                    case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} />;
-                    case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
+                    case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
+                    case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} listaNegra={listaNegra} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
                     case 'navegador': return isElectron ? null : <NavegadorScreen />;
                     case 'tutorial': return <TutorialScreen setActiveRoute={setActiveRoute} />;
