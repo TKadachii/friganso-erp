@@ -24,6 +24,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <!-- SheetJS para importar planilhas Excel/CSV de clientes -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- Chart.js (gráficos do Dashboard) — versão fixada pra não quebrar -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     
     <!-- FIREBASE (Banco de Dados e Auth) -->
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
@@ -807,35 +809,173 @@
             );
         };
 
-        const DashboardScreen = ({ user }) => (
-            <div className="animate-in fade-in space-y-6">
-                <div className="bg-slate-900 rounded-3xl p-8 text-white relative overflow-hidden shadow-xl border border-slate-800">
-                    <img src={BG_IMAGE} className="absolute inset-0 w-full h-full object-cover opacity-20 mix-blend-overlay" />
-                    <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-rose-950/90 to-transparent"></div>
-                    <div className="relative z-10">
-                        <h2 className="text-3xl font-extrabold mb-1">Olá, {user.name}!</h2>
-                        <p className="text-rose-200 font-medium opacity-80">Bem-vindo ao seu painel operacional corporativo.</p>
-                    </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                        <div className="h-10 w-10 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center mb-4"><IconReceipt/></div>
-                        <p className="text-slate-500 font-semibold text-sm">Vendas no Mês</p>
-                        <h3 className="text-2xl font-black text-slate-800 mt-1">R$ 0,00</h3>
-                    </div>
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                        <div className="h-10 w-10 bg-blue-100 text-blue-700 rounded-xl flex items-center justify-center mb-4"><IconUsers/></div>
-                        <p className="text-slate-500 font-semibold text-sm">Clientes CRM</p>
-                        <h3 className="text-2xl font-black text-slate-800 mt-1">Ativo na Nuvem</h3>
-                    </div>
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                        <div className="h-10 w-10 bg-rose-100 text-rose-700 rounded-xl flex items-center justify-center mb-4"><IconFileText/></div>
-                        <p className="text-slate-500 font-semibold text-sm">Status da Tabela</p>
-                        <h3 className="text-xl font-bold text-slate-800 mt-1 truncate text-rose-600">Sincronizada</h3>
-                    </div>
-                </div>
+        const PALETA = ['#e11d48', '#fb923c', '#fbbf24', '#34d399', '#38bdf8', '#a78bfa', '#f472b6', '#22d3ee', '#fb7185', '#94a3b8'];
+        // 📊 Gráfico reutilizável (Chart.js)
+        const Grafico = ({ tipo, data, options, altura }) => {
+            const ref = useRef(null);
+            const inst = useRef(null);
+            useEffect(() => {
+                if (!ref.current || !window.Chart) return;
+                if (inst.current) inst.current.destroy();
+                inst.current = new window.Chart(ref.current, { type: tipo, data: data, options: options });
+                return () => { if (inst.current) { inst.current.destroy(); inst.current = null; } };
+            }, [tipo, JSON.stringify(data), JSON.stringify(options)]);
+            return <div style={{ height: (altura || 260) + 'px', position: 'relative' }}><canvas ref={ref}></canvas></div>;
+        };
+        const CardGrafico = ({ titulo, children }) => (
+            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+                <h3 className="font-bold text-slate-800 mb-3 text-sm">{titulo}</h3>
+                {children}
             </div>
         );
+
+        const DashboardScreen = ({ user, clients, products }) => {
+            const [purchases, setPurchases] = useState([]);
+            const [versions, setVersions] = useState([]);
+            const [periodo, setPeriodo] = useState(30);
+            const [prodPreco, setProdPreco] = useState('');
+            const semChart = !window.Chart;
+
+            useEffect(() => {
+                if (window.Chart) { window.Chart.defaults.color = '#94a3b8'; window.Chart.defaults.font.family = "system-ui, 'Segoe UI', sans-serif"; }
+                const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(1500).onSnapshot(s => setPurchases(s.docs.map(d => d.data())), () => {});
+                db.collection('pdf_versions').orderBy('updatedAt', 'asc').limit(60).get().then(s => setVersions(s.docs.map(d => d.data()))).catch(() => {});
+                return () => unsub();
+            }, []);
+
+            const diaStr = (d) => d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+            const dados = useMemo(() => {
+                const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+                const dias = [];
+                for (let i = periodo - 1; i >= 0; i--) { const d = new Date(hoje); d.setDate(hoje.getDate() - i); dias.push(diaStr(d)); }
+                const desde = dias[0];
+                const comprasP = purchases.filter(p => (p.dia || '') >= desde);
+                const qtdDia = {}, pedDia = {}, prodQ = {}, tipoC = { juridica: 0, fisica: 0 }, cliC = {}, vendC = {};
+                let totalItens = 0; const cliSet = new Set(), prodSet = new Set();
+                comprasP.forEach(p => {
+                    const dia = p.dia || diaStr(new Date(p.ts || Date.now()));
+                    const q = (p.itens || []).reduce((a, it) => a + (Number(it.qty) || 0), 0);
+                    qtdDia[dia] = (qtdDia[dia] || 0) + q; pedDia[dia] = (pedDia[dia] || 0) + 1; totalItens += q;
+                    cliSet.add(String(p.clienteCode));
+                    tipoC[/fis/i.test(p.tipoPessoa || '') ? 'fisica' : 'juridica']++;
+                    const cnome = p.clienteName || ('Cliente ' + (p.clienteCode || '?')); cliC[cnome] = (cliC[cnome] || 0) + 1;
+                    vendC[p.vendedor || '—'] = (vendC[p.vendedor || '—'] || 0) + 1;
+                    (p.itens || []).forEach(it => { const c = String(it.code); prodSet.add(c); if (!prodQ[c]) prodQ[c] = { nome: it.name || ('Cod ' + c), qty: 0 }; prodQ[c].qty += Number(it.qty) || 0; });
+                });
+                const serieQtd = dias.map(d => qtdDia[d] || 0);
+                const seriePed = dias.map(d => pedDia[d] || 0);
+                const labelsDia = dias.map(d => d.slice(8, 10) + '/' + d.slice(5, 7));
+                const topProd = Object.keys(prodQ).map(c => ({ code: c, nome: prodQ[c].nome, qty: prodQ[c].qty })).sort((a, b) => b.qty - a.qty);
+                const topCli = Object.keys(cliC).map(n => ({ nome: n, n: cliC[n] })).sort((a, b) => b.n - a.n);
+                let melhorDia = '—', melhorQ = 0; dias.forEach(d => { if ((qtdDia[d] || 0) > melhorQ) { melhorQ = qtdDia[d]; melhorDia = d; } });
+                return { dias, labelsDia, serieQtd, seriePed, topProd, topCli, tipoC, vendC, comprasP, totalItens, cliCount: cliSet.size, prodCount: prodSet.size, melhorDia, melhorQ };
+            }, [purchases, periodo]);
+
+            const precoSerie = useMemo(() => {
+                const code = String(prodPreco || (dados.topProd[0] && dados.topProd[0].code) || (products[0] && products[0].code) || '');
+                if (!code || !versions.length) return null;
+                const labels = [], valores = [];
+                versions.forEach(v => {
+                    const dt = (v.updatedAt && v.updatedAt.toDate) ? v.updatedAt.toDate() : new Date(v.updatedAt || Date.now());
+                    const p = (v.products || []).find(x => String(x.code) === code);
+                    if (p) { labels.push(('0' + dt.getDate()).slice(-2) + '/' + ('0' + (dt.getMonth() + 1)).slice(-2)); valores.push(Number(p.originalPrice) || 0); }
+                });
+                const nome = (products.find(x => String(x.code) === code) || {}).name || ('Cod ' + code);
+                return { code, nome, labels, valores };
+            }, [versions, prodPreco, dados, products]);
+
+            const optBase = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: 'rgba(148,163,184,.12)' }, ticks: { maxTicksLimit: 12 } }, y: { grid: { color: 'rgba(148,163,184,.12)' }, beginAtZero: true } } };
+            const optBarH = { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: 'rgba(148,163,184,.12)' }, beginAtZero: true }, y: { grid: { display: false } } } };
+            const optPie = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 12, padding: 10 } } } };
+            const topProd10 = dados.topProd.slice(0, 10);
+            const topCli6 = dados.topCli.slice(0, 6);
+            const outrosCli = dados.topCli.slice(6).reduce((a, c) => a + c.n, 0);
+            const vendKeys = Object.keys(dados.vendC);
+            const Kpi = ({ icon, cor, label, valor }) => (
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                    <div className={`h-9 w-9 ${cor} rounded-xl flex items-center justify-center mb-2 text-lg`}>{icon}</div>
+                    <p className="text-slate-500 font-semibold text-xs">{label}</p>
+                    <h3 className="text-2xl font-black text-slate-800 mt-0.5">{valor}</h3>
+                </div>
+            );
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <div className="bg-slate-900 rounded-3xl p-7 text-white relative overflow-hidden shadow-xl border border-slate-800">
+                        <img src={BG_IMAGE} className="absolute inset-0 w-full h-full object-cover opacity-20 mix-blend-overlay" />
+                        <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-rose-950/90 to-transparent"></div>
+                        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                            <div><h2 className="text-2xl sm:text-3xl font-extrabold mb-1">Olá, {user.name}! 📊</h2><p className="text-rose-200 font-medium opacity-80">Seu painel de controle de vendas.</p></div>
+                            <div className="flex gap-1.5 bg-black/30 p-1 rounded-xl">
+                                {[[7, '7 dias'], [30, '30 dias'], [90, '90 dias'], [365, '1 ano']].map(([d, l]) => (
+                                    <button key={d} onClick={() => setPeriodo(d)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${periodo === d ? 'bg-rose-600 text-white' : 'text-rose-200 hover:bg-white/10'}`}>{l}</button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {semChart && <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-semibold">⚠️ Os gráficos precisam de internet pra carregar (a biblioteca Chart.js). Conecte e recarregue.</div>}
+
+                    {/* KPIs */}
+                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                        <Kpi icon="🧾" cor="bg-rose-100" label="Pedidos no período" valor={dados.comprasP.length} />
+                        <Kpi icon="📦" cor="bg-emerald-100" label="Itens vendidos" valor={dados.totalItens} />
+                        <Kpi icon="👥" cor="bg-blue-100" label="Clientes que compraram" valor={dados.cliCount} />
+                        <Kpi icon="🏷️" cor="bg-amber-100" label="Produtos distintos" valor={dados.prodCount} />
+                        <Kpi icon="🔥" cor="bg-purple-100" label="Melhor dia (itens)" valor={dados.melhorQ > 0 ? (dados.melhorDia.slice(8, 10) + '/' + dados.melhorDia.slice(5, 7) + ' · ' + dados.melhorQ) : '—'} />
+                    </div>
+
+                    {dados.comprasP.length === 0 ? (
+                        <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-400">
+                            <p className="text-lg font-bold">Ainda não há vendas registradas neste período.</p>
+                            <p className="text-sm mt-1">Os gráficos se enchem conforme você fecha pedidos (Resumo de Pedido / Fazer Pedido). 📈</p>
+                        </div>
+                    ) : (
+                        <>
+                            <CardGrafico titulo={`📈 Vendas por dia — itens vendidos (${periodo} dias)`}>
+                                <Grafico tipo="line" altura={280} options={optBase} data={{ labels: dados.labelsDia, datasets: [{ label: 'Itens', data: dados.serieQtd, borderColor: '#e11d48', backgroundColor: 'rgba(225,29,72,.15)', fill: true, tension: .35, pointRadius: 2, borderWidth: 2 }] }} />
+                            </CardGrafico>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                                <CardGrafico titulo="📊 Top 10 produtos (por quantidade)">
+                                    <Grafico tipo="bar" altura={320} options={optBarH} data={{ labels: topProd10.map(p => (p.nome || '').slice(0, 22)), datasets: [{ label: 'Qtd', data: topProd10.map(p => p.qty), backgroundColor: '#fb4b3a', borderRadius: 6 }] }} />
+                                </CardGrafico>
+                                <CardGrafico titulo="🥧 Pedidos por tipo de cliente">
+                                    <Grafico tipo="doughnut" altura={320} options={optPie} data={{ labels: ['Jurídica (CNPJ)', 'Física (CPF)'], datasets: [{ data: [dados.tipoC.juridica, dados.tipoC.fisica], backgroundColor: ['#e11d48', '#38bdf8'], borderWidth: 0 }] }} />
+                                </CardGrafico>
+                            </div>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                                <CardGrafico titulo="🥧 Top clientes (por nº de pedidos)">
+                                    <Grafico tipo="pie" altura={300} options={optPie} data={{ labels: topCli6.map(c => (c.nome || '').slice(0, 18)).concat(outrosCli > 0 ? ['Outros'] : []), datasets: [{ data: topCli6.map(c => c.n).concat(outrosCli > 0 ? [outrosCli] : []), backgroundColor: PALETA, borderWidth: 0 }] }} />
+                                </CardGrafico>
+                                <CardGrafico titulo="📉 Pedidos por dia (movimento)">
+                                    <Grafico tipo="bar" altura={300} options={optBase} data={{ labels: dados.labelsDia, datasets: [{ label: 'Pedidos', data: dados.seriePed, backgroundColor: '#a78bfa', borderRadius: 4 }] }} />
+                                </CardGrafico>
+                            </div>
+
+                            {vendKeys.length > 1 && (
+                                <CardGrafico titulo="👤 Pedidos por vendedor">
+                                    <Grafico tipo="bar" altura={240} options={optBarH} data={{ labels: vendKeys, datasets: [{ label: 'Pedidos', data: vendKeys.map(k => dados.vendC[k]), backgroundColor: '#34d399', borderRadius: 6 }] }} />
+                                </CardGrafico>
+                            )}
+
+                            {/* Variação de preço por data */}
+                            <CardGrafico titulo="💲 Variação de preço por data (entre as tabelas distribuídas)">
+                                <div className="mb-3">
+                                    <select value={prodPreco || (precoSerie ? precoSerie.code : '')} onChange={e => setProdPreco(e.target.value)} className="w-full sm:w-auto px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-rose-500 font-bold">
+                                        {products.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(p => <option key={p.code} value={p.code}>{p.code} — {p.name}</option>)}
+                                    </select>
+                                </div>
+                                {precoSerie && precoSerie.labels.length > 1
+                                    ? <Grafico tipo="line" altura={260} options={optBase} data={{ labels: precoSerie.labels, datasets: [{ label: 'R$/kg', data: precoSerie.valores, borderColor: '#fbbf24', backgroundColor: 'rgba(251,191,36,.15)', fill: true, tension: .3, pointRadius: 3, borderWidth: 2 }] }} />
+                                    : <p className="text-sm text-slate-400 py-6 text-center">Poucas tabelas distribuídas pra comparar esse produto. Distribua tabelas em dias diferentes pra ver a variação. 📅</p>}
+                            </CardGrafico>
+                        </>
+                    )}
+                </div>
+            );
+        };
 
         const PdfScreen = ({ user, products, setProducts, showMessage, listaNegra, toggleListaNegra }) => {
             const lnSet = new Set((listaNegra || []).map(String));
@@ -4098,7 +4238,7 @@
 
             const renderContent = () => {
                 switch(activeRoute) {
-                    case 'dashboard': return <DashboardScreen user={user} />;
+                    case 'dashboard': return <DashboardScreen user={user} clients={clients} products={products} />;
                     case 'clients': return <ClientsScreen products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
