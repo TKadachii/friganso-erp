@@ -1414,6 +1414,22 @@
                             const qty = Number(it.qty) || 1;
                             return { code: String(it.code), name: nome, quantity: qty, unitFinalPrice, discountedPrice: unitFinalPrice * qty, originalPrice: origPrice * qty, hasDiscount };
                         }).filter(x => x.code);
+
+                        // 🧪 SÓ PRA TESTE (não muda o Resumo normal): Valor da Nota = Peso (P.Liq. KG) × Preço/Kg,
+                        // do jeito que o SPAmov realmente calcula. Mostrado na aba 🐞 Debug pra comparar.
+                        try {
+                            const debugItens = (data.itens || []).map(it => {
+                                const rp = products.find(p => String(p.code) === String(it.code));
+                                const nome = rp ? rp.name : (it.nome || ('Produto ' + it.code));
+                                const base = rp ? rp.originalPrice : 0;
+                                const { unitFinalPrice } = checkDiscountRules(it.code, nome, base);
+                                const peso = Number(it.peso) || 0;
+                                return { code: String(it.code), nome, qty: Number(it.qty) || 1, peso, precoKg: unitFinalPrice, subtotal: peso * unitFinalPrice };
+                            });
+                            const total = debugItens.reduce((a, c) => a + c.subtotal, 0);
+                            window.localStorage.setItem('friganso_debug_valor_nota', JSON.stringify({ cliente: data.cliente || '', spamov: data.spamov || '', itens: debugItens, total, ts: Date.now() }));
+                        } catch (e) {}
+
                         if (processed.length) {
                             setPendingCustomer(data.cliente || '');
                             setPendingSpamov(data.spamov || '');
@@ -3911,6 +3927,17 @@
             const [senha, setSenha] = useState(() => window.localStorage.getItem('friganso_spamov_pass') || '');
             const [verSenha, setVerSenha] = useState(false);
 
+            // 🧪 Valor da Nota (teste) = Peso (P.Liq. KG) × Preço/Kg — pra comparar com o total real do SPAmov
+            const lerValorNota = () => { try { const raw = window.localStorage.getItem('friganso_debug_valor_nota'); return raw ? JSON.parse(raw) : null; } catch (e) { return null; } };
+            const [valorNota, setValorNota] = useState(lerValorNota);
+            useEffect(() => {
+                const atualizar = () => setValorNota(lerValorNota());
+                window.addEventListener('storage', atualizar);
+                const iv = setInterval(atualizar, 1500); // a mesma aba não dispara 'storage' -> também faz polling
+                return () => { window.removeEventListener('storage', atualizar); clearInterval(iv); };
+            }, []);
+            const limparValorNota = () => { window.localStorage.removeItem('friganso_debug_valor_nota'); setValorNota(null); };
+
             const salvar = () => {
                 window.localStorage.setItem('friganso_spamov_user', usuario);
                 window.localStorage.setItem('friganso_spamov_pass', senha);
@@ -3954,6 +3981,43 @@
                             <button onClick={salvar} className="bg-white border-2 border-slate-200 hover:border-rose-400 text-slate-700 font-bold py-3 px-5 rounded-xl transition-colors">💾 Salvar</button>
                         </div>
                         <p className="text-[11px] text-slate-400">A extensão precisa estar instalada e com acesso aos sites. Ao clicar em "Abrir e Logar", a página do SPAmov abre e a extensão preenche e clica em <b>Log In</b>.</p>
+                    </div>
+
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>💰</span> Valor da Nota (teste)</h3>
+                            {valorNota && <button onClick={limparValorNota} className="text-xs font-bold text-slate-400 hover:text-rose-600">limpar</button>}
+                        </div>
+                        <p className="text-xs text-slate-400">Calculado como <b>Peso (P.Liq. KG) × Preço/Kg</b> — exatamente como o SPAmov calcula. É só pra conferir; <b>não muda</b> o Resumo de Pedido normal.</p>
+                        {!valorNota ? (
+                            <div className="text-sm text-slate-400 italic py-2">Nenhum pedido lido ainda. No SPAmov, clique em "📋 Enviar pro Friganso ERP".</div>
+                        ) : (
+                            <div className="space-y-3">
+                                <div className="text-xs text-slate-500">Cliente <b>{valorNota.cliente || '?'}</b> · SPAmov <b>{valorNota.spamov || '?'}</b> · {new Date(valorNota.ts).toLocaleTimeString('pt-BR')}</div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-xs">
+                                        <thead>
+                                            <tr className="text-slate-400 text-left">
+                                                <th className="py-1 pr-2">Código</th><th className="pr-2">Produto</th><th className="pr-2">Qtd</th><th className="pr-2">Peso (kg)</th><th className="pr-2">R$/kg</th><th>Subtotal</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {valorNota.itens.map((it, i) => (
+                                                <tr key={i} className="border-t border-slate-100">
+                                                    <td className="py-1.5 pr-2 font-mono">{it.code}</td>
+                                                    <td className="pr-2">{it.nome}</td>
+                                                    <td className="pr-2">{it.qty}</td>
+                                                    <td className="pr-2">{it.peso.toFixed(2)}</td>
+                                                    <td className="pr-2">{formatPrice(it.precoKg)}</td>
+                                                    <td className="font-bold">{formatPrice(it.subtotal)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div className="text-right text-lg font-extrabold text-rose-700">Total: {formatPrice(valorNota.total)}</div>
+                            </div>
+                        )}
                     </div>
                 </div>
             );

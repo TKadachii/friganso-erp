@@ -72,7 +72,13 @@
         }
         return m ? { code: m[1].trim(), nome: m[2].trim() } : { code: "", nome: "" };
     }
-    function extrairSpamov() { const m = bodyText().match(/SPAmov[\s\S]{0,200}?(\d{6,8})/i); return m ? m[1] : ""; }
+    function extrairSpamov() {
+        const t = bodyText();
+        // número LOGO após o rótulo "SPAmov" (mais preciso; evita pegar limite de crédito/data por engano)
+        let m = t.match(/SPAmov\s*(?:n[ºo°.]?\s*|:|-|nº|n°)?\s*(\d{6,8})\b/i);
+        if (!m) m = t.match(/SPAmov[\s\S]{0,90}?(\d{6,8})/i); // fallback mais curto que antes (era 200)
+        return m ? m[1] : "";
+    }
     function extrairOrcamento() { const m = bodyText().match(/Or[çc]amento[\s\S]{0,40}?(\d{6,8})/i); return m ? m[1] : ""; }
 
     function acharTabelaItens() {
@@ -91,12 +97,24 @@
         }
         return null;
     }
+    // 🟡 Coluna "P.Liq.(KG)" — peso líquido do item, usado pra calcular o Valor da Nota = peso × preço
+    function colXPLiq(scope) {
+        const cs = (scope || document).querySelectorAll("td, th");
+        for (let i = 0; i < cs.length; i++) {
+            const t = (cs[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
+            if (t.indexOf("p.liq") !== -1 || t.indexOf("p liq") !== -1 || (t.indexOf("liq") !== -1 && t.indexOf("kg") !== -1)) {
+                const r = cs[i].getBoundingClientRect(); if (r.width) return r.left + r.width / 2;
+            }
+        }
+        return null;
+    }
 
     function extrairItens(spamov) {
         const raw = [];
         const ignorar = new Set([spamov, extrairOrcamento()].filter(Boolean));
         const scope = acharTabelaItens() || document;
         const colX = colXQuant(scope);
+        const colXP = colXPLiq(scope);
         const campos = [];
         scope.querySelectorAll("input").forEach(function (inp) {
             const tipo = (inp.type || "").toLowerCase();
@@ -114,18 +132,40 @@
             let nome = "";
             cells.forEach(function (c) { const ct = (c.innerText || "").replace(/\s+/g, " ").trim(); if (/[A-Za-zÀ-Ú]{4,}/.test(ct) && ct.length > nome.length) nome = ct; });
             if (!nome || nome.replace(/[^A-Za-zÀ-Ú]/g, "").length < 4) return;
+            // 🚯 rejeita "nome" que na verdade é lixo de script/URL da página (não é produto)
+            if (nome.length > 70 || /[{}=;]|\bfunction\b|document\.|\.ajax|https?:|frm_|spa_|timezone|getTimezone|var\s|css\(|position\(|\.hide\(/i.test(nome)) return;
             const rr = (codeCell || row).getBoundingClientRect(); const prodY = rr.top + rr.height / 2;
             let qty = null, melhor = 1e9;
             campos.forEach(function (c) { const dy = Math.abs(c.y - prodY); if (dy > 16) return; const dx = (colX !== null) ? Math.abs(c.x - colX) : 0; const s = dx + dy; if (s < melhor) { melhor = s; qty = c.val; } });
             if (qty === null) qty = 1;
-            raw.push({ rawCode: rawCode, nome: nome, qty: qty });
+            // ⚖️ Peso líquido (P.Liq. KG) da linha — célula de texto (não input), perto da coluna P.Liq.
+            let peso = 0;
+            if (colXP !== null) {
+                let melhorP = 1e9;
+                cells.forEach(function (c) {
+                    const ct = (c.innerText || "").trim();
+                    if (!/^\d+(?:[.,]\d+)?$/.test(ct)) return;
+                    const r = c.getBoundingClientRect(); if (!r.width) return;
+                    const cx = r.left + r.width / 2;
+                    const dx = Math.abs(cx - colXP);
+                    if (dx > 80) return; // só aceita célula realmente na coluna P.Liq.
+                    if (dx < melhorP) { melhorP = dx; peso = parseFloat(ct.replace(",", ".")) || 0; }
+                });
+            }
+            try { console.log('[FRIG-LER] linha code=' + rawCode + ' qty=' + qty + ' peso=' + peso + ' nome="' + nome.slice(0, 50) + '"'); } catch (e) {}
+            raw.push({ rawCode: rawCode, nome: nome, qty: qty, peso: peso });
         });
-        const temPrefixoLinha = raw.length > 0 && raw.every(function (r, i) { const p = String(i + 1); return r.rawCode.indexOf(p) === 0 && (r.rawCode.length - p.length) >= 3; });
+        // Lê o código COMO ESTÁ. (Antes tirava um suposto "prefixo de número de linha", o que
+        // quebrava códigos reais — ex: 1443 na linha 1 virava 443. Removido.)
         const itens = [], seen = new Set();
-        raw.forEach(function (r, i) { let code = temPrefixoLinha ? r.rawCode.slice(String(i + 1).length) : r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty }); });
+        raw.forEach(function (r) { const code = r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty, peso: r.peso }); });
         return itens;
     }
-    function montarPedidoLeitura() { const c = extrairCliente(); const sp = extrairSpamov(); return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: extrairItens(sp) }; }
+    function montarPedidoLeitura() {
+        const c = extrairCliente(); const sp = extrairSpamov(); const itens = extrairItens(sp);
+        try { console.log('[FRIG-LER] >>> cliente=' + c.code + ' (' + c.nome + ') | spamov=' + sp + ' | tabela=' + (acharTabelaItens() ? 'achada' : 'NAO achada') + ' | itens=' + JSON.stringify(itens.map(function (x) { return { c: x.code, q: x.qty, n: (x.nome || '').slice(0, 30) }; }))); } catch (e) {}
+        return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens };
+    }
     function temPedidoLeitura(p) { return p && (p.cliente || p.spamov || (p.itens && p.itens.length > 0)); }
     function enviarParaApp() {
         const p = montarPedidoLeitura();
@@ -180,6 +220,7 @@
     }
     function dlog(msg) {
         const linha = new Date().toLocaleTimeString() + "  " + msg;
+        try { console.log("[FRIG] " + linha); } catch (e) {} // surge no log nativo do app
         try {
             chrome.storage.local.get(["friganso_log"], function (r) {
                 const arr = (r && r.friganso_log) || [];
@@ -192,7 +233,12 @@
     function limparLog() { try { chrome.storage.local.set({ friganso_log: [] }); } catch (e) {} renderLog([]); }
     function mostrarLogSalvo() { try { chrome.storage.local.get(["friganso_log"], function (r) { const a = (r && r.friganso_log) || []; if (a.length) renderLog(a); }); } catch (e) {} }
 
-    function setInput(el, v) { el.focus(); el.value = String(v); ["input", "change", "keyup", "blur"].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true }))); }
+    function setInput(el, v) {
+        try { el.focus(); } catch (e) {}
+        var setter = (function () { try { return Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; } catch (e) { return null; } })();
+        try { if (setter) setter.call(el, String(v)); else el.value = String(v); } catch (e) { try { el.value = String(v); } catch (e2) {} }
+        ["input", "change", "keyup", "blur"].forEach(function (t) { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch (e) {} });
+    }
     // Digitação ROBUSTA: usa o setter nativo (burla controles que revertem o valor) +
     // tenta document.execCommand("insertText") (digitação real, como um teclado).
     function typeInto(el, texto) {
@@ -218,6 +264,19 @@
         el.dispatchEvent(new Event("change", { bubbles: true }));
     }
     function enter(el) { ["keydown", "keypress", "keyup"].forEach(t => el.dispatchEvent(new KeyboardEvent(t, { bubbles: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 }))); }
+    // Força o "saiu do campo" (blur) — no Android o blur sintético não basta, então também tira o foco
+    // de verdade e foca outro campo. É isso que faz o SPAmov buscar e mostrar o NOME do cliente.
+    function blurDe(el) {
+        try {
+            ["change", "blur", "focusout"].forEach(function (t) { try { el.dispatchEvent(new Event(t, { bubbles: true })); } catch (e) {} });
+            try { if (el.blur) el.blur(); } catch (e) {}
+            try {
+                var outros = inputsVisiveis().filter(function (i) { return i !== el; });
+                if (outros[0] && outros[0].focus) { outros[0].focus(); outros[0].blur && outros[0].blur(); }
+                else if (document.body && document.body.focus) { document.body.setAttribute && document.body.setAttribute("tabindex", "-1"); document.body.focus(); }
+            } catch (e) {}
+        } catch (e) {}
+    }
     // Clique robusto: sobe até o elemento realmente clicável e dispara eventos de mouse + click nativo
     function clicar(el) {
         if (!el) return false;
@@ -351,8 +410,8 @@
         return best;
     }
     function acharBotaoEnviar() {
-        const els = document.querySelectorAll("input[type=button], input[type=submit], button, a, td, span");
-        for (let i = 0; i < els.length; i++) { const e = els[i]; const t = ((e.value || e.innerText || "") + "").trim(); if (/^enviar$/i.test(t)) { const r = e.getBoundingClientRect(); if (r.width && r.height) return e; } }
+        const els = document.querySelectorAll("input[type=button], input[type=submit], input[type=image], button, a, td, span, img");
+        for (let i = 0; i < els.length; i++) { const e = els[i]; const t = ((e.value || e.innerText || e.alt || e.title || "") + "").trim(); if (/^enviar$/i.test(t)) { const r = e.getBoundingClientRect(); if (r.width && r.height) return e; } }
         return null;
     }
     function acharCampoCliente() {
@@ -501,7 +560,7 @@
         await sleep(1800); // deixa a página assentar após o "pisca"/navegação
 
         // ETAPA FINAL: clicar DS -> SP -> PA até confirmar o pedido
-        if (stage === "finalizar") { await finalizarPasso(); return; }
+        if (stage === "finalizar") { await clearRun(); status("✅ Itens lançados! Clique no DP/finalizar você mesmo. 👍"); return; } // DS→SP→PA desativado a pedido
 
         // ETAPA 1: clicar em "Novo"
         if (stage === "novo") {
@@ -531,14 +590,19 @@
             if (!cli) { if (ehFramePrincipal()) status("❌ Não achei o campo do Cliente."); return; }
             status("Digitando cliente " + run.pedido.cliente + "...");
             typeInto(cli, run.pedido.cliente);   // digitação robusta (native setter + execCommand)
-            enter(cli);
-            await sleep(800);
             dlog("valor no campo após digitar: '" + (cli.value || "") + "'");
-            status("Cliente no campo: " + ((cli.value || "(vazio)")) + " — aguardando...");
-            await sleep(1000); // ⏱️ folga antes do Enviar (deixa o cliente resolver)
+            // 🔑 dispara o "saiu do campo" pra o SPAmov buscar e MOSTRAR o nome do cliente (AJAX).
+            // No Android isso só acontecia quando o usuário tocava na tela; agora forçamos no robô.
+            const antesNome = bodyText();
+            blurDe(cli);
+            enter(cli);
+            status("Buscando o nome do cliente " + run.pedido.cliente + "...");
+            const apareceu = await esperar(function () { return bodyText() !== antesNome; }, 8000); // espera o nome aparecer (o corpo muda)
+            await sleep(900); // folga extra pro AJAX assentar
+            dlog("nome do cliente: " + (apareceu ? "apareceu (corpo mudou)" : "NÃO mudou — segui mesmo assim"));
             await setRun({ pedido: run.pedido, stage: "itens", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() });
             let env = acharBotaoEnviar(), te = 0;
-            while (!env && te < 6) { await sleep(400); env = acharBotaoEnviar(); te++; }
+            while (!env && te < 8) { await sleep(400); env = acharBotaoEnviar(); te++; }
             dlog("botão Enviar: " + (env ? "achado — clicando" : "NÃO achado (tento Enter)"));
             if (env) { status("Clicando em Enviar..."); clicar(env); }
             else { status("Botão Enviar não achado — tentando Enter..."); enter(cli); }
@@ -560,29 +624,28 @@
         }
 
         if (run.idx >= total) {
-            dlog("✓ todos os " + total + " itens lançados — indo para finalizar (DS→SP→PA)");
-            await setRun({ pedido: run.pedido, stage: "finalizar", idx: total, ativo: true, aguardando: false, ultimoCode: "", finalCliques: 0, ts: Date.now() });
-            status("Itens ok! Confirmando (DS → SP → PA)...");
-            await sleep(800);
-            await finalizarPasso();
+            dlog("✓ todos os " + total + " itens lançados — PRONTO (agora você confere e clica no DP)");
+            await clearRun();
+            status("✅ Itens lançados! Agora confira e clique no DP/finalizar você mesmo. 👍");
             return;
         }
 
         // garante a linha de entrada pronta
         let info = camposEntrada(), tent = 0;
         while ((!info || !info.code || !info.qty) && tent < 12) { await sleep(500); info = camposEntrada(); tent++; }
-        if (!info || !info.code || !info.qty) { await clearRun(); status("❌ Não achei os campos (inputs: " + (info ? info.n : 0) + "). Cancelei — manda um print."); return; }
+        if (!info || !info.code || !info.qty) { dlog("campos do item ainda não prontos (inputs: " + (info ? info.n : 0) + ") — aguardo e tento de novo"); status("Aguardando os campos do item... (pode deixar, não precisa tocar na tela)"); return; } // não cancela: sobrevive a toques/navegação; expira sozinho em 2min se travar
 
         const it = run.pedido.itens[run.idx];
         dlog("item " + (run.idx + 1) + "/" + total + ": " + it.code + " x" + it.qty);
         status("Lançando " + (run.idx + 1) + "/" + total + ":  " + it.code + "  x" + it.qty);
 
-        // 1) código -> resolve o produto
+        // 1) código -> resolve o produto (com blur forçado, igual ao cliente, pro Android)
         const antesCod = bodyText();
         setInput(info.code, "");
         setInput(info.code, it.code);
+        blurDe(info.code);
         enter(info.code);
-        await esperar(function () { return bodyText() !== antesCod; }, 5000);
+        await esperar(function () { return bodyText() !== antesCod; }, 6000);
         await sleep(900);
 
         // 2) quantidade (ignora o campo de valor)
