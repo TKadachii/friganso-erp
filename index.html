@@ -1424,7 +1424,9 @@
                                 const base = rp ? rp.originalPrice : 0;
                                 const { unitFinalPrice } = checkDiscountRules(it.code, nome, base);
                                 const peso = Number(it.peso) || 0;
-                                return { code: String(it.code), nome, qty: Number(it.qty) || 1, peso, precoKg: unitFinalPrice, subtotal: peso * unitFinalPrice };
+                                const valorSpamov = Number(it.valorUnit) || 0;     // preço/kg lido DIRETO da tela do SPAmov
+                                const precoKg = unitFinalPrice || valorSpamov;      // usa o da tabela; se não tiver, o do SPAmov
+                                return { code: String(it.code), nome, qty: Number(it.qty) || 1, peso, precoKg, precoTabela: unitFinalPrice, precoSpamov: valorSpamov, subtotal: peso * precoKg };
                             });
                             const total = debugItens.reduce((a, c) => a + c.subtotal, 0);
                             window.localStorage.setItem('friganso_debug_valor_nota', JSON.stringify({ cliente: data.cliente || '', spamov: data.spamov || '', itens: debugItens, total, ts: Date.now() }));
@@ -3998,7 +4000,7 @@
                                     <table className="w-full text-xs">
                                         <thead>
                                             <tr className="text-slate-400 text-left">
-                                                <th className="py-1 pr-2">Código</th><th className="pr-2">Produto</th><th className="pr-2">Qtd</th><th className="pr-2">Peso (kg)</th><th className="pr-2">R$/kg</th><th>Subtotal</th>
+                                                <th className="py-1 pr-2">Código</th><th className="pr-2">Produto</th><th className="pr-2">Qtd</th><th className="pr-2">Peso (kg)</th><th className="pr-2">R$/kg (tabela)</th><th className="pr-2">R$/kg (SPAmov)</th><th>Subtotal</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -4007,8 +4009,9 @@
                                                     <td className="py-1.5 pr-2 font-mono">{it.code}</td>
                                                     <td className="pr-2">{it.nome}</td>
                                                     <td className="pr-2">{it.qty}</td>
-                                                    <td className="pr-2">{it.peso.toFixed(2)}</td>
-                                                    <td className="pr-2">{formatPrice(it.precoKg)}</td>
+                                                    <td className={"pr-2 " + ((!it.peso) ? 'text-rose-500 font-bold' : '')}>{(it.peso || 0).toFixed(2)}</td>
+                                                    <td className="pr-2">{it.precoTabela ? formatPrice(it.precoTabela) : '—'}</td>
+                                                    <td className="pr-2">{it.precoSpamov ? formatPrice(it.precoSpamov) : '—'}</td>
                                                     <td className="font-bold">{formatPrice(it.subtotal)}</td>
                                                 </tr>
                                             ))}

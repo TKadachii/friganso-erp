@@ -102,11 +102,29 @@
         const cs = (scope || document).querySelectorAll("td, th");
         for (let i = 0; i < cs.length; i++) {
             const t = (cs[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
-            if (t.indexOf("p.liq") !== -1 || t.indexOf("p liq") !== -1 || (t.indexOf("liq") !== -1 && t.indexOf("kg") !== -1)) {
+            if (t.indexOf("p.liq") !== -1 || t.indexOf("p liq") !== -1 || t.indexOf("pliq") !== -1 || (t.indexOf("liq") !== -1 && t.indexOf("kg") !== -1)) {
                 const r = cs[i].getBoundingClientRect(); if (r.width) return r.left + r.width / 2;
             }
         }
         return null;
+    }
+    // 💲 Coluna "Valor Unit." — preço por kg que o SPAmov usa (ex: "23,40/PL")
+    function colXValor(scope) {
+        const cs = (scope || document).querySelectorAll("td, th");
+        for (let i = 0; i < cs.length; i++) {
+            const t = (cs[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
+            if (t.indexOf("valor") !== -1 && t.indexOf("unit") !== -1) { const r = cs[i].getBoundingClientRect(); if (r.width) return r.left + r.width / 2; }
+        }
+        return null;
+    }
+    // Converte "80.00" / "80,00" / "1.250,50" -> número (mesma lógica do parsePrice do site)
+    function parseNumBR(s) {
+        s = String(s || "").trim();
+        const m = s.match(/-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|-?\d+(?:[.,]\d+)?/);
+        if (!m) return null;
+        let x = m[0];
+        x = (x.indexOf(".") !== -1 && x.indexOf(",") !== -1) ? x.replace(/\./g, "").replace(",", ".") : x.replace(",", ".");
+        const v = parseFloat(x); return isNaN(v) ? null : v;
     }
 
     function extrairItens(spamov) {
@@ -114,7 +132,10 @@
         const ignorar = new Set([spamov, extrairOrcamento()].filter(Boolean));
         const scope = acharTabelaItens() || document;
         const colX = colXQuant(scope);
-        const colXP = colXPLiq(scope);
+        // 🟡💲 colunas de peso e preço: procura no escopo da tabela e, se não achar, no documento inteiro
+        // (o cabeçalho às vezes fica numa tabela "irmã", fora da tabela de itens).
+        const colXP = colXPLiq(scope) || colXPLiq(document);
+        const colXV = colXValor(scope) || colXValor(document);
         const campos = [];
         scope.querySelectorAll("input").forEach(function (inp) {
             const tipo = (inp.type || "").toLowerCase();
@@ -124,6 +145,38 @@
             const r = inp.getBoundingClientRect(); if (!r.width || !r.height) return;
             campos.push({ val: parseInt(v, 10), x: r.left + r.width / 2, y: r.top + r.height / 2 });
         });
+
+        // ⚖️💲 Candidatos a PESO (P.Liq.) e PREÇO (Valor Unit.): podem ser <input> (readonly) OU texto numa célula.
+        // Guardamos valor + posição na tela pra casar depois por COLUNA (X) e LINHA (Y) — bem mais robusto que
+        // depender de o número estar num <td> direto da mesma <tr>.
+        const numeros = []; // {val, x, y, dec}  (dec = tem casa decimal -> mais provável ser peso/preço)
+        function addNumCand(s, el) {
+            const txt = String(s || "").trim();
+            if (!/\d/.test(txt) || txt.length > 16) return;
+            // aceita "80.00", "23,40", "23,40/PL", "1.250,50"; rejeita coisas tipo "100000016129" (>9 dígitos colados)
+            if (/^\d{10,}$/.test(txt.replace(/\D/g, "")) && !/[.,]/.test(txt)) return;
+            const v = parseNumBR(txt); if (v === null || v <= 0) return;
+            const r = el.getBoundingClientRect(); if (!r.width || !r.height) return;
+            numeros.push({ val: v, x: r.left + r.width / 2, y: r.top + r.height / 2, dec: /[.,]\d{1,2}\b/.test(txt) });
+        }
+        document.querySelectorAll("input").forEach(function (inp) {
+            const t = (inp.type || "").toLowerCase();
+            if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(t) !== -1) return;
+            addNumCand(inp.value, inp);
+        });
+        document.querySelectorAll("td, span, font, b").forEach(function (el) {
+            if (el.children && el.children.length) return; // só folhas (evita pegar texto de containers)
+            addNumCand(el.innerText || el.textContent || "", el);
+        });
+        // acha o número mais próximo de uma coluna (X) na linha do produto (Y), priorizando os com casa decimal
+        function acharNaColuna(colXref, prodY, tolX, tolY) {
+            if (colXref === null) return 0;
+            const cand = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= (tolY || 14) && Math.abs(n.x - colXref) <= (tolX || 95); });
+            cand.sort(function (a, b) { if (a.dec !== b.dec) return a.dec ? -1 : 1; return Math.abs(a.x - colXref) - Math.abs(b.x - colXref); });
+            return cand.length ? cand[0].val : 0;
+        }
+        try { console.log('[FRIG-LER] colXP=' + colXP + ' colXV=' + colXV + ' candidatos=' + numeros.length); } catch (e) {}
+
         scope.querySelectorAll("tr").forEach(function (row) {
             const cells = row.querySelectorAll("td"); if (!cells.length) return;
             let rawCode = "", codeCell = null;
@@ -138,27 +191,16 @@
             let qty = null, melhor = 1e9;
             campos.forEach(function (c) { const dy = Math.abs(c.y - prodY); if (dy > 16) return; const dx = (colX !== null) ? Math.abs(c.x - colX) : 0; const s = dx + dy; if (s < melhor) { melhor = s; qty = c.val; } });
             if (qty === null) qty = 1;
-            // ⚖️ Peso líquido (P.Liq. KG) da linha — célula de texto (não input), perto da coluna P.Liq.
-            let peso = 0;
-            if (colXP !== null) {
-                let melhorP = 1e9;
-                cells.forEach(function (c) {
-                    const ct = (c.innerText || "").trim();
-                    if (!/^\d+(?:[.,]\d+)?$/.test(ct)) return;
-                    const r = c.getBoundingClientRect(); if (!r.width) return;
-                    const cx = r.left + r.width / 2;
-                    const dx = Math.abs(cx - colXP);
-                    if (dx > 80) return; // só aceita célula realmente na coluna P.Liq.
-                    if (dx < melhorP) { melhorP = dx; peso = parseFloat(ct.replace(",", ".")) || 0; }
-                });
-            }
-            try { console.log('[FRIG-LER] linha code=' + rawCode + ' qty=' + qty + ' peso=' + peso + ' nome="' + nome.slice(0, 50) + '"'); } catch (e) {}
-            raw.push({ rawCode: rawCode, nome: nome, qty: qty, peso: peso });
+            // ⚖️ Peso (P.Liq. KG) e 💲 Valor Unit. da linha — por POSIÇÃO (coluna X × linha Y), olhando inputs e textos.
+            const peso = acharNaColuna(colXP, prodY);
+            const valorUnit = acharNaColuna(colXV, prodY);
+            try { console.log('[FRIG-LER] linha code=' + rawCode + ' qty=' + qty + ' peso=' + peso + ' valorUnit=' + valorUnit + ' nome="' + nome.slice(0, 50) + '"'); } catch (e) {}
+            raw.push({ rawCode: rawCode, nome: nome, qty: qty, peso: peso, valorUnit: valorUnit });
         });
         // Lê o código COMO ESTÁ. (Antes tirava um suposto "prefixo de número de linha", o que
         // quebrava códigos reais — ex: 1443 na linha 1 virava 443. Removido.)
         const itens = [], seen = new Set();
-        raw.forEach(function (r) { const code = r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty, peso: r.peso }); });
+        raw.forEach(function (r) { const code = r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty, peso: r.peso, valorUnit: r.valorUnit }); });
         return itens;
     }
     function montarPedidoLeitura() {
