@@ -331,7 +331,7 @@
         const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user) => {
             try {
                 const itensSafe = (itensValidos || [])
-                    .map(i => ({ code: String(i.code), name: i.name || i.nome || ('Produto ' + i.code), qty: Number(i.qty != null ? i.qty : i.quantity) }))
+                    .map(i => ({ code: String(i.code), name: i.name || i.nome || ('Produto ' + i.code), qty: Number(i.qty != null ? i.qty : i.quantity), peso: Number(i.peso) || 0, valorKg: Number(i.valorKg) || 0 }))
                     .filter(i => i.code && i.qty > 0);
                 if (!clienteCode || !itensSafe.length) return;
                 const sig = String(clienteCode) + '|' + itensSafe.map(i => i.code + 'x' + i.qty).sort().join(',');
@@ -341,11 +341,16 @@
                 const d = new Date(agora);
                 const dia = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
                 const cli = (clients || []).find(c => String(c.code) === String(clienteCode));
+                // 💰 Faturamento da venda = soma de peso(kg) × preço/kg de cada item (a "nota" do SPAmov)
+                const valorTotal = Math.round(itensSafe.reduce((a, i) => a + (i.peso * i.valorKg), 0) * 100) / 100;
+                const pesoTotal = Math.round(itensSafe.reduce((a, i) => a + i.peso, 0) * 100) / 100;
                 await db.collection('purchases').add({
                     clienteCode: String(clienteCode),
                     clienteName: (cli && cli.name) || '',
                     tipoPessoa: tipo || (cli && cli.tipo) || 'juridica',
                     itens: itensSafe,
+                    valor: valorTotal,
+                    pesoTotal: pesoTotal,
                     dia: dia,
                     ts: agora,
                     via: via || '',
@@ -850,25 +855,30 @@
                 for (let i = periodo - 1; i >= 0; i--) { const d = new Date(hoje); d.setDate(hoje.getDate() - i); dias.push(diaStr(d)); }
                 const desde = dias[0];
                 const comprasP = purchases.filter(p => (p.dia || '') >= desde);
-                const qtdDia = {}, pedDia = {}, prodQ = {}, tipoC = { juridica: 0, fisica: 0 }, cliC = {}, vendC = {};
-                let totalItens = 0; const cliSet = new Set(), prodSet = new Set();
+                const qtdDia = {}, pedDia = {}, valDia = {}, prodQ = {}, tipoC = { juridica: 0, fisica: 0 }, cliC = {}, vendC = {}, cliValC = {};
+                let totalItens = 0, totalValor = 0; const cliSet = new Set(), prodSet = new Set();
                 comprasP.forEach(p => {
                     const dia = p.dia || diaStr(new Date(p.ts || Date.now()));
                     const q = (p.itens || []).reduce((a, it) => a + (Number(it.qty) || 0), 0);
-                    qtdDia[dia] = (qtdDia[dia] || 0) + q; pedDia[dia] = (pedDia[dia] || 0) + 1; totalItens += q;
+                    const val = Number(p.valor) || 0;
+                    qtdDia[dia] = (qtdDia[dia] || 0) + q; pedDia[dia] = (pedDia[dia] || 0) + 1; valDia[dia] = (valDia[dia] || 0) + val;
+                    totalItens += q; totalValor += val;
                     cliSet.add(String(p.clienteCode));
                     tipoC[/fis/i.test(p.tipoPessoa || '') ? 'fisica' : 'juridica']++;
-                    const cnome = p.clienteName || ('Cliente ' + (p.clienteCode || '?')); cliC[cnome] = (cliC[cnome] || 0) + 1;
+                    const cnome = p.clienteName || ('Cliente ' + (p.clienteCode || '?')); cliC[cnome] = (cliC[cnome] || 0) + 1; cliValC[cnome] = (cliValC[cnome] || 0) + val;
                     vendC[p.vendedor || '—'] = (vendC[p.vendedor || '—'] || 0) + 1;
                     (p.itens || []).forEach(it => { const c = String(it.code); prodSet.add(c); if (!prodQ[c]) prodQ[c] = { nome: it.name || ('Cod ' + c), qty: 0 }; prodQ[c].qty += Number(it.qty) || 0; });
                 });
                 const serieQtd = dias.map(d => qtdDia[d] || 0);
                 const seriePed = dias.map(d => pedDia[d] || 0);
+                const serieVal = dias.map(d => Math.round((valDia[d] || 0) * 100) / 100);
                 const labelsDia = dias.map(d => d.slice(8, 10) + '/' + d.slice(5, 7));
                 const topProd = Object.keys(prodQ).map(c => ({ code: c, nome: prodQ[c].nome, qty: prodQ[c].qty })).sort((a, b) => b.qty - a.qty);
-                const topCli = Object.keys(cliC).map(n => ({ nome: n, n: cliC[n] })).sort((a, b) => b.n - a.n);
+                const topCli = Object.keys(cliC).map(n => ({ nome: n, n: cliC[n], val: cliValC[n] || 0 })).sort((a, b) => b.n - a.n);
                 let melhorDia = '—', melhorQ = 0; dias.forEach(d => { if ((qtdDia[d] || 0) > melhorQ) { melhorQ = qtdDia[d]; melhorDia = d; } });
-                return { dias, labelsDia, serieQtd, seriePed, topProd, topCli, tipoC, vendC, comprasP, totalItens, cliCount: cliSet.size, prodCount: prodSet.size, melhorDia, melhorQ };
+                let melhorDiaV = '—', melhorV = 0; dias.forEach(d => { if ((valDia[d] || 0) > melhorV) { melhorV = valDia[d]; melhorDiaV = d; } });
+                const ticketMedio = comprasP.length ? totalValor / comprasP.length : 0;
+                return { dias, labelsDia, serieQtd, seriePed, serieVal, topProd, topCli, tipoC, vendC, comprasP, totalItens, totalValor, ticketMedio, cliCount: cliSet.size, prodCount: prodSet.size, melhorDia, melhorQ, melhorDiaV, melhorV };
             }, [purchases, periodo]);
 
             const precoSerie = useMemo(() => {
@@ -885,6 +895,8 @@
             }, [versions, prodPreco, dados, products]);
 
             const optBase = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: 'rgba(148,163,184,.12)' }, ticks: { maxTicksLimit: 12 } }, y: { grid: { color: 'rgba(148,163,184,.12)' }, beginAtZero: true } } };
+            const fmtRS = (v) => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+            const optMoney = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmtRS(c.parsed.y) } } }, scales: { x: { grid: { color: 'rgba(148,163,184,.12)' }, ticks: { maxTicksLimit: 12 } }, y: { grid: { color: 'rgba(148,163,184,.12)' }, beginAtZero: true, ticks: { callback: (v) => fmtRS(v) } } } };
             const optBarH = { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: 'rgba(148,163,184,.12)' }, beginAtZero: true }, y: { grid: { display: false } } } };
             const optPie = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 12, padding: 10 } } } };
             const topProd10 = dados.topProd.slice(0, 10);
@@ -917,21 +929,26 @@
                     {semChart && <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-semibold">⚠️ Os gráficos precisam de internet pra carregar (a biblioteca Chart.js). Conecte e recarregue.</div>}
 
                     {/* KPIs */}
-                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                        <Kpi icon="🧾" cor="bg-rose-100" label="Pedidos no período" valor={dados.comprasP.length} />
-                        <Kpi icon="📦" cor="bg-emerald-100" label="Itens vendidos" valor={dados.totalItens} />
+                    <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+                        <Kpi icon="💰" cor="bg-rose-100" label="Faturamento no período" valor={formatPrice(dados.totalValor)} />
+                        <Kpi icon="🧾" cor="bg-emerald-100" label="Pedidos no período" valor={dados.comprasP.length} />
+                        <Kpi icon="🎯" cor="bg-sky-100" label="Ticket médio" valor={formatPrice(dados.ticketMedio)} />
                         <Kpi icon="👥" cor="bg-blue-100" label="Clientes que compraram" valor={dados.cliCount} />
-                        <Kpi icon="🏷️" cor="bg-amber-100" label="Produtos distintos" valor={dados.prodCount} />
-                        <Kpi icon="🔥" cor="bg-purple-100" label="Melhor dia (itens)" valor={dados.melhorQ > 0 ? (dados.melhorDia.slice(8, 10) + '/' + dados.melhorDia.slice(5, 7) + ' · ' + dados.melhorQ) : '—'} />
+                        <Kpi icon="📦" cor="bg-amber-100" label="Itens vendidos" valor={dados.totalItens} />
+                        <Kpi icon="🔥" cor="bg-purple-100" label="Melhor dia (R$)" valor={dados.melhorV > 0 ? (dados.melhorDiaV.slice(8, 10) + '/' + dados.melhorDiaV.slice(5, 7)) : '—'} />
                     </div>
 
                     {dados.comprasP.length === 0 ? (
                         <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-400">
                             <p className="text-lg font-bold">Ainda não há vendas registradas neste período.</p>
-                            <p className="text-sm mt-1">Os gráficos se enchem conforme você fecha pedidos (Resumo de Pedido / Fazer Pedido). 📈</p>
+                            <p className="text-sm mt-1">Cada venda entra aqui quando você toca em <b>"Copiar Resumo"</b> no Resumo de Pedido. 📈</p>
                         </div>
                     ) : (
                         <>
+                            <CardGrafico titulo={`💰 Faturamento por dia — R$ (${periodo} dias)`}>
+                                <Grafico tipo="line" altura={280} options={optMoney} data={{ labels: dados.labelsDia, datasets: [{ label: 'R$', data: dados.serieVal, borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.15)', fill: true, tension: .35, pointRadius: 2, borderWidth: 2 }] }} />
+                            </CardGrafico>
+
                             <CardGrafico titulo={`📈 Vendas por dia — itens vendidos (${periodo} dias)`}>
                                 <Grafico tipo="line" altura={280} options={optBase} data={{ labels: dados.labelsDia, datasets: [{ label: 'Itens', data: dados.serieQtd, borderColor: '#e11d48', backgroundColor: 'rgba(225,29,72,.15)', fill: true, tension: .35, pointRadius: 2, borderWidth: 2 }] }} />
                             </CardGrafico>
@@ -1412,7 +1429,9 @@
                             const base = rp ? rp.originalPrice : 0;
                             const { hasDiscount, origPrice, unitFinalPrice } = checkDiscountRules(it.code, nome, base);
                             const qty = Number(it.qty) || 1;
-                            return { code: String(it.code), name: nome, quantity: qty, unitFinalPrice, discountedPrice: unitFinalPrice * qty, originalPrice: origPrice * qty, hasDiscount };
+                            const peso = Number(it.peso) || 0;                              // ⚖️ P.Liq lido do SPAmov
+                            const precoKg = unitFinalPrice || (Number(it.valorUnit) || 0);  // preço da tabela; senão o do SPAmov
+                            return { code: String(it.code), name: nome, quantity: qty, unitFinalPrice, discountedPrice: unitFinalPrice * qty, originalPrice: origPrice * qty, hasDiscount, peso, precoKg, valorLinha: peso * precoKg };
                         }).filter(x => x.code);
 
                         // 🧪 SÓ PRA TESTE (não muda o Resumo normal): Valor da Nota = Peso (P.Liq. KG) × Preço/Kg,
@@ -1436,7 +1455,7 @@
                             setPendingCustomer(data.cliente || '');
                             setPendingSpamov(data.spamov || '');
                             setDetectedClientName(data.clienteNome || '');
-                            setOrderSummary({ customerCode: data.cliente || '', spamov: data.spamov || '', items: processed, totalDiscounted: processed.reduce((a, c) => a + c.discountedPrice, 0) });
+                            setOrderSummary({ customerCode: data.cliente || '', spamov: data.spamov || '', items: processed, totalDiscounted: processed.reduce((a, c) => a + c.discountedPrice, 0), totalValor: processed.reduce((a, c) => a + (c.valorLinha || 0), 0) });
                             const existing = clients.find(c => c.code === (data.cliente || ''));
                             if (existing) { setClientToSave(existing); setShowHistoryPrompt(true); }
                             showMessage('Pedido importado do SPAmov! ' + (products.length === 0 ? '(carregue a Tabela PDF p/ ver preços)' : ''), 'success');
@@ -1554,9 +1573,9 @@
             // 🔑 Reconsulta o item na Tabela do Dia (PDF) AGORA: nome e preço sempre iguais à tabela.
             const itemAtual = (it) => {
                 const rp = products.find(p => String(p.code) === String(it.code));
-                if (!rp) return { ...it, name: it.name, unitFinalPrice: it.unitFinalPrice || 0, naTabela: false };
+                if (!rp) return { ...it, name: it.name, unitFinalPrice: it.unitFinalPrice || 0, naTabela: false, valorKg: it.precoKg || it.unitFinalPrice || 0 };
                 const { unitFinalPrice } = checkDiscountRules(rp.code, rp.name, rp.originalPrice);
-                return { ...it, name: rp.name, unitFinalPrice: unitFinalPrice, naTabela: true };
+                return { ...it, name: rp.name, unitFinalPrice: unitFinalPrice, naTabela: true, valorKg: unitFinalPrice || it.precoKg || 0 };
             };
 
             const generateWhatsAppText = () => {
@@ -1830,7 +1849,7 @@
                                         navigator.clipboard.writeText(generateWhatsAppText());
                                         // 🧾 Grava na ficha do cliente (todo pedido confirmado passa por aqui)
                                         if (orderSummary && orderSummary.customerCode) {
-                                            const itens = (orderSummary.items || []).map(it => { const a = itemAtual(it); return { code: a.code, name: a.name, qty: Number(getQty(it)) }; });
+                                            const itens = (orderSummary.items || []).map(it => { const a = itemAtual(it); return { code: a.code, name: a.name, qty: Number(getQty(it)), peso: Number(a.peso) || 0, valorKg: Number(a.valorKg) || 0 }; });
                                             registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user);
                                         }
                                         showMessage('Copiado pro Zap e salvo na ficha do cliente! 🧾', 'success');
