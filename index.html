@@ -839,6 +839,9 @@
             const [versions, setVersions] = useState([]);
             const [periodo, setPeriodo] = useState(30);
             const [prodPreco, setProdPreco] = useState('');
+            // 💵 Margem de lucro estimada (% sobre o faturamento). Padrão 1%, troca pra 3%. Lembra a escolha.
+            const [margem, setMargem] = useState(() => { const v = parseFloat(window.localStorage.getItem('friganso_margem')); return (v === 1 || v === 3) ? v : 1; });
+            useEffect(() => { try { window.localStorage.setItem('friganso_margem', String(margem)); } catch (e) {} }, [margem]);
             const semChart = !window.Chart;
 
             useEffect(() => {
@@ -936,6 +939,23 @@
                         <Kpi icon="👥" cor="bg-blue-100" label="Clientes que compraram" valor={dados.cliCount} />
                         <Kpi icon="📦" cor="bg-amber-100" label="Itens vendidos" valor={dados.totalItens} />
                         <Kpi icon="🔥" cor="bg-purple-100" label="Melhor dia (R$)" valor={dados.melhorV > 0 ? (dados.melhorDiaV.slice(8, 10) + '/' + dados.melhorDiaV.slice(5, 7)) : '—'} />
+                    </div>
+
+                    {/* 💵 Lucro estimado = faturamento × margem (1% ou 3%) */}
+                    <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-3xl p-6 text-white shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <p className="text-emerald-100 font-semibold text-sm">💵 Lucro estimado no período ({margem}%)</p>
+                            <h3 className="text-3xl sm:text-4xl font-black mt-0.5">{formatPrice(dados.totalValor * margem / 100)}</h3>
+                            <p className="text-emerald-100/80 text-xs mt-1">{margem}% de {formatPrice(dados.totalValor)} de faturamento</p>
+                        </div>
+                        <div className="flex flex-col items-start sm:items-end gap-1.5">
+                            <span className="text-emerald-100/80 text-xs font-bold">Margem de lucro</span>
+                            <div className="flex gap-1.5 bg-black/20 p-1 rounded-xl">
+                                {[1, 3].map(m => (
+                                    <button key={m} onClick={() => setMargem(m)} className={`text-sm font-black px-4 py-2 rounded-lg transition-colors ${margem === m ? 'bg-white text-emerald-700' : 'text-emerald-100 hover:bg-white/10'}`}>{m}%</button>
+                                ))}
+                            </div>
+                        </div>
                     </div>
 
                     {dados.comprasP.length === 0 ? (
