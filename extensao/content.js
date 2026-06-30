@@ -164,14 +164,15 @@
             if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(t) !== -1) return;
             addNumCand(inp.value, inp);
         });
-        document.querySelectorAll("td, span, font, b").forEach(function (el) {
+        // 🔎 Varre QUALQUER elemento-folha com texto (SPAmov é antigo: usa div/font/nobr, não só td).
+        document.querySelectorAll("td, th, span, font, b, div, a, p, label, i, small, strong, em, nobr, li").forEach(function (el) {
             if (el.children && el.children.length) return; // só folhas (evita pegar texto de containers)
             addNumCand(el.innerText || el.textContent || "", el);
         });
         // acha o número mais próximo de uma coluna (X) na linha do produto (Y), priorizando os com casa decimal
         function acharNaColuna(colXref, prodY, tolX, tolY) {
             if (colXref === null) return 0;
-            const cand = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= (tolY || 14) && Math.abs(n.x - colXref) <= (tolX || 95); });
+            const cand = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= (tolY || 20) && Math.abs(n.x - colXref) <= (tolX || 110); });
             cand.sort(function (a, b) { if (a.dec !== b.dec) return a.dec ? -1 : 1; return Math.abs(a.x - colXref) - Math.abs(b.x - colXref); });
             return cand.length ? cand[0].val : 0;
         }
@@ -195,6 +196,16 @@
             const peso = acharNaColuna(colXP, prodY);
             const valorUnit = acharNaColuna(colXV, prodY);
             try { console.log('[FRIG-LER] linha code=' + rawCode + ' qty=' + qty + ' peso=' + peso + ' valorUnit=' + valorUnit + ' nome="' + nome.slice(0, 50) + '"'); } catch (e) {}
+            // 🔬 Se o peso não foi achado, despeja TODOS os números na faixa Y da linha (com X e valor)
+            // pra eu calibrar a coluna sem precisar adivinhar o DOM.
+            if (!peso) {
+                try {
+                    const perto = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= 22; })
+                        .sort(function (a, b) { return a.x - b.x; })
+                        .map(function (n) { return Math.round(n.x) + ":" + n.val; });
+                    console.log('[FRIG-LER] DUMP linha ' + rawCode + ' (prodY=' + Math.round(prodY) + ' colXP=' + colXP + ' colXV=' + colXV + ') numeros[x:val]= ' + perto.join("  "));
+                } catch (e) {}
+            }
             raw.push({ rawCode: rawCode, nome: nome, qty: qty, peso: peso, valorUnit: valorUnit });
         });
         // Lê o código COMO ESTÁ. (Antes tirava um suposto "prefixo de número de linha", o que
