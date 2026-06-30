@@ -176,7 +176,7 @@
             cand.sort(function (a, b) { if (a.dec !== b.dec) return a.dec ? -1 : 1; return Math.abs(a.x - colXref) - Math.abs(b.x - colXref); });
             return cand.length ? cand[0].val : 0;
         }
-        try { console.log('[FRIG-LER] colXP=' + colXP + ' colXV=' + colXV + ' candidatos=' + numeros.length); } catch (e) {}
+        try { dlog('🔎 peso/preço: colXP=' + colXP + ' colXV=' + colXV + ' candidatos=' + numeros.length); } catch (e) { try { console.log('[FRIG-LER] colXP=' + colXP + ' colXV=' + colXV + ' candidatos=' + numeros.length); } catch (e2) {} }
 
         scope.querySelectorAll("tr").forEach(function (row) {
             const cells = row.querySelectorAll("td"); if (!cells.length) return;
@@ -203,7 +203,7 @@
                     const perto = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= 22; })
                         .sort(function (a, b) { return a.x - b.x; })
                         .map(function (n) { return Math.round(n.x) + ":" + n.val; });
-                    console.log('[FRIG-LER] DUMP linha ' + rawCode + ' (prodY=' + Math.round(prodY) + ' colXP=' + colXP + ' colXV=' + colXV + ') numeros[x:val]= ' + perto.join("  "));
+                    dlog('🔬 DUMP ' + rawCode + ' (prodY=' + Math.round(prodY) + ' colXP=' + colXP + ' colXV=' + colXV + ') nums[x:val]= ' + perto.join("  "));
                 } catch (e) {}
             }
             raw.push({ rawCode: rawCode, nome: nome, qty: qty, peso: peso, valorUnit: valorUnit });
