@@ -89,34 +89,28 @@
         }
         return null;
     }
-    function colXQuant(scope) {
-        const cs = (scope || document).querySelectorAll("td, th");
+    // 🎯 Acha o X (centro) do CABEÇALHO de uma coluna. O SPAmov aninha tabelas, então existe um <td>
+    // container GIGANTE cujo texto contém vários títulos juntos ("...Valor Unit... P.Liq.(KG)...").
+    // Por isso pegamos a célula MAIS ESPECÍFICA (texto normalizado mais curto) que casa — assim achamos
+    // a célula real do título (ex: "P.Liq.(KG)" em x=1516) e não o container largo (centro ~960).
+    // Busca também em <b>/<div> porque às vezes o título não é um <td> direto.
+    function colXHeader(scope, teste) {
+        const cs = (scope || document).querySelectorAll("td, th, b, div, span, font, nobr");
+        let best = null, bestLen = 1e9;
         for (let i = 0; i < cs.length; i++) {
-            const t = (cs[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
-            if (t.indexOf("quant") !== -1 && t.indexOf("mov") !== -1) { const r = cs[i].getBoundingClientRect(); if (r.width) return r.left + r.width / 2; }
+            const t = (cs[i].innerText || cs[i].textContent || "").toLowerCase().replace(/\s+/g, " ").trim();
+            if (!t || t.length > 26) continue;            // ignora containers (texto longo) e vazios
+            if (!teste(t)) continue;
+            const r = cs[i].getBoundingClientRect(); if (!r.width || !r.height) continue;
+            if (t.length < bestLen) { bestLen = t.length; best = r.left + r.width / 2; }
         }
-        return null;
+        return best;
     }
+    function colXQuant(scope) { return colXHeader(scope, function (t) { return t.indexOf("quant") !== -1 && t.indexOf("mov") !== -1; }); }
     // 🟡 Coluna "P.Liq.(KG)" — peso líquido do item, usado pra calcular o Valor da Nota = peso × preço
-    function colXPLiq(scope) {
-        const cs = (scope || document).querySelectorAll("td, th");
-        for (let i = 0; i < cs.length; i++) {
-            const t = (cs[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
-            if (t.indexOf("p.liq") !== -1 || t.indexOf("p liq") !== -1 || t.indexOf("pliq") !== -1 || (t.indexOf("liq") !== -1 && t.indexOf("kg") !== -1)) {
-                const r = cs[i].getBoundingClientRect(); if (r.width) return r.left + r.width / 2;
-            }
-        }
-        return null;
-    }
+    function colXPLiq(scope) { return colXHeader(scope, function (t) { return t.indexOf("p.liq") !== -1 || t.indexOf("pliq") !== -1 || (t.indexOf("liq") !== -1 && t.indexOf("kg") !== -1); }); }
     // 💲 Coluna "Valor Unit." — preço por kg que o SPAmov usa (ex: "23,40/PL")
-    function colXValor(scope) {
-        const cs = (scope || document).querySelectorAll("td, th");
-        for (let i = 0; i < cs.length; i++) {
-            const t = (cs[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
-            if (t.indexOf("valor") !== -1 && t.indexOf("unit") !== -1) { const r = cs[i].getBoundingClientRect(); if (r.width) return r.left + r.width / 2; }
-        }
-        return null;
-    }
+    function colXValor(scope) { return colXHeader(scope, function (t) { return t.indexOf("valor") !== -1 && t.indexOf("unit") !== -1; }); }
     // Converte "80.00" / "80,00" / "1.250,50" -> número (mesma lógica do parsePrice do site)
     function parseNumBR(s) {
         s = String(s || "").trim();
@@ -172,7 +166,7 @@
         // acha o número mais próximo de uma coluna (X) na linha do produto (Y), priorizando os com casa decimal
         function acharNaColuna(colXref, prodY, tolX, tolY) {
             if (colXref === null) return 0;
-            const cand = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= (tolY || 20) && Math.abs(n.x - colXref) <= (tolX || 110); });
+            const cand = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= (tolY || 20) && Math.abs(n.x - colXref) <= (tolX || 70); });
             cand.sort(function (a, b) { if (a.dec !== b.dec) return a.dec ? -1 : 1; return Math.abs(a.x - colXref) - Math.abs(b.x - colXref); });
             return cand.length ? cand[0].val : 0;
         }
