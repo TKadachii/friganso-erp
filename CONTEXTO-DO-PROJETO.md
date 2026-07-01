@@ -67,6 +67,21 @@ Extras da v2: botões nativos **📋 ERP** e **🚀** na barra de cima do Spamov
 página ficam fora da tela no celular por causa da largura de PC); `content.js` expõe
 `window.__frigEnviarSePuder` por frame pro botão nativo funcionar.
 
+## ⚠️ Bug crítico corrigido (v3/2.1 — 2026-07-01): `precompile.js` corrompia PC/APK
+`precompile.js` injetava o código compilado no HTML com `html.replace(regex, \`<script>${result.code}</script>\`)`
+— **string** como substituto. `String.replace()` interpreta padrões especiais dentro da string de
+substituto: `$&`, `` $` ``, `$'`, `$$`, `$<nome>`. O código-fonte tinha a string `'R$'` (label do
+gráfico de faturamento) — o app termina exatamente em `` $' `` (dólar + aspas), que o `replace()` leu
+como "insira aqui o resto do arquivo depois do match" → duplicou/corrompeu o HTML, o `<script>`
+principal nunca terminava de rodar, e o app abria mostrando só texto puro (código JS visível na tela).
+**Isso NUNCA afeta o site** (o site usa Babel ao vivo no navegador, sem passar por `precompile.js`) —
+só afeta **PC (Electron)** e **APK**, e só aparece quando o código tem uma string terminando em `$'`,
+`` $` `` etc. (fácil de acontecer com preços em R$). Fix definitivo: usar **função** como substituto
+— `.replace(regex, () => \`<script>${result.code}</script>\`)` — funções não sofrem interpretação de
+`$`-patterns. Já corrigido em `friganso-desktop/precompile.js`. **Antes de qualquer "atualizar"**,
+depois de rodar `precompile.js`, verificar `(Select-String index-compiled.html -Pattern '</body>').Count`
+deve ser **1** (se vier 2+, o arquivo está corrompido de novo).
+
 ## Recursos já feitos (resumo)
 - Login por código+senha (Google bloqueia OAuth em webview → no app/PC escondido; conta sem senha
   é obrigada a criar uma). Botão "Alterar senha" no perfil.
