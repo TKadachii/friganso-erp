@@ -49,6 +49,24 @@ APK -> friganso-mobile\android\app\build\outputs\apk\debug\app-debug.apk  (cópi
 ```
 Programa de PC: lê `index-compiled.html`; basta reabrir pelo atalho.
 
+## 📲 Auto-atualização do APK (desde a v2 — 2026-07-01)
+O app checa atualização sozinho ao abrir (estilo Discord): chama `SpamovAuto.versao()` (versionCode
+nativo) e compara com `https://tkadachii.github.io/friganso-erp/apk-version.json`. Se o remoto for
+maior → modal "🚀 Atualização disponível" → `SpamovAuto.abrirLink(url)` abre o navegador que baixa
+`https://tkadachii.github.io/friganso-erp/FrigansoERP.apk` → instala por cima (⚠️ mesma assinatura
+debug DESTE PC; não buildar noutro PC senão não instala por cima).
+
+**Publicar APK novo (nunca mais mandar pro WhatsApp):**
+1. Bump `versionCode`/`versionName` no `friganso-mobile/android/app/build.gradle`.
+2. Fluxo de build acima (precompile → www → cap copy → assembleDebug).
+3. Copiar o APK pra `Downloads\FrigansoERP.apk`, `G:\Meu Drive\Friganso APK\` **e `friganso-app/FrigansoERP.apk`**.
+4. Atualizar `friganso-app/apk-version.json` (mesmo versionCode + novidades) e commitar/pushar
+   junto com o APK — todos os celulares avisam sozinhos na próxima abertura do app.
+
+Extras da v2: botões nativos **📋 ERP** e **🚀** na barra de cima do SpamovActivity (os botões da
+página ficam fora da tela no celular por causa da largura de PC); `content.js` expõe
+`window.__frigEnviarSePuder` por frame pro botão nativo funcionar.
+
 ## Recursos já feitos (resumo)
 - Login por código+senha (Google bloqueia OAuth em webview → no app/PC escondido; conta sem senha
   é obrigada a criar uma). Botão "Alterar senha" no perfil.
