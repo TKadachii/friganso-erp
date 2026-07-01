@@ -230,6 +230,16 @@
         try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
         catch (e) { window.open(url, "friganso_erp_app"); }
     }
+    // 📲 Botão NATIVO do app (barra de cima): tenta enviar o resumo deste frame; devolve true se conseguiu.
+    try {
+        window.__frigEnviarSePuder = function () {
+            try {
+                const p = montarPedidoLeitura();
+                if (temPedidoLeitura(p) && p.itens.length > 0) { enviarParaApp(); return true; }
+            } catch (e) {}
+            return false;
+        };
+    } catch (e) {}
 
     // ---------- LANÇAMENTO (Fazer Pedido) ----------
     function statusBox() {

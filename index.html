@@ -4174,6 +4174,29 @@
                 puxarResumo();
                 return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', puxarResumo); };
             }, []);
+
+            // 📲 AUTO-ATUALIZAÇÃO do APK (estilo Discord): ao abrir, compara a versão instalada
+            // com o apk-version.json publicado no site. Se tem nova, mostra o aviso com botão de baixar.
+            const [apkUpdate, setApkUpdate] = useState(null);
+            useEffect(() => {
+                if (!isCapacitor) return;
+                const P = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.SpamovAuto : null;
+                if (!P || !P.versao) return; // APK antigo (sem o método) — sem checagem
+                (async () => {
+                    try {
+                        const local = await P.versao();
+                        const resp = await fetch('https://tkadachii.github.io/friganso-erp/apk-version.json?t=' + Date.now(), { cache: 'no-store' });
+                        const remoto = await resp.json();
+                        if (Number(remoto.versionCode) > Number(local.versionCode)) setApkUpdate(remoto);
+                    } catch (e) { /* sem internet ou arquivo ausente — segue normal */ }
+                })();
+            }, []);
+            const baixarApkNovo = () => {
+                try {
+                    const P = window.Capacitor.Plugins.SpamovAuto;
+                    P.abrirLink({ url: (apkUpdate && apkUpdate.url) || 'https://tkadachii.github.io/friganso-erp/FrigansoERP.apk' });
+                } catch (e) {}
+            };
             // 🎨 Tema escolhido: auto | claro | escuro | sakura | oceano | esmeralda
             const [tema, setTema] = useState(() => { try { return window.localStorage.getItem('friganso_tema') || 'auto'; } catch (e) { return 'auto'; } });
 
@@ -4371,6 +4394,25 @@
             return (
                 <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
                     {messageBox && <CustomMessageBox {...messageBox} onClose={() => setMessageBox(null)} />}
+
+                    {/* 📲 Aviso de atualização do APK (estilo Discord) */}
+                    {apkUpdate && (
+                        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 z-[95] animate-in fade-in">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95">
+                                <div className="bg-gradient-to-r from-rose-700 to-rose-500 p-6 text-white text-center">
+                                    <div className="text-4xl mb-2">🚀</div>
+                                    <h2 className="text-xl font-black">Atualização disponível!</h2>
+                                    <p className="text-rose-100 text-sm mt-1">Versão {apkUpdate.versionName || apkUpdate.versionCode} do Friganso ERP</p>
+                                </div>
+                                <div className="p-5 space-y-3">
+                                    {apkUpdate.novidades && <p className="text-sm text-slate-600 bg-slate-50 rounded-xl p-3 whitespace-pre-wrap">{apkUpdate.novidades}</p>}
+                                    <button onClick={baixarApkNovo} className="w-full bg-rose-700 hover:bg-rose-800 text-white font-black py-3.5 rounded-xl transition-colors">⬇️ Baixar agora</button>
+                                    <button onClick={() => setApkUpdate(null)} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2.5 rounded-xl transition-colors text-sm">Depois</button>
+                                    <p className="text-[10px] text-slate-400 text-center">Baixa no navegador → toque no arquivo baixado → Instalar. Seus dados não se perdem.</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Modal de Configurações */}
                     {showSettings && (
