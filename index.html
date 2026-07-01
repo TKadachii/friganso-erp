@@ -4093,10 +4093,29 @@
             const avancar = () => { try { if (wvRef.current.canGoForward()) wvRef.current.goForward(); } catch (e) {} };
             const recarregar = () => { try { wvRef.current.reload(); } catch (e) {} };
 
+            // 📲 No app do celular: abre o site da Friganso no navegador nativo controlado (já loga sozinho
+            // com as credenciais salvas). Serve pra mexer manualmente no SPAmov — conferir pedido, mudar algo, etc.
+            if (isCapacitor) {
+                const abrir = () => { if (window.__frigAbrirSpamov) window.__frigAbrirSpamov(); };
+                return (
+                    <div className="animate-in fade-in max-w-md mx-auto text-center py-10 space-y-5">
+                        <div className="text-5xl">🌐</div>
+                        <div>
+                            <h2 className="text-xl font-bold text-slate-800">Site da Friganso (SPAmov)</h2>
+                            <p className="text-slate-500 text-sm mt-1">Abre o site de verdade pra você navegar, conferir ou mudar algo na mão.</p>
+                        </div>
+                        <button onClick={abrir} className="w-full bg-rose-700 hover:bg-rose-800 text-white font-black py-4 rounded-2xl shadow-lg transition-colors flex items-center justify-center gap-2 text-lg">
+                            <span>🚀</span> Abrir o site da Friganso
+                        </button>
+                        <p className="text-xs text-slate-400">Se você já salvou usuário/senha em 🐞 Debug, ele loga sozinho. Lá dentro use o botão <b>📋 ERP</b> no topo pra trazer um pedido de volta pro Resumo.</p>
+                    </div>
+                );
+            }
+
             if (!isElectron) {
                 return (
                     <div className="max-w-xl mx-auto bg-amber-50 border border-amber-200 rounded-2xl p-6 text-amber-800 text-sm">
-                        🌐 O <b>Navegador embutido</b> só funciona no <b>programa de PC</b> (Friganso ERP Desktop). No site/celular, use as abas normais do navegador.
+                        🌐 O <b>Navegador embutido</b> só funciona no <b>programa de PC</b> (Friganso ERP Desktop) e no <b>app do celular</b>. No site, use as abas normais do navegador.
                     </div>
                 );
             }
@@ -4476,7 +4495,7 @@
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Vendas Diárias</p>
                             <NavButton route="pdf" icon={IconFileText} label="Tabela do Dia (PDF)" />
                             <NavButton route="pedido" icon={IconReceipt} label="Fazer Pedido" />
-                            {isElectron && <NavButton route="navegador" icon={IconWhatsApp} label="🌐 Navegador" />}
+                            {(isElectron || isCapacitor) && <NavButton route="navegador" icon={IconWhatsApp} label="🌐 Site da Friganso" />}
                             <NavButton route="resumo" icon={IconReceipt} label="Resumo de Pedido" />
                             <NavButton route="orcamentos" icon={IconWhatsApp} label="Gerador de Zap" />
                             <NavButton route="disparos" icon={IconWhatsApp} label="Disparos WhatsApp" />
