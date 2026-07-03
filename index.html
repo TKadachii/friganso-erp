@@ -45,6 +45,14 @@
         /* Electron: impede que style tags apareçam como texto visível */
         style { display: none !important; visibility: hidden !important; }
 
+        /* 📱 App Android (Capacitor): empurra a barra de topo/conteúdo pra baixo da área segura
+           (notificação/status bar/notch). O Capacitor injeta --safe-area-inset-* via JS; aqui só
+           usamos (o fallback 0px cobre site/PC, onde essas variáveis nunca são definidas). */
+        @media (max-width: 767px) {
+            .friganso-mobile-topbar { height: calc(3.5rem + var(--safe-area-inset-top, 0px)) !important; padding-top: var(--safe-area-inset-top, 0px) !important; }
+            .friganso-mobile-content { padding-top: calc(68px + var(--safe-area-inset-top, 0px)) !important; padding-bottom: calc(12px + var(--safe-area-inset-bottom, 0px)) !important; }
+        }
+
         /* ===== MODO ESCURO (suave aos olhos) ===== */
         .dark body { background-color: #0b1220; color: #e2e8f0; }
         .dark .bg-white { background-color: #1e293b !important; }
@@ -4902,7 +4910,7 @@
                     )}
 
                     {/* Barra de topo do celular (cara de app) */}
-                    <div className="md:hidden fixed top-0 inset-x-0 z-50 h-14 bg-slate-950 text-white flex items-center gap-3 px-3 shadow-lg">
+                    <div className="friganso-mobile-topbar md:hidden fixed top-0 inset-x-0 z-50 h-14 bg-slate-950 text-white flex items-center gap-3 px-3 shadow-lg">
                         <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1.5 rounded-lg hover:bg-slate-800 active:bg-slate-800">
                             <div className="h-6 w-6"><IconMenu/></div>
                         </button>
@@ -4964,7 +4972,7 @@
                         </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto relative z-0 p-3 pt-[68px] sm:p-4 md:p-8 md:pt-8 bg-slate-100">
+                    <div className="friganso-mobile-content flex-1 overflow-y-auto relative z-0 p-3 pt-[68px] sm:p-4 md:p-8 md:pt-8 bg-slate-100">
                         <div className="absolute inset-0 pointer-events-none opacity-[0.02]" style={{ backgroundImage: `url('${BG_IMAGE}')`, backgroundSize: 'cover', backgroundPosition: 'center' }}></div>
                         <div className="relative z-10 max-w-7xl mx-auto">
                             {renderContent()}
