@@ -348,6 +348,23 @@
 
         // 🧾 Registra a compra na ficha do cliente (nuvem). Anti-duplicata de 5 min.
         let _ultimaCompraReg = { sig: '', ts: 0 };
+        // 📜 Monta uma entrada de histórico de edição a partir do estado ANTIGO de um pedido (antes da
+        // mudança). Usada com FieldValue.arrayUnion — só ADICIONA ao array, nunca remove, então o
+        // histórico de edições de um pedido nunca pode ser apagado pelo app.
+        const criarEntradaHistoricoEdicao = (dadosAntigos, motivo, userCode) => ({
+            em: Date.now(),
+            por: userCode || '',
+            motivo: motivo || 'edicao',
+            antes: {
+                clienteCode: dadosAntigos.clienteCode || '',
+                clienteName: dadosAntigos.clienteName || '',
+                spamov: dadosAntigos.spamov || '',
+                itens: dadosAntigos.itens || [],
+                valor: Number(dadosAntigos.valor) || 0,
+                pesoTotal: Number(dadosAntigos.pesoTotal) || 0
+            }
+        });
+
         const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user, spamov) => {
             try {
                 const itensSafe = (itensValidos || [])
@@ -378,15 +395,18 @@
                         const existente = await db.collection('purchases').where('spamov', '==', spamovStr).limit(1).get();
                         if (!existente.empty) {
                             const doc = existente.docs[0];
+                            const dadosAntigos = doc.data();
+                            const entradaHist = criarEntradaHistoricoEdicao(dadosAntigos, 'reenvio_resumo', (user && user.code));
                             await doc.ref.update({
                                 clienteCode: String(clienteCode),
-                                clienteName: (cli && cli.name) || doc.data().clienteName || '',
-                                tipoPessoa: tipo || (cli && cli.tipo) || doc.data().tipoPessoa || 'juridica',
+                                clienteName: (cli && cli.name) || dadosAntigos.clienteName || '',
+                                tipoPessoa: tipo || (cli && cli.tipo) || dadosAntigos.tipoPessoa || 'juridica',
                                 itens: itensSafe,
                                 valor: valorTotal,
                                 pesoTotal: pesoTotal,
                                 editadoEm: agora,
-                                editadoPor: (user && user.code) || ''
+                                editadoPor: (user && user.code) || '',
+                                historicoEdicoes: firebase.firestore.FieldValue.arrayUnion(entradaHist)
                             });
                             await atualizarHistoricoCliente();
                             return;
@@ -1190,14 +1210,21 @@
                 setSalvandoEdit(true);
                 try {
                     const { valor, pesoTotal } = recomputarPedido(itensValidos);
-                    await db.collection('purchases').doc(editando.id).update({
+                    const ref = db.collection('purchases').doc(editando.id);
+                    // 📜 Pega o estado ATUAL de verdade na nuvem (não o que estava na tela ao abrir o
+                    // modal) pra registrar no histórico de edições — evita perder uma mudança concorrente.
+                    const snap = await ref.get();
+                    const dadosAntigos = snap.exists ? snap.data() : editando;
+                    const entradaHist = criarEntradaHistoricoEdicao(dadosAntigos, 'edicao_manual', (user && user.code));
+                    await ref.update({
                         clienteCode: String(editando.clienteCode || ''),
                         clienteName: editando.clienteName || '',
                         spamov: editando.spamov || '',
                         itens: itensValidos,
                         valor, pesoTotal,
                         editadoEm: Date.now(),
-                        editadoPor: (user && user.code) || ''
+                        editadoPor: (user && user.code) || '',
+                        historicoEdicoes: firebase.firestore.FieldValue.arrayUnion(entradaHist)
                     });
                     showMessage && showMessage('Pedido atualizado! Faturamento recalculado. ✏️', 'success');
                     setEditando(null);
@@ -1269,6 +1296,19 @@
                                     </tbody>
                                 </table>
                                 <div className="text-right font-black text-slate-800">Total: {formatPrice(p.valor || 0)}</div>
+                                {(p.historicoEdicoes && p.historicoEdicoes.length > 0) && (
+                                    <div className="border-t border-slate-200 pt-2 space-y-1.5">
+                                        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">📜 Histórico de edições ({p.historicoEdicoes.length}) — permanente, não pode ser apagado</p>
+                                        {p.historicoEdicoes.slice().sort((a, b) => (b.em || 0) - (a.em || 0)).map((h, i) => (
+                                            <div key={i} className="text-[11px] bg-white border border-slate-200 rounded-lg px-2.5 py-1.5">
+                                                <span className="font-bold text-slate-600">{h.em ? new Date(h.em).toLocaleString('pt-BR') : '—'}</span>
+                                                {h.por && <span className="text-slate-400"> · por {h.por}</span>}
+                                                <span className="text-slate-400"> · {h.motivo === 'reenvio_resumo' ? 'reenviou o Resumo (mesmo SPAmov)' : 'edição manual'}</span>
+                                                <div className="text-slate-500 mt-0.5">estava: {(h.antes && h.antes.itens ? h.antes.itens.length : 0)} item(ns) · {formatPrice(h.antes ? h.antes.valor : 0)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                                 {dono === 'ativo' && (
                                     <div className="flex justify-end gap-2 pt-1">
                                         <button onClick={() => abrirEdicao(p)} className="text-xs font-bold px-3 py-2 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-800 transition-colors">✏️ Editar</button>
@@ -4473,6 +4513,59 @@
             }, []);
             const limparValorNota = () => { window.localStorage.removeItem('friganso_debug_valor_nota'); setValorNota(null); };
 
+            // 🧹 Correção de pedidos duplicados (mesmo SPAmov registrado mais de uma vez, de antes da
+            // regra "mesmo SPAmov = mesmo pedido" existir). Faz um escaneamento primeiro (não mexe em
+            // nada), mostra o que seria corrigido, e só executa depois de confirmar.
+            const [dedupPreview, setDedupPreview] = useState(null);
+            const [dedupBusy, setDedupBusy] = useState(false);
+            const escanearDuplicatas = async () => {
+                setDedupBusy(true);
+                try {
+                    const snap = await db.collection('purchases').get();
+                    const todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    const porSpamov = {};
+                    todos.forEach(p => { const sp = (p.spamov || '').trim(); if (!sp) return; (porSpamov[sp] = porSpamov[sp] || []).push(p); });
+                    const grupos = Object.keys(porSpamov).map(sp => porSpamov[sp]).filter(g => g.length > 1)
+                        .map(g => g.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+                    setDedupPreview({ grupos, totalDocsRemovidos: grupos.reduce((a, g) => a + g.length - 1, 0) });
+                    if (!grupos.length) showMessage('Nenhuma duplicata encontrada! 🎉', 'success');
+                } catch (e) { showMessage('Erro ao escanear duplicatas.', 'error'); }
+                setDedupBusy(false);
+            };
+            const corrigirDuplicatas = async () => {
+                if (!dedupPreview || !dedupPreview.grupos.length) return;
+                if (!window.confirm(`Vai juntar ${dedupPreview.grupos.length} grupo(s) duplicado(s), removendo ${dedupPreview.totalDocsRemovidos} registro(s) repetido(s).\n\nO conteúdo de cada um fica salvo pra sempre no histórico de edições do pedido que continua ativo. Confirma?`)) return;
+                setDedupBusy(true);
+                try {
+                    for (const grupo of dedupPreview.grupos) {
+                        const keeper = grupo[0]; // o mais antigo — mantém id/data original da venda
+                        const outros = grupo.slice(1); // mais novos, em ordem cronológica
+                        let itensAtual = keeper.itens, valorAtual = keeper.valor, pesoAtual = keeper.pesoTotal;
+                        let clienteCodeAtual = keeper.clienteCode, clienteNameAtual = keeper.clienteName, tipoPessoaAtual = keeper.tipoPessoa;
+                        const entradasHist = (keeper.historicoEdicoes || []).slice();
+                        outros.forEach(dup => {
+                            entradasHist.push(criarEntradaHistoricoEdicao(
+                                { clienteCode: clienteCodeAtual, clienteName: clienteNameAtual, spamov: keeper.spamov, itens: itensAtual, valor: valorAtual, pesoTotal: pesoAtual },
+                                'fusao_duplicata_automatica', 'sistema'
+                            ));
+                            itensAtual = dup.itens; valorAtual = dup.valor; pesoAtual = dup.pesoTotal;
+                            clienteCodeAtual = dup.clienteCode || clienteCodeAtual; clienteNameAtual = dup.clienteName || clienteNameAtual; tipoPessoaAtual = dup.tipoPessoa || tipoPessoaAtual;
+                            if (dup.historicoEdicoes && dup.historicoEdicoes.length) entradasHist.push(...dup.historicoEdicoes);
+                        });
+                        await db.collection('purchases').doc(keeper.id).update({
+                            clienteCode: clienteCodeAtual, clienteName: clienteNameAtual, tipoPessoa: tipoPessoaAtual,
+                            itens: itensAtual, valor: valorAtual, pesoTotal: pesoAtual,
+                            editadoEm: Date.now(), editadoPor: 'sistema (correção de duplicatas)',
+                            historicoEdicoes: entradasHist
+                        });
+                        for (const dup of outros) { await db.collection('purchases').doc(dup.id).delete(); }
+                    }
+                    showMessage(`${dedupPreview.grupos.length} grupo(s) corrigido(s)! 🎉`, 'success');
+                    setDedupPreview(null);
+                } catch (e) { showMessage('Erro ao corrigir duplicatas.', 'error'); }
+                setDedupBusy(false);
+            };
+
             const salvar = () => {
                 window.localStorage.setItem('friganso_spamov_user', usuario);
                 window.localStorage.setItem('friganso_spamov_pass', senha);
@@ -4552,6 +4645,32 @@
                                     </table>
                                 </div>
                                 <div className="text-right text-lg font-extrabold text-rose-700">Total: {formatPrice(valorNota.total)}</div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>🧹</span> Corrigir pedidos duplicados (mesmo SPAmov)</h3>
+                        <p className="text-xs text-slate-400">Pedidos de antes da regra "mesmo SPAmov = mesmo pedido" existir podem estar duplicados no Histórico, contando faturamento duas vezes. Isso escaneia primeiro (não mexe em nada) e só corrige depois de você confirmar. O conteúdo de cada duplicata removida fica salvo pra sempre no histórico de edições do pedido que sobra.</p>
+                        <button onClick={escanearDuplicatas} disabled={dedupBusy} className="bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white font-bold py-3 px-5 rounded-xl transition-colors">{dedupBusy ? 'Escaneando...' : '🔍 Escanear duplicatas'}</button>
+                        {dedupPreview && (
+                            <div className="space-y-2">
+                                {dedupPreview.grupos.length === 0 ? (
+                                    <p className="text-sm text-emerald-700 font-bold">✅ Nenhuma duplicata encontrada.</p>
+                                ) : (
+                                    <>
+                                        <p className="text-sm font-bold text-amber-700">{dedupPreview.grupos.length} grupo(s) duplicado(s) — {dedupPreview.totalDocsRemovidos} registro(s) serão fundidos.</p>
+                                        <div className="max-h-56 overflow-y-auto space-y-1.5">
+                                            {dedupPreview.grupos.map((g, i) => (
+                                                <div key={i} className="text-xs bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                                                    <b>SPAmov {g[0].spamov}</b> · {g.length} registros · cliente {g[0].clienteCode} ({g[0].clienteName || '?'})
+                                                    <div className="text-slate-500 mt-0.5">{g.map(p => (p.ts ? new Date(p.ts).toLocaleString('pt-BR') : '?') + ' (' + formatPrice(p.valor || 0) + ')').join(' → ')}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <button onClick={corrigirDuplicatas} disabled={dedupBusy} className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors">{dedupBusy ? 'Corrigindo...' : '✅ Confirmar e corrigir agora'}</button>
+                                    </>
+                                )}
                             </div>
                         )}
                     </div>
