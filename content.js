@@ -7,6 +7,17 @@
 
     // ========= PONTE: roda na página do APP (github.io) =========
     if (host.indexOf("github.io") !== -1) {
+        // 📥 Se tem uma Tabela de Preços pendente (lida no SPAmov, guardada no chrome.storage pra
+        // não estourar o tamanho da URL), entrega ela pro app agora e limpa — só uma vez.
+        try {
+            chrome.storage.local.get(["friganso_tabela_pendente"], function (r) {
+                const pend = r && r.friganso_tabela_pendente;
+                if (!pend || !pend.produtos || !pend.produtos.length) return;
+                if (Date.now() - (pend.ts || 0) > 10 * 60 * 1000) { chrome.storage.local.remove("friganso_tabela_pendente"); return; } // expira em 10min
+                chrome.storage.local.remove("friganso_tabela_pendente");
+                try { window.postMessage({ source: "friganso-ext", type: "TABELA_PENDENTE", produtos: pend.produtos }, "*"); } catch (e) {}
+            });
+        } catch (e) {}
         window.addEventListener("message", function (e) {
             const d = e.data;
             if (!d || d.source !== "friganso-app") return;
@@ -294,6 +305,23 @@
     function enviarTabelaParaApp() {
         const produtos = extrairListaPrecos();
         if (!produtos.length) { alert("Não consegui ler a tabela de preços nesta tela."); return; }
+        // 🚫 NÃO manda a tabela inteira pela URL — com muitos produtos ela fica gigante e o próprio
+        // GitHub Pages/CDN não aguenta (dá "I/O error"). Usa o chrome.storage da extensão (compartilhado
+        // entre todas as abas dela, sem limite de tamanho de URL) e navega com uma URL curtinha.
+        try {
+            if (window.chrome && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ friganso_tabela_pendente: { produtos: produtos, ts: Date.now() } }, function () {
+                    const url = APP_URL + "?tabela=pendente";
+                    const ehCelular = (navigator.maxTouchPoints || 0) > 0;
+                    if (ehCelular) { try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; } return; }
+                    try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
+                    catch (e) { window.open(url, "friganso_erp_app"); }
+                });
+                return;
+            }
+        } catch (e) {}
+        // Sem chrome.storage disponível (ex.: Tampermonkey sem @grant): volta pro jeito antigo,
+        // que só funciona bem com poucos produtos (URL grande demais pode falhar).
         const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(produtos))));
         const url = APP_URL + "?tabelaJson=" + encodeURIComponent(b64);
         const ehCelular = (navigator.maxTouchPoints || 0) > 0;

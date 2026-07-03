@@ -1505,32 +1505,44 @@
                 fetchCloudInfo();
             }, []);
 
-            // 📥 Tabela lida direto da tela "Lista de Preços" do SPAmov (botão "📥 Atualizar Tabela do Site")
+            // 📥 Tabela lida direto da tela "Lista de Preços" do SPAmov (botão "📥 Atualizar Tabela do Site").
+            // Chega de dois jeitos: 1) já pronta no sessionStorage (URL curta, se a rota já apontava
+            // pra cá antes do React montar) ou 2) via postMessage da extensão, se chegar depois do mount.
             useEffect(() => {
+                const processarTabela = (raw) => {
+                    if (!raw) return;
+                    try {
+                        const brutos = JSON.parse(raw);
+                        const extractedProducts = (brutos || []).map(b => {
+                            const { hasDiscount, unitFinalPrice } = checkDiscountRules(b.code, b.name, b.originalPrice);
+                            return { code: String(b.code), name: b.name, originalPrice: Number(b.originalPrice) || 0, discountedPrice: unitFinalPrice, tipo: b.tipo || '', pesoItem: b.pesoItem || '', pcsItem: b.pcsItem || '', unidade: b.unidade || '', kgUn: b.kgUn || '' };
+                        }).filter(p => p.code && p.originalPrice > 0);
+                        if (!extractedProducts.length) { showMessage('Não veio nenhum produto válido da Lista de Preços.', 'error'); return; }
+                        const produtosAtivosAntes = (products || []).filter(p => p.ativo !== false);
+                        const antigos = new Map(produtosAtivosAntes.map(p => [String(p.code), p]));
+                        const changes = [], novos = [];
+                        extractedProducts.forEach(np => {
+                            const op = antigos.get(String(np.code));
+                            if (!op) { novos.push({ code: np.code, name: np.name, price: np.originalPrice }); return; }
+                            const oldP = Number(op.originalPrice) || 0, newP = np.originalPrice;
+                            if (Math.abs(oldP - newP) >= 0.01) changes.push({ code: np.code, name: np.name, oldPrice: oldP, newPrice: newP });
+                        });
+                        const removidos = produtosAtivosAntes.filter(p => !extractedProducts.some(np => String(np.code) === String(p.code))).length;
+                        setPriceChanges(produtosAtivosAntes.length > 0 ? { changes, novos, removidos } : null);
+                        setProducts(extractedProducts);
+                        showMessage(`Tabela lida direto do SPAmov! ${extractedProducts.length} produtos.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
+                    } catch (e) { showMessage('Erro ao processar a tabela lida do SPAmov.', 'error'); }
+                };
                 const raw = window.sessionStorage.getItem('friganso_tabela_json');
-                if (!raw) return;
-                window.sessionStorage.removeItem('friganso_tabela_json');
-                try {
-                    const brutos = JSON.parse(raw);
-                    const extractedProducts = (brutos || []).map(b => {
-                        const { hasDiscount, unitFinalPrice } = checkDiscountRules(b.code, b.name, b.originalPrice);
-                        return { code: String(b.code), name: b.name, originalPrice: Number(b.originalPrice) || 0, discountedPrice: unitFinalPrice, tipo: b.tipo || '', pesoItem: b.pesoItem || '', pcsItem: b.pcsItem || '', unidade: b.unidade || '', kgUn: b.kgUn || '' };
-                    }).filter(p => p.code && p.originalPrice > 0);
-                    if (!extractedProducts.length) { showMessage('Não veio nenhum produto válido da Lista de Preços.', 'error'); return; }
-                    const produtosAtivosAntes = (products || []).filter(p => p.ativo !== false);
-                    const antigos = new Map(produtosAtivosAntes.map(p => [String(p.code), p]));
-                    const changes = [], novos = [];
-                    extractedProducts.forEach(np => {
-                        const op = antigos.get(String(np.code));
-                        if (!op) { novos.push({ code: np.code, name: np.name, price: np.originalPrice }); return; }
-                        const oldP = Number(op.originalPrice) || 0, newP = np.originalPrice;
-                        if (Math.abs(oldP - newP) >= 0.01) changes.push({ code: np.code, name: np.name, oldPrice: oldP, newPrice: newP });
-                    });
-                    const removidos = produtosAtivosAntes.filter(p => !extractedProducts.some(np => String(np.code) === String(p.code))).length;
-                    setPriceChanges(produtosAtivosAntes.length > 0 ? { changes, novos, removidos } : null);
-                    setProducts(extractedProducts);
-                    showMessage(`Tabela lida direto do SPAmov! ${extractedProducts.length} produtos.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
-                } catch (e) { showMessage('Erro ao processar a tabela lida do SPAmov.', 'error'); }
+                if (raw) { window.sessionStorage.removeItem('friganso_tabela_json'); processarTabela(raw); }
+                const onMsg = (e) => {
+                    const d = e.data;
+                    if (!d || d.source !== 'friganso-ext' || d.type !== 'TABELA_PENDENTE' || !d.produtos) return;
+                    window.sessionStorage.removeItem('friganso_tabela_json'); // evita reprocessar de novo se remontar essa tela
+                    processarTabela(JSON.stringify(d.produtos));
+                };
+                window.addEventListener('message', onMsg);
+                return () => window.removeEventListener('message', onMsg);
             }, []);
 
             const fetchCloudInfo = async () => {
@@ -5275,8 +5287,24 @@
                 try { window.sessionStorage.setItem('friganso_tabela_json', decodeURIComponent(escape(atob(tabJson)))); } catch (e) { window.sessionStorage.setItem('friganso_tabela_json', tabJson); }
                 window.sessionStorage.setItem('friganso_initial_route', 'pdf');
                 if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            } else if (p.get('tabela') === 'pendente') {
+                // A tabela vem por postMessage (extensão) em vez de ir na URL — só prepara a rota aqui.
+                window.sessionStorage.setItem('friganso_initial_route', 'pdf');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
             }
         })();
+
+        // 📥 Tabela de Preços entregue pela extensão via chrome.storage (URL curta, evita "I/O error"
+        // com tabelas grandes) — precisa estar registrado JÁ, antes do React montar, senão a mensagem
+        // pode chegar antes de qualquer listener existir e se perder.
+        window.addEventListener('message', function (e) {
+            const d = e.data;
+            if (!d || d.source !== 'friganso-ext' || d.type !== 'TABELA_PENDENTE' || !d.produtos) return;
+            try {
+                window.sessionStorage.setItem('friganso_tabela_json', JSON.stringify(d.produtos));
+                window.sessionStorage.setItem('friganso_initial_route', 'pdf');
+            } catch (err) {}
+        });
 
         // Captura o prompt de instalação do PWA para usar no botão do Perfil
         window.__pwaInstallPrompt = null;
