@@ -1,6 +1,6 @@
 {
-    "versionCode": 8,
-    "versionName": "2.6",
+    "versionCode": 9,
+    "versionName": "2.7",
     "url": "https://tkadachii.github.io/friganso-erp/FrigansoERP.apk",
-    "novidades": "• Correção de verdade do layout: removido um ajuste meu que brigava com o sistema nativo do Android/Capacitor e piorava o problema\n• Agora deixa o próprio Capacitor cuidar da área segura (é o jeito certo e oficial)\n• (Código nativo — precisou de instalação manual)"
+    "novidades": "• Tabela: produtos que já apareceram uma vez ficam salvos pra sempre, mesmo saindo da tabela do dia (marcados em vermelho, com data da última vez visto)\n• Isso ajuda o Resumo de Pedido a sempre achar o nome certo, mesmo de produtos fora da tabela de hoje\n• Filtro '🔴 Fora da tabela' na Tabela de Preços"
 }
