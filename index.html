@@ -328,7 +328,7 @@
 
         // 🧾 Registra a compra na ficha do cliente (nuvem). Anti-duplicata de 5 min.
         let _ultimaCompraReg = { sig: '', ts: 0 };
-        const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user) => {
+        const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user, spamov) => {
             try {
                 const itensSafe = (itensValidos || [])
                     .map(i => ({ code: String(i.code), name: i.name || i.nome || ('Produto ' + i.code), qty: Number(i.qty != null ? i.qty : i.quantity), peso: Number(i.peso) || 0, valorKg: Number(i.valorKg) || 0 }))
@@ -351,6 +351,7 @@
                     itens: itensSafe,
                     valor: valorTotal,
                     pesoTotal: pesoTotal,
+                    spamov: spamov || '',
                     dia: dia,
                     ts: agora,
                     via: via || '',
@@ -1009,6 +1010,143 @@
                                     : <p className="text-sm text-slate-400 py-6 text-center">Poucas tabelas distribuídas pra comparar esse produto. Distribua tabelas em dias diferentes pra ver a variação. 📅</p>}
                             </CardGrafico>
                         </>
+                    )}
+                </div>
+            );
+        };
+
+        // 🧾 Histórico de Vendas — prova de cada pedido confirmado: preço na hora, quantidade e peso (kg).
+        // Lê direto da coleção 'purchases' (a mesma que alimenta o Dashboard), gravada ao tocar em "Copiar Resumo".
+        const HistoricoScreen = () => {
+            const [purchases, setPurchases] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [periodo, setPeriodo] = useState(30); // 7 | 30 | 90 | 365 | 0 (todos)
+            const [busca, setBusca] = useState('');
+            const [expandido, setExpandido] = useState(null);
+
+            useEffect(() => {
+                const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(1000).onSnapshot(s => {
+                    setPurchases(s.docs.map(d => ({ id: d.id, ...d.data() })));
+                    setLoading(false);
+                }, () => setLoading(false));
+                return () => unsub();
+            }, []);
+
+            const diaStr = (d) => d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+
+            const filtradas = useMemo(() => {
+                let lista = purchases;
+                if (periodo > 0) {
+                    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+                    const desde = new Date(hoje); desde.setDate(hoje.getDate() - (periodo - 1));
+                    const desdeStr = diaStr(desde);
+                    lista = lista.filter(p => (p.dia || '') >= desdeStr);
+                }
+                const q = busca.trim().toLowerCase();
+                if (q) {
+                    lista = lista.filter(p =>
+                        String(p.clienteCode || '').toLowerCase().includes(q) ||
+                        String(p.clienteName || '').toLowerCase().includes(q) ||
+                        String(p.spamov || '').toLowerCase().includes(q) ||
+                        (p.itens || []).some(it => String(it.name || '').toLowerCase().includes(q) || String(it.code || '').includes(q))
+                    );
+                }
+                return lista;
+            }, [purchases, periodo, busca]);
+
+            const totalPeriodo = filtradas.reduce((a, p) => a + (Number(p.valor) || 0), 0);
+            const pesoPeriodo = filtradas.reduce((a, p) => a + (Number(p.pesoTotal) || 0), 0);
+
+            return (
+                <div className="animate-in fade-in space-y-5">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🧾</span> Histórico de Vendas</h2>
+                        <p className="text-slate-500 text-sm">Prova de cada pedido confirmado: preço na hora, quantidade e peso (kg).</p>
+                    </div>
+
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex flex-col sm:flex-row gap-3 sm:items-center">
+                        <input
+                            type="text" value={busca} onChange={e => setBusca(e.target.value)}
+                            placeholder="Buscar por cliente, produto ou nº SPAmov..."
+                            className="flex-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-rose-500"
+                        />
+                        <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl flex-wrap">
+                            {[[7, '7d'], [30, '30d'], [90, '90d'], [365, '1a'], [0, 'Todos']].map(([d, l]) => (
+                                <button key={d} onClick={() => setPeriodo(d)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${periodo === d ? 'bg-rose-700 text-white' : 'text-slate-500 hover:bg-white'}`}>{l}</button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                            <p className="text-xs font-bold text-slate-400">Pedidos</p>
+                            <h3 className="text-xl font-black text-slate-800">{filtradas.length}</h3>
+                        </div>
+                        <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                            <p className="text-xs font-bold text-slate-400">Faturamento</p>
+                            <h3 className="text-xl font-black text-emerald-700">{formatPrice(totalPeriodo)}</h3>
+                        </div>
+                        <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                            <p className="text-xs font-bold text-slate-400">Peso total</p>
+                            <h3 className="text-xl font-black text-slate-800">{pesoPeriodo.toFixed(2)} kg</h3>
+                        </div>
+                    </div>
+
+                    {loading ? (
+                        <div className="text-center text-slate-400 py-10">Carregando histórico...</div>
+                    ) : filtradas.length === 0 ? (
+                        <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-400">
+                            <p className="font-bold">Nenhuma venda encontrada.</p>
+                            <p className="text-sm mt-1">Toda venda confirmada em "Copiar Resumo" (no Resumo de Pedido) aparece aqui.</p>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {filtradas.map(p => {
+                                const dt = new Date(p.ts || Date.now());
+                                const aberto = expandido === p.id;
+                                return (
+                                    <div key={p.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                        <button onClick={() => setExpandido(aberto ? null : p.id)} className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-slate-50 transition-colors">
+                                            <div className="flex items-center gap-3 min-w-0">
+                                                <div className="h-10 w-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-black text-sm flex-shrink-0">{p.clienteCode || '?'}</div>
+                                                <div className="min-w-0">
+                                                    <p className="font-bold text-slate-800 truncate">{p.clienteName || ('Cliente ' + (p.clienteCode || '?'))}</p>
+                                                    <p className="text-xs text-slate-400">{dt.toLocaleDateString('pt-BR')} às {dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}{p.spamov ? ' · SPAmov ' + p.spamov : ''}{p.vendedor ? ' · ' + p.vendedor : ''}</p>
+                                                </div>
+                                            </div>
+                                            <div className="text-right flex-shrink-0">
+                                                <p className="font-black text-emerald-700">{formatPrice(p.valor || 0)}</p>
+                                                <p className="text-xs text-slate-400">{(p.itens || []).length} item(ns){p.pesoTotal ? ' · ' + Number(p.pesoTotal).toFixed(2) + ' kg' : ''}</p>
+                                            </div>
+                                        </button>
+                                        {aberto && (
+                                            <div className="border-t border-slate-100 p-4 bg-slate-50 overflow-x-auto">
+                                                <table className="w-full text-xs min-w-[480px]">
+                                                    <thead>
+                                                        <tr className="text-slate-400 text-left">
+                                                            <th className="py-1 pr-2">Código</th><th className="pr-2">Produto</th><th className="pr-2">Qtd</th><th className="pr-2">Peso (kg)</th><th className="pr-2">R$/kg</th><th>Subtotal</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {(p.itens || []).map((it, i) => (
+                                                            <tr key={i} className="border-t border-slate-200">
+                                                                <td className="py-1.5 pr-2 font-mono">{it.code}</td>
+                                                                <td className="pr-2">{it.name}</td>
+                                                                <td className="pr-2">{it.qty}</td>
+                                                                <td className="pr-2">{it.peso ? Number(it.peso).toFixed(2) : '—'}</td>
+                                                                <td className="pr-2">{it.valorKg ? formatPrice(it.valorKg) : '—'}</td>
+                                                                <td className="font-bold">{(it.peso && it.valorKg) ? formatPrice(it.peso * it.valorKg) : '—'}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                                <div className="text-right mt-2 font-black text-slate-800">Total: {formatPrice(p.valor || 0)}</div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
                     )}
                 </div>
             );
@@ -1870,7 +2008,7 @@
                                         // 🧾 Grava na ficha do cliente (todo pedido confirmado passa por aqui)
                                         if (orderSummary && orderSummary.customerCode) {
                                             const itens = (orderSummary.items || []).map(it => { const a = itemAtual(it); return { code: a.code, name: a.name, qty: Number(getQty(it)), peso: Number(a.peso) || 0, valorKg: Number(a.valorKg) || 0 }; });
-                                            registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user);
+                                            registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user, orderSummary.spamov);
                                         }
                                         showMessage('Copiado pro Zap e salvo na ficha do cliente! 🧾', 'success');
                                     }} className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-4 py-2 rounded-xl text-sm font-bold transition-colors">Copiar Resumo</button>
@@ -4394,6 +4532,7 @@
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
+                    case 'historico': return <HistoricoScreen />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} listaNegra={listaNegra} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
@@ -4497,6 +4636,7 @@
                             <NavButton route="pedido" icon={IconReceipt} label="Fazer Pedido" />
                             {(isElectron || isCapacitor) && <NavButton route="navegador" icon={IconWhatsApp} label="🌐 Site da Friganso" />}
                             <NavButton route="resumo" icon={IconReceipt} label="Resumo de Pedido" />
+                            <NavButton route="historico" icon={IconFileText} label="🧾 Histórico de Vendas" />
                             <NavButton route="orcamentos" icon={IconWhatsApp} label="Gerador de Zap" />
                             <NavButton route="disparos" icon={IconWhatsApp} label="Disparos WhatsApp" />
                             
