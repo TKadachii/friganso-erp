@@ -1,6 +1,6 @@
 {
-    "versionCode": 4,
-    "versionName": "2.2",
+    "versionCode": 5,
+    "versionName": "2.3",
     "url": "https://tkadachii.github.io/friganso-erp/FrigansoERP.apk",
-    "novidades": "• Botão ← → (voltar/avançar) na barra de cima do navegador SPAmov\n• Botão físico de voltar do celular agora navega dentro do site primeiro\n• Novo item \"🌐 Site da Friganso\" no menu: abre o site pra mexer manualmente\n• Correção do bug que deixava a tela só com texto (v2.0)\n• Leitura do peso (P.Liq.) do SPAmov corrigida, faturamento em R$ no dashboard"
+    "novidades": "• Histórico de Vendas: prova de cada pedido (preço, qtd e peso na hora)\n• Editar pedidos do histórico (recalcula o faturamento)\n• Lixeira permanente: remover não apaga, só sai do faturamento\n• Botão 🔒 Sem Desconto na Tabela — trava o preço normal onde quiser\n• Botões ← → no navegador do SPAmov"
 }
