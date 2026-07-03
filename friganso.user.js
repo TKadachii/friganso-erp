@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.3.1815
+// @version      2026.7.3.1831
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -273,6 +273,76 @@
         try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
         catch (e) { window.open(url, "friganso_erp_app"); }
     }
+    // ================= LISTA DE PREÇOS (catálogo) =================
+    // Lê a tela "Lista de Preços" do SPAmov (com.listapreco.spadim) e monta a Tabela do site DIRETO
+    // da tela viva — sem precisar exportar/anexar PDF nenhum. A lista inteira fica no DOM mesmo
+    // rolada pra fora da tela, então dá pra ler tudo de uma vez sem precisar rolar manualmente.
+    function ehTelaListaPrecos() {
+        return /listapreco/i.test(location.href) || /lista\s*de\s*pre[çc]os/i.test(document.title || "");
+    }
+    function extrairListaPrecos() {
+        const colUn = colXHeader(document, function (t) { return /^un\.?$/.test(t); });
+        const colPeso = colXHeader(document, function (t) { return t.indexOf("peso") !== -1 && t.indexOf("liq") !== -1; });
+        const colPecas = colXHeader(document, function (t) { return /^pe[çc]as$/.test(t); });
+        const colUnidPreco = colXHeader(document, function (t) { return t.indexOf("unidade") !== -1 && t.indexOf("pre") !== -1; });
+        const colEstVenda = colXHeader(document, function (t) { return t.indexOf("est") !== -1 && t.indexOf("venda") !== -1; });
+        const colPreco = colXHeader(document, function (t) { return t.indexOf("vista") !== -1 || t.indexOf("pix") !== -1; });
+
+        // coleta TODAS as células-folha com texto e posição (uma vez só)
+        const todas = [];
+        document.querySelectorAll("td, div, span, b, font, nobr").forEach(function (el) {
+            if (el.children && el.children.length) return;
+            const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+            if (!t || t.length > 90) return;
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            todas.push({ x: r.left, y: Math.round(r.top / 4) * 4, t: t });
+        });
+        // agrupa por linha (Y, com tolerância)
+        const porLinha = {};
+        todas.forEach(function (c) { if (!porLinha[c.y]) porLinha[c.y] = []; porLinha[c.y].push(c); });
+
+        const produtos = [];
+        Object.keys(porLinha).forEach(function (y) {
+            const linha = porLinha[y];
+            const candCodigo = linha.filter(function (c) { return /^\d{3,7}$/.test(c.t) && c.x < 100; });
+            if (!candCodigo.length) return;
+            const code = candCodigo[0].t;
+            const candNome = linha.filter(function (c) { return c.x >= 100 && c.x < 1180 && /[A-Za-zÀ-Ú]{3,}/.test(c.t); });
+            candNome.sort(function (a, b) { return b.t.length - a.t.length; });
+            if (!candNome.length) return;
+            const name = candNome[0].t;
+            function perto(colX, tol) {
+                if (colX === null) return "";
+                let melhor = "", melhorD = 1e9;
+                linha.forEach(function (c) { const d = Math.abs(c.x - colX); if (d < (tol || 90) && d < melhorD) { melhorD = d; melhor = c.t; } });
+                return melhor;
+            }
+            const tipo = perto(colUn, 90);
+            const pesoItem = perto(colPeso, 160);
+            const pcsItem = perto(colPecas, 160);
+            const unidade = perto(colUnidPreco, 160);
+            const kgUn = perto(colEstVenda, 160);
+            const originalPrice = parseNumBR(perto(colPreco, 160));
+            if (originalPrice === null || originalPrice <= 0) return;
+            produtos.push({ code: code, name: name, tipo: tipo, pesoItem: pesoItem, pcsItem: pcsItem, unidade: unidade, kgUn: kgUn, originalPrice: originalPrice });
+        });
+        return produtos;
+    }
+    function enviarTabelaParaApp() {
+        const produtos = extrairListaPrecos();
+        if (!produtos.length) { alert("Não consegui ler a tabela de preços nesta tela."); return; }
+        const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(produtos))));
+        const url = APP_URL + "?tabelaJson=" + encodeURIComponent(b64);
+        const ehCelular = (navigator.maxTouchPoints || 0) > 0;
+        if (ehCelular) {
+            try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; }
+            return;
+        }
+        try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
+        catch (e) { window.open(url, "friganso_erp_app"); }
+    }
+
     // 📲 Botão NATIVO do app (barra de cima): tenta enviar o resumo deste frame; devolve true se conseguiu.
     try {
         window.__frigEnviarSePuder = function () {
@@ -1120,6 +1190,9 @@
     // 🔍 "Ler Página": disponível em QUALQUER tela do SPAmov (não só pedido), pra usar como ferramenta
     // de exploração — ex.: Lista de Preços, Histórico, etc. — na hora de criar uma automação nova.
     botao("friganso-diag-btn", "🔍 Ler Página", "#0f172a", "170px", gerarDiagnostico);
+    // 📥 Atualizar Tabela: só na tela "Lista de Preços" — lê o catálogo inteiro direto da tela
+    // (sem precisar de PDF) e manda pro site, que atualiza a Tabela de Preços sozinho.
+    if (ehTelaListaPrecos()) botao("friganso-tabela-btn", "📥 Atualizar Tabela do Site", "#7c3aed", "220px", enviarTabelaParaApp);
 
     // Mostra o log salvo (passo a passo que sobrevive aos recarregamentos)
     if (ehFramePrincipal()) mostrarLogSalvo();

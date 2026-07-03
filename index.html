@@ -1433,9 +1433,37 @@
             const [priceChanges, setPriceChanges] = useState(() => { try { const r = window.localStorage.getItem('friganso_price_changes'); return r ? JSON.parse(r) : null; } catch (e) { return null; } });
             useEffect(() => { try { if (priceChanges) window.localStorage.setItem('friganso_price_changes', JSON.stringify(priceChanges)); else window.localStorage.removeItem('friganso_price_changes'); } catch (e) {} }, [priceChanges]);
 
-            useEffect(() => { 
-                if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; 
+            useEffect(() => {
+                if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
                 fetchCloudInfo();
+            }, []);
+
+            // 📥 Tabela lida direto da tela "Lista de Preços" do SPAmov (botão "📥 Atualizar Tabela do Site")
+            useEffect(() => {
+                const raw = window.sessionStorage.getItem('friganso_tabela_json');
+                if (!raw) return;
+                window.sessionStorage.removeItem('friganso_tabela_json');
+                try {
+                    const brutos = JSON.parse(raw);
+                    const extractedProducts = (brutos || []).map(b => {
+                        const { hasDiscount, unitFinalPrice } = checkDiscountRules(b.code, b.name, b.originalPrice);
+                        return { code: String(b.code), name: b.name, originalPrice: Number(b.originalPrice) || 0, discountedPrice: unitFinalPrice, tipo: b.tipo || '', pesoItem: b.pesoItem || '', pcsItem: b.pcsItem || '', unidade: b.unidade || '', kgUn: b.kgUn || '' };
+                    }).filter(p => p.code && p.originalPrice > 0);
+                    if (!extractedProducts.length) { showMessage('Não veio nenhum produto válido da Lista de Preços.', 'error'); return; }
+                    const produtosAtivosAntes = (products || []).filter(p => p.ativo !== false);
+                    const antigos = new Map(produtosAtivosAntes.map(p => [String(p.code), p]));
+                    const changes = [], novos = [];
+                    extractedProducts.forEach(np => {
+                        const op = antigos.get(String(np.code));
+                        if (!op) { novos.push({ code: np.code, name: np.name, price: np.originalPrice }); return; }
+                        const oldP = Number(op.originalPrice) || 0, newP = np.originalPrice;
+                        if (Math.abs(oldP - newP) >= 0.01) changes.push({ code: np.code, name: np.name, oldPrice: oldP, newPrice: newP });
+                    });
+                    const removidos = produtosAtivosAntes.filter(p => !extractedProducts.some(np => String(np.code) === String(p.code))).length;
+                    setPriceChanges(produtosAtivosAntes.length > 0 ? { changes, novos, removidos } : null);
+                    setProducts(extractedProducts);
+                    showMessage(`Tabela lida direto do SPAmov! ${extractedProducts.length} produtos.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
+                } catch (e) { showMessage('Erro ao processar a tabela lida do SPAmov.', 'error'); }
             }, []);
 
             const fetchCloudInfo = async () => {
@@ -1555,7 +1583,10 @@
                     const now = new Date();
                     await db.collection('system_data').doc('shared_pdf').set({ products, updatedAt: now });
                     await db.collection('pdf_versions').add({ products, updatedAt: now, productCount: products.length });
-                    showMessage('Tabela salva na Nuvem para todos os Vendedores!', 'success');
+                    // marca já como sincronizado NESTE aparelho, pra ele não reprocessar a própria distribuição
+                    // quando o listener automático (App) ecoar essa mesma escrita de volta
+                    try { window.localStorage.setItem('friganso_tabela_sync_ms', String(now.getTime())); } catch (e) {}
+                    showMessage('Tabela distribuída! Todo mundo recebe automaticamente agora. 🔄', 'success');
                     fetchCloudInfo();
                 } catch(e) { showMessage('Erro ao distribuir tabela.', 'error'); } finally { setIsLoading(false); }
             };
@@ -4824,14 +4855,24 @@
                 });
             };
 
-            // 📲 Celular/aparelho novo: se não tem tabela local, baixa a última da nuvem sozinho
+            // 📲 Sincronização automática e obrigatória: sempre que um admin distribui uma tabela nova,
+            // TODOS os dispositivos/contas recebem sozinhos (mescla com o que já tinha localmente —
+            // "Distribuir Tabela" não apaga o que a pessoa adicionou manualmente aqui, só garante que
+            // todo mundo tenha pelo menos os dados mais recentes do admin).
             useEffect(() => {
-                if (products.length > 0) return;
-                let cancel = false;
-                db.collection('system_data').doc('shared_pdf').get()
-                    .then(doc => { if (cancel || !doc.exists) return; const prods = doc.data().products; if (prods && prods.length) setProducts(prods); })
-                    .catch(() => {});
-                return () => { cancel = true; };
+                const unsub = db.collection('system_data').doc('shared_pdf').onSnapshot(doc => {
+                    if (!doc.exists) return;
+                    const data = doc.data();
+                    const prods = data.products;
+                    if (!prods || !prods.length) return;
+                    const ua = data.updatedAt;
+                    const remotoMs = (ua && typeof ua.toMillis === 'function') ? ua.toMillis() : (ua ? new Date(ua).getTime() : Date.now());
+                    const localMs = Number(window.localStorage.getItem('friganso_tabela_sync_ms')) || 0;
+                    if (remotoMs > 0 && remotoMs <= localMs) return; // já aplicamos essa versão neste aparelho
+                    setProducts(prods);
+                    try { window.localStorage.setItem('friganso_tabela_sync_ms', String(remotoMs)); } catch (e) {}
+                }, () => {});
+                return () => unsub();
             }, []);
 
             const handleSetUser = (userData) => {
@@ -5080,6 +5121,13 @@
             } else if (ped) {
                 try { window.sessionStorage.setItem('friganso_pedido_texto', decodeURIComponent(escape(atob(ped)))); } catch (e) { window.sessionStorage.setItem('friganso_pedido_texto', ped); }
                 window.sessionStorage.setItem('friganso_initial_route', 'resumo');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            }
+            // 📥 Tabela de Preços lida DIRETO da tela "Lista de Preços" do SPAmov (sem PDF)
+            const tabJson = p.get('tabelaJson');
+            if (tabJson) {
+                try { window.sessionStorage.setItem('friganso_tabela_json', decodeURIComponent(escape(atob(tabJson)))); } catch (e) { window.sessionStorage.setItem('friganso_tabela_json', tabJson); }
+                window.sessionStorage.setItem('friganso_initial_route', 'pdf');
                 if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
             }
         })();
