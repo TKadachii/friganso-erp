@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.3.1901
+// @version      2026.7.3.1943
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -405,9 +405,10 @@
     window.__frigDiagnostico = function () {
         try {
             if (!document.body || document.body.tagName === "FRAMESET") return { url: (location.href || "").slice(0, 150), frameset: true };
+            // ⚠️ SEM limite de quantidade — o diagnóstico agora alimenta a leitura real da Tabela
+            // (que precisa da página inteira, ex.: catálogo com centenas de produtos).
             const textos = [];
             document.querySelectorAll("td, th, div, span, font, b, a, label, li, nobr, small, strong").forEach(function (el) {
-                if (textos.length >= 350) return;
                 if (el.children && el.children.length) return; // só folhas
                 const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
                 if (!t || t.length > 60) return;
@@ -417,7 +418,6 @@
             });
             const campos = [];
             document.querySelectorAll("input, select").forEach(function (el) {
-                if (campos.length >= 120) return;
                 const r = el.getBoundingClientRect();
                 if (!r.width || !r.height) return;
                 campos.push({ tag: el.tagName, tipo: (el.type || "").toLowerCase(), valor: (el.value || "").slice(0, 40), x: Math.round(r.left), y: Math.round(r.top) });
