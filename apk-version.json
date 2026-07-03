@@ -1,6 +1,6 @@
 {
-    "versionCode": 6,
-    "versionName": "2.4",
+    "versionCode": 7,
+    "versionName": "2.5",
     "url": "https://tkadachii.github.io/friganso-erp/FrigansoERP.apk",
-    "novidades": "• NOVO: auto-atualização de verdade! O app agora baixa o conteúdo mais novo (site/automação) sozinho ao abrir, sem passar pelo navegador — a partir desta versão, a maioria das atualizações não vai precisar mais de instalar nada\n• Correção do resumo no celular: agora junta os dados de todos os frames da página (antes falhava dizendo que não tinha nada pra ler)\n• Valor Máximo de Venda na Tabela\n• Histórico de Vendas com edição e lixeira\n• Filtro por mês útil (fecha dia 30) no Dashboard"
+    "novidades": "• Correção de layout: o topo do app (menu/logo) não fica mais por baixo da barra de status/notificação\n• Ajuste automático pra barra de navegação de baixo também\n• (Essa correção é de código nativo, por isso ainda precisou de instalação manual)"
 }
