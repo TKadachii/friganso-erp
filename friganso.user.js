@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.3.1805
+// @version      2026.7.3.1807
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -1097,9 +1097,11 @@
     if (ehFramePrincipal()) {
         botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", abrirPopupFila);
         botao("friganso-cancelar-btn", "⏹ Cancelar lançamento", "#64748b", "70px", cancelarLancamento);
-        botao("friganso-diag-btn", "🔍 Ler Página", "#0f172a", "170px", gerarDiagnostico);
     }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
+    // 🔍 "Ler Página": disponível em QUALQUER tela do SPAmov (não só pedido), pra usar como ferramenta
+    // de exploração — ex.: Lista de Preços, Histórico, etc. — na hora de criar uma automação nova.
+    botao("friganso-diag-btn", "🔍 Ler Página", "#0f172a", "170px", gerarDiagnostico);
 
     // Mostra o log salvo (passo a passo que sobrevive aos recarregamentos)
     if (ehFramePrincipal()) mostrarLogSalvo();
