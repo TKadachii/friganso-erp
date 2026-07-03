@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.3.1807
+// @version      2026.7.3.1815
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -377,6 +377,24 @@
             try { navigator.clipboard && navigator.clipboard.writeText(texto); } catch (e) {}
         });
         btns.appendChild(btnCopiar);
+        const btnBaixar = document.createElement("button");
+        btnBaixar.textContent = "💾 Baixar .txt";
+        Object.assign(btnBaixar.style, { flex: "1", background: "#0f172a", color: "#fff", border: "none", borderRadius: "8px", padding: "10px", fontWeight: "700", cursor: "pointer" });
+        btnBaixar.addEventListener("click", function () {
+            try {
+                const blob = new Blob([texto], { type: "text/plain;charset=utf-8" });
+                const a = document.createElement("a");
+                const agora = new Date();
+                const nome = "friganso-diagnostico-" + agora.toISOString().slice(0, 16).replace(/[-:T]/g, "") + ".txt";
+                a.href = URL.createObjectURL(blob);
+                a.download = nome;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+            } catch (e) {}
+        });
+        btns.appendChild(btnBaixar);
         const fechar = document.createElement("button");
         fechar.textContent = "Fechar";
         Object.assign(fechar.style, { background: "#e2e8f0", color: "#334155", border: "none", borderRadius: "8px", padding: "10px 16px", fontWeight: "700", cursor: "pointer" });
