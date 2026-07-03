@@ -254,12 +254,22 @@
         return /listapreco/i.test(location.href) || /lista\s*de\s*pre[çc]os/i.test(document.title || "");
     }
     function extrairListaPrecos() {
-        const colUn = colXHeader(document, function (t) { return /^un\.?$/.test(t); });
+        // exige o ponto ("UN.") pra não confundir com a célula de dado "UN" que aparece
+        // dentro da coluna "Unidade Preço" (mesmo texto, sem ponto, em várias linhas)
+        const colUn = colXHeader(document, function (t) { return /^un\.$/.test(t); });
         const colPeso = colXHeader(document, function (t) { return t.indexOf("peso") !== -1 && t.indexOf("liq") !== -1; });
         const colPecas = colXHeader(document, function (t) { return /^pe[çc]as$/.test(t); });
         const colUnidPreco = colXHeader(document, function (t) { return t.indexOf("unidade") !== -1 && t.indexOf("pre") !== -1; });
         const colEstVenda = colXHeader(document, function (t) { return t.indexOf("est") !== -1 && t.indexOf("venda") !== -1; });
         const colPreco = colXHeader(document, function (t) { return t.indexOf("vista") !== -1 || t.indexOf("pix") !== -1; });
+        // 💳 Colunas de condição de pagamento (Cartão Crédito + prazos em dias) — usadas só pra guardar,
+        // o preço "à vista" (colPreco acima) continua sendo o padrão usado em Resumo/Zap/Disparos.
+        const colCartao = colXHeader(document, function (t) { return t.indexOf("cart") !== -1 && t.indexOf("dito") !== -1; });
+        const diasCols = [7, 14, 21, 28, 30, 35, 45];
+        const colsPrazo = {};
+        diasCols.forEach(function (n) {
+            colsPrazo[n] = colXHeader(document, function (t) { return new RegExp("^0?" + n + "\\s*dias$").test(t); });
+        });
 
         // coleta TODAS as células-folha com texto e posição (uma vez só)
         const todas = [];
@@ -275,13 +285,17 @@
         const porLinha = {};
         todas.forEach(function (c) { if (!porLinha[c.y]) porLinha[c.y] = []; porLinha[c.y].push(c); });
 
+        // limite direito do nome: termina antes da coluna "UN." (se detectada); 1180 é só um fallback
+        // pra layouts antigos/sem essa coluna visível.
+        const limiteNome = colUn !== null ? colUn - 60 : 1180;
+
         const produtos = [];
         Object.keys(porLinha).forEach(function (y) {
             const linha = porLinha[y];
             const candCodigo = linha.filter(function (c) { return /^\d{3,7}$/.test(c.t) && c.x < 100; });
             if (!candCodigo.length) return;
             const code = candCodigo[0].t;
-            const candNome = linha.filter(function (c) { return c.x >= 100 && c.x < 1180 && /[A-Za-zÀ-Ú]{3,}/.test(c.t); });
+            const candNome = linha.filter(function (c) { return c.x >= 100 && c.x < limiteNome && /[A-Za-zÀ-Ú]{3,}/.test(c.t); });
             candNome.sort(function (a, b) { return b.t.length - a.t.length; });
             if (!candNome.length) return;
             const name = candNome[0].t;
@@ -298,7 +312,15 @@
             const kgUn = perto(colEstVenda, 160);
             const originalPrice = parseNumBR(perto(colPreco, 160));
             if (originalPrice === null || originalPrice <= 0) return;
-            produtos.push({ code: code, name: name, tipo: tipo, pesoItem: pesoItem, pcsItem: pcsItem, unidade: unidade, kgUn: kgUn, originalPrice: originalPrice });
+            // colunas de cartão/prazo ficam bem juntas (a partir de ~81px de distância) — tolerância
+            // menor pra não "vazar" o valor da coluna vizinha.
+            const precoCartao = parseNumBR(perto(colCartao, 40));
+            const precosPrazo = {};
+            diasCols.forEach(function (n) {
+                const v = parseNumBR(perto(colsPrazo[n], 40));
+                if (v !== null) precosPrazo[n] = v;
+            });
+            produtos.push({ code: code, name: name, tipo: tipo, pesoItem: pesoItem, pcsItem: pcsItem, unidade: unidade, kgUn: kgUn, originalPrice: originalPrice, precoCartao: precoCartao, precosPrazo: precosPrazo });
         });
         return produtos;
     }

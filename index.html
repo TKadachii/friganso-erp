@@ -1515,7 +1515,7 @@
                         const brutos = JSON.parse(raw);
                         const extractedProducts = (brutos || []).map(b => {
                             const { hasDiscount, unitFinalPrice } = checkDiscountRules(b.code, b.name, b.originalPrice);
-                            return { code: String(b.code), name: b.name, originalPrice: Number(b.originalPrice) || 0, discountedPrice: unitFinalPrice, tipo: b.tipo || '', pesoItem: b.pesoItem || '', pcsItem: b.pcsItem || '', unidade: b.unidade || '', kgUn: b.kgUn || '' };
+                            return { code: String(b.code), name: b.name, originalPrice: Number(b.originalPrice) || 0, discountedPrice: unitFinalPrice, tipo: b.tipo || '', pesoItem: b.pesoItem || '', pcsItem: b.pcsItem || '', unidade: b.unidade || '', kgUn: b.kgUn || '', precoCartao: b.precoCartao != null ? Number(b.precoCartao) : null, precosPrazo: b.precosPrazo || null };
                         }).filter(p => p.code && p.originalPrice > 0);
                         if (!extractedProducts.length) { showMessage('Não veio nenhum produto válido da Lista de Preços.', 'error'); return; }
                         const produtosAtivosAntes = (products || []).filter(p => p.ativo !== false);
