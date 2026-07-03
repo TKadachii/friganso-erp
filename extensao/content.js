@@ -247,7 +247,12 @@
         window.__frigDadosFrame = function () {
             try {
                 const c = extrairCliente(), sp = extrairSpamov(), itens = extrairItens(sp);
-                return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens };
+                const bt = bodyText();
+                // 🔬 diagnóstico: pra descobrir se ESTE frame chega a ver a tabela de itens ou não
+                return {
+                    cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens,
+                    _diag: { url: (location.href || '').slice(0, 90), bodyLen: bt.length, temQuantMov: /quant.{0,4}mov/i.test(bt), temPLiq: /p\.?\s*liq/i.test(bt) }
+                };
             } catch (e) { return null; }
         };
     } catch (e) {}
