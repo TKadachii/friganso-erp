@@ -30,11 +30,33 @@ rodar `precompile.js` (PC), gerar o APK, e entregar o "dossiê" (APK novo + reab
 ```
 cd friganso-app
 # editar index.html (e bump do sw.js: friganso-vNN -> NN+1)
-git add index.html sw.js
+# ⚠️ TAMBÉM bumpar web-version.json pro MESMO número (ver "Auto-atualização do APK" abaixo,
+#    senão o app do celular nunca fica sabendo que tem conteúdo novo pra baixar sozinho)
+git add index.html sw.js web-version.json
 git commit -m "..."
 git push origin main
 ```
 Ver no navegador: Ctrl+Shift+R. O HTML é network-first no SW, então chega rápido.
+
+## 📲 Auto-atualização do conteúdo do APP (desde a v6/2.4 — 2026-07-03, estilo Discord)
+O app checa sozinho ao abrir (tela "🦢 Atualizando...") se `web-version.json` no site tem um
+número maior que o já salvo no aparelho; se tiver, baixa `index.html` + `content.js` do site pra
+uma pasta gravável do app (`WebUpdater.java`) e troca o que a WebView carrega via
+`Bridge.setServerBasePath()` do Capacitor — **sem passar pelo navegador, sem instalar nada**.
+`SpamovActivity` também passou a ler o `content.js` baixado (se existir) em vez do fixo no APK,
+então correções de automação também se beneficiam.
+
+**Isso cobre a MAIORIA do que a gente muda (index.html/content.js).** Só publicar o site (fluxo
+acima, lembrando de bumpar `web-version.json`) já é suficiente — o app se atualiza sozinho na
+próxima vez que abrir, sem precisar de "atualizar"/gerar APK.
+
+**Quando ainda precisa de APK novo (raro):** só quando a mudança é em código NATIVO Java
+(`MainActivity.java`, `SpamovActivity.java`, `SpamovAuto.java`, `ZapBolha.java`, `AndroidManifest.xml`,
+`build.gradle` — novo plugin, nova permissão, etc.). Isso é uma trava de segurança do próprio
+Android: nenhum app fora da Play Store consegue trocar código nativo sem o usuário confirmar a
+instalação. Nesses casos, segue o fluxo de "atualizar" normal abaixo E também bump o `versionCode`/
+`versionName` do `build.gradle` + `apk-version.json` (esse é o mecanismo ANTIGO, que mostra o modal
+"🚀 Atualização disponível" pedindo pra baixar/instalar — mantido só pra esses casos raros).
 
 ## Como gerar PC + APK (só quando o usuário pedir "atualizar")
 Toolchain: **JDK 21** (`C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot`), **Android SDK 36**
