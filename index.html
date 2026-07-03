@@ -358,12 +358,44 @@
                 const agora = Date.now();
                 if (_ultimaCompraReg.sig === sig && (agora - _ultimaCompraReg.ts) < 5 * 60 * 1000) return;
                 _ultimaCompraReg = { sig, ts: agora };
-                const d = new Date(agora);
-                const dia = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
                 const cli = (clients || []).find(c => String(c.code) === String(clienteCode));
                 // 💰 Faturamento da venda = soma de peso(kg) × preço/kg de cada item (a "nota" do SPAmov)
                 const valorTotal = Math.round(itensSafe.reduce((a, i) => a + (i.peso * i.valorKg), 0) * 100) / 100;
                 const pesoTotal = Math.round(itensSafe.reduce((a, i) => a + i.peso, 0) * 100) / 100;
+                const atualizarHistoricoCliente = async () => {
+                    if (!cli || !cli.id) return;
+                    const atual = cli.history || [];
+                    const novos = [...new Set([...atual, ...itensSafe.map(i => i.code)])];
+                    if (novos.length !== atual.length) { try { await db.collection('clients').doc(cli.id).update({ history: novos }); } catch (e) {} }
+                };
+
+                // 🧾 Mesmo SPAmov = mesma nota. Se já existe um pedido ATIVO com esse SPAmov, isso é uma
+                // EDIÇÃO dele (item adicionado/mudado) — atualiza em vez de duplicar, pra não contar duas
+                // vezes no faturamento. Mantém a data original da venda (dia/ts não mudam).
+                const spamovStr = (spamov || '').trim();
+                if (spamovStr) {
+                    try {
+                        const existente = await db.collection('purchases').where('spamov', '==', spamovStr).limit(1).get();
+                        if (!existente.empty) {
+                            const doc = existente.docs[0];
+                            await doc.ref.update({
+                                clienteCode: String(clienteCode),
+                                clienteName: (cli && cli.name) || doc.data().clienteName || '',
+                                tipoPessoa: tipo || (cli && cli.tipo) || doc.data().tipoPessoa || 'juridica',
+                                itens: itensSafe,
+                                valor: valorTotal,
+                                pesoTotal: pesoTotal,
+                                editadoEm: agora,
+                                editadoPor: (user && user.code) || ''
+                            });
+                            await atualizarHistoricoCliente();
+                            return;
+                        }
+                    } catch (e) { /* se a checagem falhar, segue e cria um novo abaixo */ }
+                }
+
+                const d = new Date(agora);
+                const dia = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
                 await db.collection('purchases').add({
                     clienteCode: String(clienteCode),
                     clienteName: (cli && cli.name) || '',
@@ -371,18 +403,13 @@
                     itens: itensSafe,
                     valor: valorTotal,
                     pesoTotal: pesoTotal,
-                    spamov: spamov || '',
+                    spamov: spamovStr,
                     dia: dia,
                     ts: agora,
                     via: via || '',
                     vendedor: (user && user.code) || ''
                 });
-                // mantém o histórico de códigos do cliente atualizado (pras recomendações/Disparos)
-                if (cli && cli.id) {
-                    const atual = cli.history || [];
-                    const novos = [...new Set([...atual, ...itensSafe.map(i => i.code)])];
-                    if (novos.length !== atual.length) { try { await db.collection('clients').doc(cli.id).update({ history: novos }); } catch (e) {} }
-                }
+                await atualizarHistoricoCliente();
             } catch (e) { /* silencioso */ }
         };
 
