@@ -240,6 +240,17 @@
             return false;
         };
     } catch (e) {}
+    // 📲 Dados CRUS deste frame (sem exigir que ESTE frame tenha cliente+SPAmov+itens todos juntos —
+    // no SPAmov o cabeçalho [cliente/SPAmov] e a tabela de itens costumam ficar em frames DIFERENTES
+    // do frameset). O app agrega os dados de todos os frames antes de decidir se dá pra montar o pedido.
+    try {
+        window.__frigDadosFrame = function () {
+            try {
+                const c = extrairCliente(), sp = extrairSpamov(), itens = extrairItens(sp);
+                return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens };
+            } catch (e) { return null; }
+        };
+    } catch (e) {}
 
     // ---------- LANÇAMENTO (Fazer Pedido) ----------
     function statusBox() {
