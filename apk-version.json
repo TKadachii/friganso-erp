@@ -1,6 +1,6 @@
 {
-    "versionCode": 7,
-    "versionName": "2.5",
+    "versionCode": 8,
+    "versionName": "2.6",
     "url": "https://tkadachii.github.io/friganso-erp/FrigansoERP.apk",
-    "novidades": "• Correção de layout: o topo do app (menu/logo) não fica mais por baixo da barra de status/notificação\n• Ajuste automático pra barra de navegação de baixo também\n• (Essa correção é de código nativo, por isso ainda precisou de instalação manual)"
+    "novidades": "• Correção de verdade do layout: removido um ajuste meu que brigava com o sistema nativo do Android/Capacitor e piorava o problema\n• Agora deixa o próprio Capacitor cuidar da área segura (é o jeito certo e oficial)\n• (Código nativo — precisou de instalação manual)"
 }
