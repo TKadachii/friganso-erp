@@ -71,6 +71,22 @@ APK -> friganso-mobile\android\app\build\outputs\apk\debug\app-debug.apk  (cópi
 ```
 Programa de PC: lê `index-compiled.html`; basta reabrir pelo atalho.
 
+## ⚠️ Lição aprendida: NÃO mexer manualmente em insets/status bar no MainActivity
+O **Capacitor 8** (`@capacitor/android`) já registra sozinho um plugin nativo chamado
+**`SystemBars`** (`Bridge.registerAllPlugins()` faz isso automaticamente, sem precisar
+configurar nada) que cuida da área segura (status bar/notch/nav bar) — ele escuta os insets
+no **pai** da WebView e aplica padding ou expõe `env(safe-area-inset-*)` via CSS (o
+`index.html` já tem `viewport-fit=cover` no `<meta viewport>`, então o modo CSS moderno já
+funciona quando o WebView suporta). **Em 2026-07-03 um ajuste manual foi adicionado no
+`MainActivity` (listener de insets na própria WebView) achando que resolveria um problema de
+layout — na verdade CRIOU um conflito** (dois listeners competindo pelos mesmos insets) que
+piorou o bug (app "invadindo" as duas barras do sistema). Foi revertido — `MainActivity`
+**não deve** ter nenhum código de insets/`WindowInsetsCompat`/`setStatusBarColor` etc. Se
+aparecer um bug parecido de novo, a causa provavelmente é outra (ex: o WebView da versão do
+Android do aparelho ser mais antigo que o `WEBVIEW_VERSION_WITH_SAFE_AREA_FIX`/140 usado pelo
+Capacitor internamente) — investigar `node_modules/@capacitor/android/.../SystemBars.java`
+antes de tentar mexer nisso de novo.
+
 ## 📲 Auto-atualização do APK (desde a v2 — 2026-07-01)
 O app checa atualização sozinho ao abrir (estilo Discord): chama `SpamovAuto.versao()` (versionCode
 nativo) e compara com `https://tkadachii.github.io/friganso-erp/apk-version.json`. Se o remoto for
