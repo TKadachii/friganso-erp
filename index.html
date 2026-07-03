@@ -319,13 +319,22 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
+            // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
+            // valor — e some SEMPRE como se tivesse levado o desconto normal de 3% (o "de" riscado é
+            // calculado pra trás: valorMáximo / 0.97), pra não expor que na verdade não teve desconto.
+            // Sincronizado na nuvem via window.__valorMaximo, vale em Resumo, Fazer Pedido, Zap e Disparos.
+            try {
+                const vm = window.__valorMaximo && window.__valorMaximo[codeStr];
+                if (vm != null && Number(vm) > 0) {
+                    const unitFinalPrice = Math.round(Number(vm) * 100) / 100;
+                    const origFake = Math.round((unitFinalPrice / 0.97) * 100) / 100;
+                    return { hasDiscount: true, origPrice: origFake, unitFinalPrice };
+                }
+            } catch (e) {}
             let hasDiscount = true;
             if (codeStr.startsWith('16') || codeStr.startsWith('27') || codeStr.startsWith('90')) hasDiscount = false; // grupos sem desconto
             if (codeStr === '24962') hasDiscount = false; // Fraldinha Ramax (por código, garantido)
             if (nameStr.includes('fraldinha ramax') || (nameStr.includes('fraldinha') && nameStr.includes('ramax'))) hasDiscount = false;
-            // 🔒 Itens marcados manualmente em "Sem Desconto" (Tabela) — vale em TODO lugar que calcula preço
-            // (Resumo, Fazer Pedido, Gerador de Zap, Disparos), sincronizado na nuvem via window.__semDesconto.
-            try { if (window.__semDesconto && window.__semDesconto.has(codeStr)) hasDiscount = false; } catch (e) {}
             return { hasDiscount, origPrice, unitFinalPrice: hasDiscount ? Math.round((origPrice * 0.97) * 100) / 100 : origPrice };
         };
 
@@ -1382,9 +1391,30 @@
             );
         };
 
-        const PdfScreen = ({ user, products, setProducts, showMessage, listaNegra, toggleListaNegra, semDesconto, toggleSemDesconto }) => {
+        // 🎯 Campo do "Valor Máximo de Venda" — componente de TOPO (fora do PdfScreen) pra não perder
+        // o foco a cada tecla: se fosse definido dentro do .map() do PdfScreen, cada re-render criaria
+        // uma função-componente NOVA e o React remontaria o input, derrubando o cursor/foco.
+        const CampoValorMaximo = ({ valor, onSave }) => {
+            const [texto, setTexto] = useState(valor != null ? String(valor).replace('.', ',') : '');
+            useEffect(() => { setTexto(valor != null ? String(valor).replace('.', ',') : ''); }, [valor]);
+            const salvar = () => {
+                const limpo = texto.trim();
+                if (!limpo) { if (valor != null) onSave(null); return; }
+                const num = parseFloat(limpo.replace(',', '.'));
+                if (isNaN(num) || num <= 0) { setTexto(valor != null ? String(valor).replace('.', ',') : ''); return; } // inválido: volta ao valor salvo
+                if (num !== valor) onSave(num);
+            };
+            return (
+                <div className="flex items-center gap-1 justify-end">
+                    <input type="text" inputMode="decimal" value={texto} onChange={e => setTexto(e.target.value)} onBlur={salvar} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} placeholder="—" className="w-20 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-right outline-none focus:border-amber-500" />
+                    {valor != null && <button onClick={() => { setTexto(''); onSave(null); }} title="Remover valor máximo" className="text-slate-300 hover:text-red-500 h-6 w-6 flex items-center justify-center flex-shrink-0"><div className="h-3 w-3"><IconX /></div></button>}
+                </div>
+            );
+        };
+
+        const PdfScreen = ({ user, products, setProducts, showMessage, listaNegra, toggleListaNegra, valorMaximo, setValorMaximoProduto }) => {
             const lnSet = new Set((listaNegra || []).map(String));
-            const sdSet = new Set((semDesconto || []).map(String));
+            const vmMap = valorMaximo || {};
             const [isLoading, setIsLoading] = useState(false);
             const [searchTerm, setSearchTerm] = useState('');
             const [cloudInfo, setCloudInfo] = useState(null);
@@ -1562,14 +1592,14 @@
             };
 
             const [soLista, setSoLista] = useState(false); // mostrar só os itens da lista negra
-            const [soSemDesconto, setSoSemDesconto] = useState(false); // mostrar só os itens sem desconto
+            const [soValorMaximo, setSoValorMaximo] = useState(false); // mostrar só os itens com Valor Máximo definido
             const filteredProducts = useMemo(() => {
                 let base = products;
                 if (soLista) base = base.filter(p => lnSet.has(String(p.code)));
-                if (soSemDesconto) base = base.filter(p => sdSet.has(String(p.code)));
+                if (soValorMaximo) base = base.filter(p => vmMap[String(p.code)] != null);
                 if (!searchTerm) return base;
                 return base.filter(p => matchProduto(p, searchTerm.trim()));
-            }, [products, searchTerm, soLista, soSemDesconto, listaNegra, semDesconto]);
+            }, [products, searchTerm, soLista, soValorMaximo, listaNegra, valorMaximo]);
 
             return (
                 <div className="animate-in fade-in space-y-6">
@@ -1628,8 +1658,8 @@
                                 </button>
                             )}
                             {products.length > 0 && (
-                                <button onClick={() => setSoSemDesconto(s => !s)} title="Itens que NÃO podem ter o desconto de 3% (preço sempre normal)" className={`px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md ${soSemDesconto ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
-                                    🔒 Sem Desconto{sdSet.size ? ' (' + sdSet.size + ')' : ''}
+                                <button onClick={() => setSoValorMaximo(s => !s)} title="Itens com preço fixo (Valor Máximo de Venda)" className={`px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md ${soValorMaximo ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+                                    🎯 Valor Máximo{Object.keys(vmMap).length ? ' (' + Object.keys(vmMap).length + ')' : ''}
                                 </button>
                             )}
                             <div className="relative flex-1 sm:flex-none">
@@ -1704,11 +1734,12 @@
                             <div className="p-4 border-b border-slate-100 bg-slate-50 relative"><div className="absolute left-7 top-1/2 -translate-y-1/2 text-slate-400 h-5 w-5"><IconSearch /></div><input type="text" placeholder="Pesquise por código ou nome..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:border-rose-500 outline-none font-medium" /></div>
                             <div className="overflow-auto flex-1">
                                 <table className="w-full text-left border-collapse">
-                                    <thead className="bg-white sticky top-0 shadow-sm"><tr><th className="p-4 font-bold text-slate-600 border-b">Cód</th><th className="p-4 font-bold text-slate-600 border-b">Produto</th><th className="p-4 font-bold text-slate-600 border-b text-right">Orig.</th><th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">À Vista</th><th className="p-4 font-bold text-slate-600 border-b text-center" title="Trava o preço normal (sem desconto de 3%)">🔒</th><th className="p-4 font-bold text-slate-600 border-b text-center" title="Lista Negra: itens marcados não saem no Zap/Disparos">Zap</th></tr></thead>
+                                    <thead className="bg-white sticky top-0 shadow-sm"><tr><th className="p-4 font-bold text-slate-600 border-b">Cód</th><th className="p-4 font-bold text-slate-600 border-b">Produto</th><th className="p-4 font-bold text-slate-600 border-b text-right">Orig.</th><th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">À Vista</th><th className="p-4 font-bold text-slate-600 border-b text-right" title="Preço fixo (R$/kg) — some no Zap/Resumo como se fosse um desconto normal de 3%">🎯 Valor Máx.</th><th className="p-4 font-bold text-slate-600 border-b text-center" title="Lista Negra: itens marcados não saem no Zap/Disparos">Zap</th></tr></thead>
                                     <tbody>
                                         {filteredProducts.map((p, i) => {
                                             const banido = lnSet.has(String(p.code));
-                                            const semDesc = sdSet.has(String(p.code));
+                                            const vm = vmMap[String(p.code)];
+                                            const temVm = vm != null;
                                             const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
                                             return (
                                             <tr key={i} className={`hover:bg-slate-50 border-b border-slate-50 ${banido ? 'opacity-60 bg-slate-50' : ''}`}>
@@ -1716,7 +1747,7 @@
                                                 <td className="p-4 text-slate-800 font-medium align-top">
                                                     <span className={banido ? 'line-through' : ''}>{p.name}</span>
                                                     {banido && <span className="ml-2 text-[10px] font-bold bg-slate-700 text-white px-2 py-0.5 rounded-full align-middle whitespace-nowrap">🚫 fora do Zap</span>}
-                                                    {semDesc && <span className="ml-2 text-[10px] font-bold bg-amber-500 text-white px-2 py-0.5 rounded-full align-middle whitespace-nowrap">🔒 sem desconto</span>}
+                                                    {temVm && <span className="ml-2 text-[10px] font-bold bg-amber-500 text-white px-2 py-0.5 rounded-full align-middle whitespace-nowrap">🎯 preço fixo</span>}
                                                     {(p.tipo || p.pesoItem || p.pcsItem || p.kgUn) && (
                                                         <div className="text-[11px] text-slate-400 font-normal mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
                                                             {p.tipo && <span>📦 {p.tipo}</span>}
@@ -1727,9 +1758,9 @@
                                                     )}
                                                 </td>
                                                 <td className="p-4 text-right text-slate-600 align-top">{formatPrice(p.originalPrice)}</td>
-                                                <td className={`p-4 text-right font-bold align-top ${semDesc ? 'text-slate-500 bg-amber-50/40' : 'text-rose-700 bg-rose-50/30'}`}>{formatPrice(unitFinalPrice)}{semDesc && <div className="text-[10px] font-normal text-amber-600">preço normal</div>}</td>
-                                                <td className="p-3 text-center align-top">
-                                                    <button onClick={() => toggleSemDesconto(p.code)} title={semDesc ? 'Voltar a aplicar o desconto de 3%' : 'Travar no preço normal (sem desconto de 3%)'} className={`h-9 w-9 rounded-lg text-base transition-colors ${semDesc ? 'bg-amber-100 hover:bg-amber-200' : 'bg-slate-100 hover:bg-amber-100 grayscale opacity-60 hover:opacity-100 hover:grayscale-0'}`}>{semDesc ? '🔒' : '🔓'}</button>
+                                                <td className={`p-4 text-right font-bold align-top ${temVm ? 'text-amber-700 bg-amber-50/40' : 'text-rose-700 bg-rose-50/30'}`}>{formatPrice(unitFinalPrice)}</td>
+                                                <td className="p-3 text-right align-top">
+                                                    <CampoValorMaximo valor={temVm ? vm : null} onSave={(novo) => setValorMaximoProduto(p.code, novo)} />
                                                 </td>
                                                 <td className="p-3 text-center align-top">
                                                     <button onClick={() => toggleListaNegra(p.code)} title={banido ? 'Voltar a divulgar (tirar da lista negra)' : 'Não divulgar no Zap/Disparos (pôr na lista negra)'} className={`h-9 w-9 rounded-lg text-base transition-colors ${banido ? 'bg-emerald-100 hover:bg-emerald-200' : 'bg-slate-100 hover:bg-rose-100 grayscale opacity-60 hover:opacity-100 hover:grayscale-0'}`}>{banido ? '↩️' : '🚫'}</button>
@@ -4726,27 +4757,24 @@
                 catch (e) { showMessage('Erro ao salvar na lista negra.', 'error'); }
             };
 
-            // 🔒 Sem Desconto — itens que NÃO podem levar o desconto de 3%. Compartilhado na nuvem;
-            // window.__semDesconto é lido direto por checkDiscountRules (funciona em Resumo, Zap, Disparos, etc.).
-            const [semDesconto, setSemDesconto] = useState([]);
+            // 🎯 Valor Máximo de Venda — preço fixo por produto (R$). Compartilhado na nuvem;
+            // window.__valorMaximo é lido direto por checkDiscountRules (funciona em Resumo, Zap, Disparos, etc.).
+            const [valorMaximo, setValorMaximo] = useState({});
             useEffect(() => {
-                const unsub = db.collection('system_data').doc('sem_desconto').onSnapshot(d => {
-                    const c = (d && d.exists && d.data()) ? (d.data().codes || []) : [];
-                    const arr = c.map(String);
-                    setSemDesconto(arr);
-                    window.__semDesconto = new Set(arr);
+                const unsub = db.collection('system_data').doc('valor_maximo').onSnapshot(d => {
+                    const v = (d && d.exists && d.data() && d.data().valores) || {};
+                    setValorMaximo(v);
+                    window.__valorMaximo = v;
                 }, () => {});
                 return () => unsub();
             }, []);
-            const toggleSemDesconto = async (code) => {
+            const setValorMaximoProduto = async (code, valor) => {
                 code = String(code);
-                const s = new Set(semDesconto.map(String));
-                s.has(code) ? s.delete(code) : s.add(code);
-                const arr = Array.from(s);
-                setSemDesconto(arr); // atualização otimista
-                window.__semDesconto = new Set(arr);
-                try { await db.collection('system_data').doc('sem_desconto').set({ codes: arr }); }
-                catch (e) { showMessage('Erro ao salvar em Sem Desconto.', 'error'); }
+                const val = (valor == null) ? firebase.firestore.FieldValue.delete() : Math.round(Number(valor) * 100) / 100;
+                // atualização otimista (a nuvem confirma logo em seguida via onSnapshot)
+                setValorMaximo(v => { const n = { ...v }; if (valor == null) delete n[code]; else n[code] = val; window.__valorMaximo = n; return n; });
+                try { await db.collection('system_data').doc('valor_maximo').set({ valores: { [code]: val } }, { merge: true }); }
+                catch (e) { showMessage('Erro ao salvar valor máximo.', 'error'); }
             };
 
             // 🧾 O histórico de compras NÃO carrega mais no boot (era pesado).
@@ -4797,7 +4825,7 @@
                     case 'support': return <SupportScreen user={user} />;
                     case 'credits': return <CreditsScreen />;
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
-                    case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} semDesconto={semDesconto} toggleSemDesconto={toggleSemDesconto} />;
+                    case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} valorMaximo={valorMaximo} setValorMaximoProduto={setValorMaximoProduto} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
                     case 'historico': return <HistoricoScreen user={user} showMessage={showMessage} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
