@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.3.1752
+// @version      2026.7.3.1805
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -162,7 +162,12 @@
     function extrairItens(spamov) {
         const raw = [];
         const ignorar = new Set([spamov, extrairOrcamento()].filter(Boolean));
-        const scope = acharTabelaItens() || document;
+        // 🛑 SÓ extrai itens se achar de verdade a tabela de um PEDIDO (com a coluna "Quant. Mov.").
+        // Sem isso, telas que NÃO são pedido (ex.: Lista de Preços — catálogo inteiro, cada linha
+        // "código + nome" igual a um item) eram lidas por engano como se fossem os itens do pedido.
+        const tabelaAchada = acharTabelaItens();
+        if (!tabelaAchada || colXQuant(tabelaAchada) === null) return [];
+        const scope = tabelaAchada;
         const colX = colXQuant(scope);
         // 🟡💲 colunas de peso e preço: procura no escopo da tabela e, se não achar, no documento inteiro
         // (o cabeçalho às vezes fica numa tabela "irmã", fora da tabela de itens).
