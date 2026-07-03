@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.6.25.1804
+// @version      2026.7.3.1752
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -127,13 +127,36 @@
         }
         return null;
     }
-    function colXQuant(scope) {
-        const cs = (scope || document).querySelectorAll("td, th");
+    // 🎯 Acha o X (centro) do CABEÇALHO de uma coluna. O SPAmov aninha tabelas, então existe um <td>
+    // container GIGANTE cujo texto contém vários títulos juntos ("...Valor Unit... P.Liq.(KG)...").
+    // Por isso pegamos a célula MAIS ESPECÍFICA (texto normalizado mais curto) que casa — assim achamos
+    // a célula real do título (ex: "P.Liq.(KG)" em x=1516) e não o container largo (centro ~960).
+    // Busca também em <b>/<div> porque às vezes o título não é um <td> direto.
+    function colXHeader(scope, teste) {
+        const cs = (scope || document).querySelectorAll("td, th, b, div, span, font, nobr");
+        let best = null, bestLen = 1e9;
         for (let i = 0; i < cs.length; i++) {
-            const t = (cs[i].innerText || "").toLowerCase().replace(/\s+/g, " ");
-            if (t.indexOf("quant") !== -1 && t.indexOf("mov") !== -1) { const r = cs[i].getBoundingClientRect(); if (r.width) return r.left + r.width / 2; }
+            const t = (cs[i].innerText || cs[i].textContent || "").toLowerCase().replace(/\s+/g, " ").trim();
+            if (!t || t.length > 26) continue;            // ignora containers (texto longo) e vazios
+            if (!teste(t)) continue;
+            const r = cs[i].getBoundingClientRect(); if (!r.width || !r.height) continue;
+            if (t.length < bestLen) { bestLen = t.length; best = r.left + r.width / 2; }
         }
-        return null;
+        return best;
+    }
+    function colXQuant(scope) { return colXHeader(scope, function (t) { return t.indexOf("quant") !== -1 && t.indexOf("mov") !== -1; }); }
+    // 🟡 Coluna "P.Liq.(KG)" — peso líquido do item, usado pra calcular o Valor da Nota = peso × preço
+    function colXPLiq(scope) { return colXHeader(scope, function (t) { return t.indexOf("p.liq") !== -1 || t.indexOf("pliq") !== -1 || (t.indexOf("liq") !== -1 && t.indexOf("kg") !== -1); }); }
+    // 💲 Coluna "Valor Unit." — preço por kg que o SPAmov usa (ex: "23,40/PL")
+    function colXValor(scope) { return colXHeader(scope, function (t) { return t.indexOf("valor") !== -1 && t.indexOf("unit") !== -1; }); }
+    // Converte "80.00" / "80,00" / "1.250,50" -> número (mesma lógica do parsePrice do site)
+    function parseNumBR(s) {
+        s = String(s || "").trim();
+        const m = s.match(/-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|-?\d+(?:[.,]\d+)?/);
+        if (!m) return null;
+        let x = m[0];
+        x = (x.indexOf(".") !== -1 && x.indexOf(",") !== -1) ? x.replace(/\./g, "").replace(",", ".") : x.replace(",", ".");
+        const v = parseFloat(x); return isNaN(v) ? null : v;
     }
 
     function extrairItens(spamov) {
@@ -141,6 +164,10 @@
         const ignorar = new Set([spamov, extrairOrcamento()].filter(Boolean));
         const scope = acharTabelaItens() || document;
         const colX = colXQuant(scope);
+        // 🟡💲 colunas de peso e preço: procura no escopo da tabela e, se não achar, no documento inteiro
+        // (o cabeçalho às vezes fica numa tabela "irmã", fora da tabela de itens).
+        const colXP = colXPLiq(scope) || colXPLiq(document);
+        const colXV = colXValor(scope) || colXValor(document);
         const campos = [];
         scope.querySelectorAll("input").forEach(function (inp) {
             const tipo = (inp.type || "").toLowerCase();
@@ -150,6 +177,39 @@
             const r = inp.getBoundingClientRect(); if (!r.width || !r.height) return;
             campos.push({ val: parseInt(v, 10), x: r.left + r.width / 2, y: r.top + r.height / 2 });
         });
+
+        // ⚖️💲 Candidatos a PESO (P.Liq.) e PREÇO (Valor Unit.): podem ser <input> (readonly) OU texto numa célula.
+        // Guardamos valor + posição na tela pra casar depois por COLUNA (X) e LINHA (Y) — bem mais robusto que
+        // depender de o número estar num <td> direto da mesma <tr>.
+        const numeros = []; // {val, x, y, dec}  (dec = tem casa decimal -> mais provável ser peso/preço)
+        function addNumCand(s, el) {
+            const txt = String(s || "").trim();
+            if (!/\d/.test(txt) || txt.length > 16) return;
+            // aceita "80.00", "23,40", "23,40/PL", "1.250,50"; rejeita coisas tipo "100000016129" (>9 dígitos colados)
+            if (/^\d{10,}$/.test(txt.replace(/\D/g, "")) && !/[.,]/.test(txt)) return;
+            const v = parseNumBR(txt); if (v === null || v <= 0) return;
+            const r = el.getBoundingClientRect(); if (!r.width || !r.height) return;
+            numeros.push({ val: v, x: r.left + r.width / 2, y: r.top + r.height / 2, dec: /[.,]\d{1,2}\b/.test(txt) });
+        }
+        document.querySelectorAll("input").forEach(function (inp) {
+            const t = (inp.type || "").toLowerCase();
+            if (["checkbox", "radio", "hidden", "button", "submit", "image"].indexOf(t) !== -1) return;
+            addNumCand(inp.value, inp);
+        });
+        // 🔎 Varre QUALQUER elemento-folha com texto (SPAmov é antigo: usa div/font/nobr, não só td).
+        document.querySelectorAll("td, th, span, font, b, div, a, p, label, i, small, strong, em, nobr, li").forEach(function (el) {
+            if (el.children && el.children.length) return; // só folhas (evita pegar texto de containers)
+            addNumCand(el.innerText || el.textContent || "", el);
+        });
+        // acha o número mais próximo de uma coluna (X) na linha do produto (Y), priorizando os com casa decimal
+        function acharNaColuna(colXref, prodY, tolX, tolY) {
+            if (colXref === null) return 0;
+            const cand = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= (tolY || 20) && Math.abs(n.x - colXref) <= (tolX || 70); });
+            cand.sort(function (a, b) { if (a.dec !== b.dec) return a.dec ? -1 : 1; return Math.abs(a.x - colXref) - Math.abs(b.x - colXref); });
+            return cand.length ? cand[0].val : 0;
+        }
+        try { dlog('🔎 peso/preço: colXP=' + colXP + ' colXV=' + colXV + ' candidatos=' + numeros.length); } catch (e) { try { console.log('[FRIG-LER] colXP=' + colXP + ' colXV=' + colXV + ' candidatos=' + numeros.length); } catch (e2) {} }
+
         scope.querySelectorAll("tr").forEach(function (row) {
             const cells = row.querySelectorAll("td"); if (!cells.length) return;
             let rawCode = "", codeCell = null;
@@ -164,13 +224,26 @@
             let qty = null, melhor = 1e9;
             campos.forEach(function (c) { const dy = Math.abs(c.y - prodY); if (dy > 16) return; const dx = (colX !== null) ? Math.abs(c.x - colX) : 0; const s = dx + dy; if (s < melhor) { melhor = s; qty = c.val; } });
             if (qty === null) qty = 1;
-            try { console.log('[FRIG-LER] linha code=' + rawCode + ' qty=' + qty + ' nome="' + nome.slice(0, 50) + '"'); } catch (e) {}
-            raw.push({ rawCode: rawCode, nome: nome, qty: qty });
+            // ⚖️ Peso (P.Liq. KG) e 💲 Valor Unit. da linha — por POSIÇÃO (coluna X × linha Y), olhando inputs e textos.
+            const peso = acharNaColuna(colXP, prodY);
+            const valorUnit = acharNaColuna(colXV, prodY);
+            try { console.log('[FRIG-LER] linha code=' + rawCode + ' qty=' + qty + ' peso=' + peso + ' valorUnit=' + valorUnit + ' nome="' + nome.slice(0, 50) + '"'); } catch (e) {}
+            // 🔬 Se o peso não foi achado, despeja TODOS os números na faixa Y da linha (com X e valor)
+            // pra eu calibrar a coluna sem precisar adivinhar o DOM.
+            if (!peso) {
+                try {
+                    const perto = numeros.filter(function (n) { return Math.abs(n.y - prodY) <= 22; })
+                        .sort(function (a, b) { return a.x - b.x; })
+                        .map(function (n) { return Math.round(n.x) + ":" + n.val; });
+                    dlog('🔬 DUMP ' + rawCode + ' (prodY=' + Math.round(prodY) + ' colXP=' + colXP + ' colXV=' + colXV + ') nums[x:val]= ' + perto.join("  "));
+                } catch (e) {}
+            }
+            raw.push({ rawCode: rawCode, nome: nome, qty: qty, peso: peso, valorUnit: valorUnit });
         });
         // Lê o código COMO ESTÁ. (Antes tirava um suposto "prefixo de número de linha", o que
         // quebrava códigos reais — ex: 1443 na linha 1 virava 443. Removido.)
         const itens = [], seen = new Set();
-        raw.forEach(function (r) { const code = r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty }); });
+        raw.forEach(function (r) { const code = r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty, peso: r.peso, valorUnit: r.valorUnit }); });
         return itens;
     }
     function montarPedidoLeitura() {
@@ -194,6 +267,120 @@
         }
         try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
         catch (e) { window.open(url, "friganso_erp_app"); }
+    }
+    // 📲 Botão NATIVO do app (barra de cima): tenta enviar o resumo deste frame; devolve true se conseguiu.
+    try {
+        window.__frigEnviarSePuder = function () {
+            try {
+                const p = montarPedidoLeitura();
+                if (temPedidoLeitura(p) && p.itens.length > 0) { enviarParaApp(); return true; }
+            } catch (e) {}
+            return false;
+        };
+    } catch (e) {}
+    // 📲 Dados CRUS deste frame (sem exigir que ESTE frame tenha cliente+SPAmov+itens todos juntos —
+    // no SPAmov o cabeçalho [cliente/SPAmov] e a tabela de itens costumam ficar em frames DIFERENTES
+    // do frameset). O app agrega os dados de todos os frames antes de decidir se dá pra montar o pedido.
+    try {
+        window.__frigDadosFrame = function () {
+            try {
+                const c = extrairCliente(), sp = extrairSpamov(), itens = extrairItens(sp);
+                const bt = bodyText();
+                // 🔬 diagnóstico: pra descobrir se ESTE frame chega a ver a tabela de itens ou não
+                return {
+                    cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens,
+                    _diag: { url: (location.href || '').slice(0, 90), bodyLen: bt.length, temQuantMov: /quant.{0,4}mov/i.test(bt), temPLiq: /p\.?\s*liq/i.test(bt) }
+                };
+            } catch (e) { return null; }
+        };
+    } catch (e) {}
+
+    // 🔍 Diagnóstico GERAL deste frame — todo texto curto + posição (X/Y), campos e o que as funções
+    // de leitura acham aqui. Usado pelo botão "🔍 Ler Página": junta isso de TODOS os frames, pra você
+    // copiar e colar no chat com o Claude quando algo não estiver lendo certo, ou quando quiser pedir
+    // uma automação nova baseada no que a página realmente tem.
+    window.__frigDiagnostico = function () {
+        try {
+            if (!document.body || document.body.tagName === "FRAMESET") return { url: (location.href || "").slice(0, 150), frameset: true };
+            const textos = [];
+            document.querySelectorAll("td, th, div, span, font, b, a, label, li, nobr, small, strong").forEach(function (el) {
+                if (textos.length >= 350) return;
+                if (el.children && el.children.length) return; // só folhas
+                const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+                if (!t || t.length > 60) return;
+                const r = el.getBoundingClientRect();
+                if (!r.width || !r.height) return;
+                textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t });
+            });
+            const campos = [];
+            document.querySelectorAll("input, select").forEach(function (el) {
+                if (campos.length >= 120) return;
+                const r = el.getBoundingClientRect();
+                if (!r.width || !r.height) return;
+                campos.push({ tag: el.tagName, tipo: (el.type || "").toLowerCase(), valor: (el.value || "").slice(0, 40), x: Math.round(r.left), y: Math.round(r.top) });
+            });
+            let cliente = null, spamov = null, itens = null;
+            try { cliente = extrairCliente(); } catch (e) {}
+            try { spamov = extrairSpamov(); } catch (e) {}
+            try { itens = extrairItens(spamov || ""); } catch (e) {}
+            return {
+                url: (location.href || "").slice(0, 150), titulo: document.title,
+                cliente: cliente, spamov: spamov, itensAchados: itens,
+                textos: textos, campos: campos
+            };
+        } catch (e) { return { erro: String(e && e.message ? e.message : e) }; }
+    };
+
+    // Junta o diagnóstico de TODOS os frames, mostra numa caixa pra copiar (e tenta copiar sozinho).
+    function gerarDiagnostico() {
+        function coletar(w, prof, out) {
+            try { if (w.__frigDiagnostico) { const d = w.__frigDiagnostico(); if (d) out.push(Object.assign({ profundidade: prof }, d)); } } catch (e) {}
+            try { for (let i = 0; i < w.frames.length; i++) coletar(w.frames[i], prof + 1, out); } catch (e) {}
+        }
+        const partes = [];
+        coletar(window, 0, partes);
+        const relatorio = { geradoEm: new Date().toLocaleString("pt-BR"), paginaTop: location.href, totalFrames: partes.length, frames: partes };
+        const texto = JSON.stringify(relatorio, null, 1);
+        let copiado = false;
+        try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(texto); copiado = true; } } catch (e) {}
+        mostrarDiagnosticoModal(texto, copiado);
+    }
+    function mostrarDiagnosticoModal(texto, copiado) {
+        const old = document.getElementById("friganso-diag-modal"); if (old) old.remove();
+        const ov = document.createElement("div");
+        ov.id = "friganso-diag-modal";
+        Object.assign(ov.style, { position: "fixed", inset: "0", background: "rgba(15,23,42,.7)", zIndex: "2147483647", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui,sans-serif", padding: "16px" });
+        ov.addEventListener("click", function (e) { if (e.target === ov) ov.remove(); });
+        const box = document.createElement("div");
+        Object.assign(box.style, { background: "#fff", borderRadius: "14px", padding: "16px", width: "640px", maxWidth: "95vw", maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 10px 40px rgba(0,0,0,.4)" });
+        const titulo = document.createElement("div");
+        titulo.textContent = (copiado ? "✅ Copiado! " : "📋 ") + "Cole isso no chat com o Claude";
+        Object.assign(titulo.style, { fontWeight: "800", fontSize: "15px", color: "#0f172a", marginBottom: "8px" });
+        box.appendChild(titulo);
+        const ta = document.createElement("textarea");
+        ta.value = texto; ta.readOnly = true;
+        Object.assign(ta.style, { flex: "1", minHeight: "300px", fontFamily: "monospace", fontSize: "11px", padding: "8px", border: "1px solid #e2e8f0", borderRadius: "8px", resize: "none", boxSizing: "border-box" });
+        box.appendChild(ta);
+        const btns = document.createElement("div");
+        Object.assign(btns.style, { display: "flex", gap: "8px", marginTop: "10px" });
+        const btnCopiar = document.createElement("button");
+        btnCopiar.textContent = "📋 Copiar de novo";
+        Object.assign(btnCopiar.style, { flex: "1", background: "#e11d48", color: "#fff", border: "none", borderRadius: "8px", padding: "10px", fontWeight: "700", cursor: "pointer" });
+        btnCopiar.addEventListener("click", function () {
+            ta.focus(); ta.select();
+            try { document.execCommand("copy"); } catch (e) {}
+            try { navigator.clipboard && navigator.clipboard.writeText(texto); } catch (e) {}
+        });
+        btns.appendChild(btnCopiar);
+        const fechar = document.createElement("button");
+        fechar.textContent = "Fechar";
+        Object.assign(fechar.style, { background: "#e2e8f0", color: "#334155", border: "none", borderRadius: "8px", padding: "10px 16px", fontWeight: "700", cursor: "pointer" });
+        fechar.addEventListener("click", function () { ov.remove(); });
+        btns.appendChild(fechar);
+        box.appendChild(btns);
+        ov.appendChild(box);
+        document.body.appendChild(ov);
+        ta.focus(); ta.select();
     }
 
     // ---------- LANÇAMENTO (Fazer Pedido) ----------
@@ -905,6 +1092,7 @@
     if (ehFramePrincipal()) {
         botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", abrirPopupFila);
         botao("friganso-cancelar-btn", "⏹ Cancelar lançamento", "#64748b", "70px", cancelarLancamento);
+        botao("friganso-diag-btn", "🔍 Ler Página", "#0f172a", "170px", gerarDiagnostico);
     }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
 

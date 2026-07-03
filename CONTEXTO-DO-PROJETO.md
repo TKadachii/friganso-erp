@@ -32,7 +32,12 @@ cd friganso-app
 # editar index.html (e bump do sw.js: friganso-vNN -> NN+1)
 # ⚠️ TAMBÉM bumpar web-version.json pro MESMO número (ver "Auto-atualização do APK" abaixo,
 #    senão o app do celular nunca fica sabendo que tem conteúdo novo pra baixar sozinho)
-git add index.html sw.js web-version.json
+# ⚠️ Se mexeu no content.js (automação SPAmov), TAMBÉM copiar pra RAIZ do site:
+#    cp friganso-desktop/content.js friganso-app/content.js
+#    (o WebUpdater do app baixa de https://tkadachii.github.io/friganso-erp/content.js —
+#    NÃO de /extensao/content.js. Esquecer isso faz o app nunca receber correções de
+#    automação via auto-atualização, só o index.html. Descoberto em 2026-07-03.)
+git add index.html sw.js web-version.json content.js
 git commit -m "..."
 git push origin main
 ```
