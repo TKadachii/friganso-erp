@@ -1017,12 +1017,26 @@
 
         // 🧾 Histórico de Vendas — prova de cada pedido confirmado: preço na hora, quantidade e peso (kg).
         // Lê direto da coleção 'purchases' (a mesma que alimenta o Dashboard), gravada ao tocar em "Copiar Resumo".
-        const HistoricoScreen = () => {
+        // Editar recalcula valor/peso (afeta o faturamento). Remover NÃO apaga: move pro 'purchases_lixeira'
+        // (fica salvo pra sempre como prova) e some do faturamento, já que o Dashboard só lê 'purchases'.
+        const recomputarPedido = (itens) => {
+            const valor = (itens || []).reduce((a, i) => a + (Number(i.peso) || 0) * (Number(i.valorKg) || 0), 0);
+            const pesoTotal = (itens || []).reduce((a, i) => a + (Number(i.peso) || 0), 0);
+            return { valor: Math.round(valor * 100) / 100, pesoTotal: Math.round(pesoTotal * 100) / 100 };
+        };
+
+        const HistoricoScreen = ({ user, showMessage }) => {
             const [purchases, setPurchases] = useState([]);
             const [loading, setLoading] = useState(true);
             const [periodo, setPeriodo] = useState(30); // 7 | 30 | 90 | 365 | 0 (todos)
             const [busca, setBusca] = useState('');
             const [expandido, setExpandido] = useState(null);
+            const [editando, setEditando] = useState(null);   // cópia do pedido em edição
+            const [salvandoEdit, setSalvandoEdit] = useState(false);
+            const [processando, setProcessando] = useState(() => new Set()); // ids sendo movidos pra lixeira
+            const [mostrarLixeira, setMostrarLixeira] = useState(false);
+            const [lixeira, setLixeira] = useState([]);
+            const [lixeiraLoading, setLixeiraLoading] = useState(false);
 
             useEffect(() => {
                 const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(1000).onSnapshot(s => {
@@ -1031,6 +1045,20 @@
                 }, () => setLoading(false));
                 return () => unsub();
             }, []);
+
+            const carregarLixeira = async () => {
+                setLixeiraLoading(true);
+                try {
+                    const s = await db.collection('purchases_lixeira').orderBy('removidoEm', 'desc').limit(500).get();
+                    setLixeira(s.docs.map(d => ({ id: d.id, ...d.data() })));
+                } catch (e) { showMessage && showMessage('Erro ao carregar a lixeira.', 'error'); }
+                setLixeiraLoading(false);
+            };
+            const toggleLixeira = () => {
+                const abrir = !mostrarLixeira;
+                setMostrarLixeira(abrir);
+                if (abrir && lixeira.length === 0) carregarLixeira();
+            };
 
             const diaStr = (d) => d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
 
@@ -1056,6 +1084,113 @@
 
             const totalPeriodo = filtradas.reduce((a, p) => a + (Number(p.valor) || 0), 0);
             const pesoPeriodo = filtradas.reduce((a, p) => a + (Number(p.pesoTotal) || 0), 0);
+
+            // ---------- Editar ----------
+            const abrirEdicao = (p) => setEditando(JSON.parse(JSON.stringify(p)));
+            const mudarCampo = (campo, valor) => setEditando(e => ({ ...e, [campo]: valor }));
+            const mudarItem = (idx, campo, valor) => setEditando(e => {
+                const itens = e.itens.slice();
+                itens[idx] = { ...itens[idx], [campo]: (campo === 'name') ? valor : (Number(valor) || 0) };
+                return { ...e, itens };
+            });
+            const removerItemEdit = (idx) => setEditando(e => ({ ...e, itens: e.itens.filter((_, i) => i !== idx) }));
+            const salvarEdicao = async () => {
+                if (!editando) return;
+                const itensValidos = (editando.itens || []).filter(i => Number(i.qty) > 0);
+                if (!itensValidos.length) { showMessage && showMessage('O pedido precisa ter ao menos 1 item.', 'error'); return; }
+                setSalvandoEdit(true);
+                try {
+                    const { valor, pesoTotal } = recomputarPedido(itensValidos);
+                    await db.collection('purchases').doc(editando.id).update({
+                        clienteCode: String(editando.clienteCode || ''),
+                        clienteName: editando.clienteName || '',
+                        spamov: editando.spamov || '',
+                        itens: itensValidos,
+                        valor, pesoTotal,
+                        editadoEm: Date.now(),
+                        editadoPor: (user && user.code) || ''
+                    });
+                    showMessage && showMessage('Pedido atualizado! Faturamento recalculado. ✏️', 'success');
+                    setEditando(null);
+                } catch (e) { showMessage && showMessage('Erro ao salvar edição.', 'error'); }
+                setSalvandoEdit(false);
+            };
+
+            // ---------- Mover pra lixeira (nunca apaga de verdade) ----------
+            const moverParaLixeira = async (p) => {
+                if (!window.confirm('Mover este pedido pra lixeira?\n\nEle sai do faturamento, mas fica salvo pra sempre como prova (não é possível apagar de vez).')) return;
+                setProcessando(s => new Set(s).add(p.id));
+                try {
+                    await db.collection('purchases_lixeira').doc(p.id).set({ ...p, removidoEm: Date.now(), removidoPor: (user && user.code) || '' });
+                    await db.collection('purchases').doc(p.id).delete();
+                    showMessage && showMessage('Pedido movido pra lixeira. Não entra mais no faturamento. 🗑️', 'success');
+                } catch (e) { showMessage && showMessage('Erro ao mover pra lixeira.', 'error'); }
+                setProcessando(s => { const n = new Set(s); n.delete(p.id); return n; });
+            };
+
+            const Badge = ({ children, cor }) => <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${cor || 'bg-slate-100 text-slate-500'}`}>{children}</span>;
+
+            const Cartao = ({ p, dono }) => {
+                const dt = new Date(p.ts || Date.now());
+                const aberto = expandido === (dono + p.id);
+                const emProcesso = processando.has(p.id);
+                return (
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <button onClick={() => setExpandido(aberto ? null : (dono + p.id))} className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-slate-50 transition-colors">
+                            <div className="flex items-center gap-3 min-w-0">
+                                <div className="h-10 w-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-black text-sm flex-shrink-0">{p.clienteCode || '?'}</div>
+                                <div className="min-w-0">
+                                    <p className="font-bold text-slate-800 truncate">{p.clienteName || ('Cliente ' + (p.clienteCode || '?'))}</p>
+                                    <p className="text-xs text-slate-400">{dt.toLocaleDateString('pt-BR')} às {dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
+                                    <div className="flex flex-wrap gap-1 mt-1">
+                                        {p.spamov && <Badge cor="bg-rose-50 text-rose-600">SPAmov {p.spamov}</Badge>}
+                                        <Badge>ID {p.clienteCode || '?'}</Badge>
+                                        {p.tipoPessoa && <Badge>{/fis/i.test(p.tipoPessoa) ? 'Física' : 'Jurídica'}</Badge>}
+                                        {p.vendedor && <Badge>{p.vendedor}</Badge>}
+                                        {p.via && <Badge>via {p.via}</Badge>}
+                                        {dono === 'lix' && <Badge cor="bg-slate-800 text-white">🗑️ removido {p.removidoEm ? new Date(p.removidoEm).toLocaleDateString('pt-BR') : ''}{p.removidoPor ? ' por ' + p.removidoPor : ''}</Badge>}
+                                        {p.editadoEm && <Badge cor="bg-amber-50 text-amber-700">✏️ editado {new Date(p.editadoEm).toLocaleDateString('pt-BR')}</Badge>}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                                <p className={`font-black ${dono === 'lix' ? 'text-slate-400 line-through' : 'text-emerald-700'}`}>{formatPrice(p.valor || 0)}</p>
+                                <p className="text-xs text-slate-400">{(p.itens || []).length} item(ns){p.pesoTotal ? ' · ' + Number(p.pesoTotal).toFixed(2) + ' kg' : ''}</p>
+                            </div>
+                        </button>
+                        {aberto && (
+                            <div className="border-t border-slate-100 p-4 bg-slate-50 overflow-x-auto space-y-3">
+                                <table className="w-full text-xs min-w-[480px]">
+                                    <thead>
+                                        <tr className="text-slate-400 text-left">
+                                            <th className="py-1 pr-2">Código</th><th className="pr-2">Produto</th><th className="pr-2">Qtd</th><th className="pr-2">Peso (kg)</th><th className="pr-2">R$/kg</th><th>Subtotal</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(p.itens || []).map((it, i) => (
+                                            <tr key={i} className="border-t border-slate-200">
+                                                <td className="py-1.5 pr-2 font-mono">{it.code}</td>
+                                                <td className="pr-2">{it.name}</td>
+                                                <td className="pr-2">{it.qty}</td>
+                                                <td className="pr-2">{it.peso ? Number(it.peso).toFixed(2) : '—'}</td>
+                                                <td className="pr-2">{it.valorKg ? formatPrice(it.valorKg) : '—'}</td>
+                                                <td className="font-bold">{(it.peso && it.valorKg) ? formatPrice(it.peso * it.valorKg) : '—'}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                <div className="text-right font-black text-slate-800">Total: {formatPrice(p.valor || 0)}</div>
+                                {dono === 'ativo' && (
+                                    <div className="flex justify-end gap-2 pt-1">
+                                        <button onClick={() => abrirEdicao(p)} className="text-xs font-bold px-3 py-2 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-800 transition-colors">✏️ Editar</button>
+                                        <button onClick={() => moverParaLixeira(p)} disabled={emProcesso} className="text-xs font-bold px-3 py-2 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 transition-colors disabled:opacity-50">{emProcesso ? 'Movendo...' : '🗑️ Mover pra lixeira'}</button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                );
+            };
 
             return (
                 <div className="animate-in fade-in space-y-5">
@@ -1101,51 +1236,90 @@
                         </div>
                     ) : (
                         <div className="space-y-3">
-                            {filtradas.map(p => {
-                                const dt = new Date(p.ts || Date.now());
-                                const aberto = expandido === p.id;
-                                return (
-                                    <div key={p.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                                        <button onClick={() => setExpandido(aberto ? null : p.id)} className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-slate-50 transition-colors">
-                                            <div className="flex items-center gap-3 min-w-0">
-                                                <div className="h-10 w-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-black text-sm flex-shrink-0">{p.clienteCode || '?'}</div>
-                                                <div className="min-w-0">
-                                                    <p className="font-bold text-slate-800 truncate">{p.clienteName || ('Cliente ' + (p.clienteCode || '?'))}</p>
-                                                    <p className="text-xs text-slate-400">{dt.toLocaleDateString('pt-BR')} às {dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}{p.spamov ? ' · SPAmov ' + p.spamov : ''}{p.vendedor ? ' · ' + p.vendedor : ''}</p>
-                                                </div>
-                                            </div>
-                                            <div className="text-right flex-shrink-0">
-                                                <p className="font-black text-emerald-700">{formatPrice(p.valor || 0)}</p>
-                                                <p className="text-xs text-slate-400">{(p.itens || []).length} item(ns){p.pesoTotal ? ' · ' + Number(p.pesoTotal).toFixed(2) + ' kg' : ''}</p>
-                                            </div>
-                                        </button>
-                                        {aberto && (
-                                            <div className="border-t border-slate-100 p-4 bg-slate-50 overflow-x-auto">
-                                                <table className="w-full text-xs min-w-[480px]">
-                                                    <thead>
-                                                        <tr className="text-slate-400 text-left">
-                                                            <th className="py-1 pr-2">Código</th><th className="pr-2">Produto</th><th className="pr-2">Qtd</th><th className="pr-2">Peso (kg)</th><th className="pr-2">R$/kg</th><th>Subtotal</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {(p.itens || []).map((it, i) => (
-                                                            <tr key={i} className="border-t border-slate-200">
-                                                                <td className="py-1.5 pr-2 font-mono">{it.code}</td>
-                                                                <td className="pr-2">{it.name}</td>
-                                                                <td className="pr-2">{it.qty}</td>
-                                                                <td className="pr-2">{it.peso ? Number(it.peso).toFixed(2) : '—'}</td>
-                                                                <td className="pr-2">{it.valorKg ? formatPrice(it.valorKg) : '—'}</td>
-                                                                <td className="font-bold">{(it.peso && it.valorKg) ? formatPrice(it.peso * it.valorKg) : '—'}</td>
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
-                                                <div className="text-right mt-2 font-black text-slate-800">Total: {formatPrice(p.valor || 0)}</div>
-                                            </div>
-                                        )}
+                            {filtradas.map(p => <Cartao key={p.id} p={p} dono="ativo" />)}
+                        </div>
+                    )}
+
+                    {/* 🗑️ Lixeira — pedidos removidos, guardados PRA SEMPRE como prova. Não entram no faturamento. */}
+                    <div className="pt-2">
+                        <button onClick={toggleLixeira} className="text-sm font-bold text-slate-500 hover:text-slate-700 flex items-center gap-2">
+                            <span>🗑️</span> {mostrarLixeira ? 'Ocultar lixeira' : 'Ver lixeira (pedidos removidos)'}
+                        </button>
+                        {mostrarLixeira && (
+                            <div className="mt-3 space-y-3">
+                                <p className="text-xs text-slate-400">Pedidos removidos ficam guardados aqui pra sempre como prova — não é possível apagá-los, e eles não contam no faturamento.</p>
+                                {lixeiraLoading ? (
+                                    <div className="text-center text-slate-400 py-6">Carregando lixeira...</div>
+                                ) : lixeira.length === 0 ? (
+                                    <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center text-slate-400 text-sm">A lixeira está vazia.</div>
+                                ) : (
+                                    lixeira.map(p => <Cartao key={p.id} p={p} dono="lix" />)
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Modal de edição */}
+                    {editando && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[88vh] overflow-hidden">
+                                <div className="p-5 border-b bg-slate-50 flex justify-between items-center flex-shrink-0">
+                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><span>✏️</span> Editar pedido</h2>
+                                    <button onClick={() => setEditando(null)} className="h-9 w-9 bg-slate-100 hover:bg-slate-200 rounded-full flex items-center justify-center text-slate-500"><div className="h-4 w-4"><IconX /></div></button>
+                                </div>
+                                <div className="p-5 space-y-4 overflow-y-auto">
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500">ID do Cliente</label>
+                                            <input type="text" value={editando.clienteCode || ''} onChange={e => mudarCampo('clienteCode', e.target.value)} className="w-full mt-1 px-3 py-2 bg-slate-50 border rounded-xl text-sm outline-none focus:border-rose-500" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500">Nº SPAmov</label>
+                                            <input type="text" value={editando.spamov || ''} onChange={e => mudarCampo('spamov', e.target.value)} className="w-full mt-1 px-3 py-2 bg-slate-50 border rounded-xl text-sm outline-none focus:border-rose-500" />
+                                        </div>
                                     </div>
-                                );
-                            })}
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500">Nome do Cliente</label>
+                                        <input type="text" value={editando.clienteName || ''} onChange={e => mudarCampo('clienteName', e.target.value)} className="w-full mt-1 px-3 py-2 bg-slate-50 border rounded-xl text-sm outline-none focus:border-rose-500" />
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-500">Itens</label>
+                                        {(editando.itens || []).map((it, i) => (
+                                            <div key={i} className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className="font-bold text-sm text-slate-700 truncate">{it.code} — {it.name}</span>
+                                                    <button onClick={() => removerItemEdit(i)} title="Remover item" className="text-slate-300 hover:text-red-500 h-7 w-7 flex items-center justify-center flex-shrink-0"><div className="h-3.5 w-3.5"><IconX /></div></button>
+                                                </div>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    <div>
+                                                        <label className="text-[10px] font-bold text-slate-400">Qtd</label>
+                                                        <input type="number" value={it.qty} onChange={e => mudarItem(i, 'qty', e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-white border rounded-lg text-sm outline-none focus:border-rose-500" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] font-bold text-slate-400">Peso (kg)</label>
+                                                        <input type="number" step="0.01" value={it.peso} onChange={e => mudarItem(i, 'peso', e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-white border rounded-lg text-sm outline-none focus:border-rose-500" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] font-bold text-slate-400">R$/kg</label>
+                                                        <input type="number" step="0.01" value={it.valorKg} onChange={e => mudarItem(i, 'valorKg', e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-white border rounded-lg text-sm outline-none focus:border-rose-500" />
+                                                    </div>
+                                                </div>
+                                                <div className="text-right text-xs font-bold text-emerald-700">Subtotal: {formatPrice((Number(it.peso) || 0) * (Number(it.valorKg) || 0))}</div>
+                                            </div>
+                                        ))}
+                                        {(editando.itens || []).length === 0 && <p className="text-xs text-slate-400 text-center py-2">Sem itens — o pedido precisa de pelo menos 1.</p>}
+                                    </div>
+
+                                    <div className="text-right text-lg font-black text-slate-800 pt-2 border-t">
+                                        Novo total: {formatPrice(recomputarPedido(editando.itens).valor)}
+                                    </div>
+                                </div>
+                                <div className="p-5 border-t bg-slate-50 flex gap-2 flex-shrink-0">
+                                    <button onClick={() => setEditando(null)} className="flex-1 bg-white border-2 border-slate-200 hover:border-slate-300 text-slate-700 font-bold py-3 rounded-xl transition-colors">Cancelar</button>
+                                    <button onClick={salvarEdicao} disabled={salvandoEdit} className="flex-1 bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors">{salvandoEdit ? 'Salvando...' : '💾 Salvar alterações'}</button>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
@@ -4532,7 +4706,7 @@
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
-                    case 'historico': return <HistoricoScreen />;
+                    case 'historico': return <HistoricoScreen user={user} showMessage={showMessage} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} listaNegra={listaNegra} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
