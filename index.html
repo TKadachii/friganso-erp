@@ -838,10 +838,40 @@
             </div>
         );
 
+        // 📅 "Mês útil" = ciclo de fechamento de nota do vendedor: fecha sempre no dia 30 (ou no
+        // último dia do mês, em fevereiro). O dia 31 (quando existe) já entra no fechamento do mês
+        // SEGUINTE — regra do usuário: "tudo que for pedido depois do dia 30 cai pro mês que vem".
+        const diaStrGlobal = (d) => d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+        const fimMesUtil = (ano, mesZero) => { const ultimo = new Date(ano, mesZero + 1, 0).getDate(); return new Date(ano, mesZero, Math.min(30, ultimo)); };
+        const inicioMesUtil = (ano, mesZero) => {
+            const anoAnt = mesZero === 0 ? ano - 1 : ano, mesAnt = mesZero === 0 ? 11 : mesZero - 1;
+            const ini = new Date(fimMesUtil(anoAnt, mesAnt)); ini.setDate(ini.getDate() + 1); ini.setHours(0, 0, 0, 0);
+            return ini;
+        };
+        // A qual "mês útil" (ano, mesZero) uma data pertence
+        const mesUtilDe = (d) => { let ano = d.getFullYear(), mes = d.getMonth(); if (d.getDate() === 31) { mes += 1; if (mes > 11) { mes = 0; ano += 1; } } return { ano, mes }; };
+        // Calcula {desde, ate, label, fechaEm} pra um "modo" de período: 'dia' | 'semana' | 'mes' (+offset) | número de dias | 0 (todos)
+        const calcularPeriodo = (modo, mesOffset) => {
+            const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+            if (modo === 'dia') return { desde: hoje, ate: hoje, label: 'Hoje' };
+            if (modo === 'semana') { const d = new Date(hoje); d.setDate(d.getDate() - 6); return { desde: d, ate: hoje, label: 'Últimos 7 dias' }; }
+            if (modo === 'mes') {
+                const atual = mesUtilDe(hoje);
+                let mesZero = atual.mes + (mesOffset || 0), ano = atual.ano;
+                ano += Math.floor(mesZero / 12); mesZero = ((mesZero % 12) + 12) % 12;
+                const desde = inicioMesUtil(ano, mesZero), ate = fimMesUtil(ano, mesZero);
+                const nomesMes = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+                return { desde, ate, label: nomesMes[mesZero] + '/' + ano, fechaEm: ate };
+            }
+            if (typeof modo === 'number' && modo > 0) { const d = new Date(hoje); d.setDate(d.getDate() - (modo - 1)); return { desde: d, ate: hoje, label: modo + ' dias' }; }
+            return { desde: null, ate: null, label: 'Todos' }; // modo === 0 (todos)
+        };
+
         const DashboardScreen = ({ user, clients, products }) => {
             const [purchases, setPurchases] = useState([]);
             const [versions, setVersions] = useState([]);
-            const [periodo, setPeriodo] = useState(30);
+            const [periodo, setPeriodo] = useState('mes'); // 'dia' | 'semana' | 'mes' | 90 | 365
+            const [mesOffset, setMesOffset] = useState(0); // navegação de meses (só usada quando periodo === 'mes')
             const [prodPreco, setProdPreco] = useState('');
             // 💵 Margem de lucro estimada (% sobre o faturamento). Padrão 1%, troca pra 3%. Lembra a escolha.
             const [margem, setMargem] = useState(() => { const v = parseFloat(window.localStorage.getItem('friganso_margem')); return (v === 1 || v === 3) ? v : 1; });
@@ -855,13 +885,13 @@
                 return () => unsub();
             }, []);
 
-            const diaStr = (d) => d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+            const diaStr = diaStrGlobal;
+            const construirDias = (desde, ate) => { const dias = []; if (!desde || !ate) return dias; const d = new Date(desde); while (d <= ate) { dias.push(diaStr(d)); d.setDate(d.getDate() + 1); } return dias; };
             const dados = useMemo(() => {
-                const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-                const dias = [];
-                for (let i = periodo - 1; i >= 0; i--) { const d = new Date(hoje); d.setDate(hoje.getDate() - i); dias.push(diaStr(d)); }
-                const desde = dias[0];
-                const comprasP = purchases.filter(p => (p.dia || '') >= desde);
+                const { desde, ate, label, fechaEm } = calcularPeriodo(periodo, mesOffset);
+                const dias = construirDias(desde, ate);
+                const desdeStr = desde ? diaStr(desde) : null, ateStr = ate ? diaStr(ate) : null;
+                const comprasP = purchases.filter(p => (!desdeStr || (p.dia || '') >= desdeStr) && (!ateStr || (p.dia || '') <= ateStr));
                 const qtdDia = {}, pedDia = {}, valDia = {}, prodQ = {}, tipoC = { juridica: 0, fisica: 0 }, cliC = {}, vendC = {}, cliValC = {};
                 let totalItens = 0, totalValor = 0; const cliSet = new Set(), prodSet = new Set();
                 comprasP.forEach(p => {
@@ -885,8 +915,8 @@
                 let melhorDia = '—', melhorQ = 0; dias.forEach(d => { if ((qtdDia[d] || 0) > melhorQ) { melhorQ = qtdDia[d]; melhorDia = d; } });
                 let melhorDiaV = '—', melhorV = 0; dias.forEach(d => { if ((valDia[d] || 0) > melhorV) { melhorV = valDia[d]; melhorDiaV = d; } });
                 const ticketMedio = comprasP.length ? totalValor / comprasP.length : 0;
-                return { dias, labelsDia, serieQtd, seriePed, serieVal, topProd, topCli, tipoC, vendC, comprasP, totalItens, totalValor, ticketMedio, cliCount: cliSet.size, prodCount: prodSet.size, melhorDia, melhorQ, melhorDiaV, melhorV };
-            }, [purchases, periodo]);
+                return { dias, labelsDia, serieQtd, seriePed, serieVal, topProd, topCli, tipoC, vendC, comprasP, totalItens, totalValor, ticketMedio, cliCount: cliSet.size, prodCount: prodSet.size, melhorDia, melhorQ, melhorDiaV, melhorV, periodoLabel: label, periodoFechaEm: fechaEm };
+            }, [purchases, periodo, mesOffset]);
 
             const precoSerie = useMemo(() => {
                 const code = String(prodPreco || (dados.topProd[0] && dados.topProd[0].code) || (products[0] && products[0].code) || '');
@@ -923,13 +953,24 @@
                     <div className="bg-slate-900 rounded-3xl p-7 text-white relative overflow-hidden shadow-xl border border-slate-800">
                         <img src={BG_IMAGE} className="absolute inset-0 w-full h-full object-cover opacity-20 mix-blend-overlay" />
                         <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-rose-950/90 to-transparent"></div>
-                        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                            <div><h2 className="text-2xl sm:text-3xl font-extrabold mb-1">Olá, {user.name}! 📊</h2><p className="text-rose-200 font-medium opacity-80">Seu painel de controle de vendas.</p></div>
-                            <div className="flex gap-1.5 bg-black/30 p-1 rounded-xl">
-                                {[[7, '7 dias'], [30, '30 dias'], [90, '90 dias'], [365, '1 ano']].map(([d, l]) => (
-                                    <button key={d} onClick={() => setPeriodo(d)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${periodo === d ? 'bg-rose-600 text-white' : 'text-rose-200 hover:bg-white/10'}`}>{l}</button>
-                                ))}
+                        <div className="relative z-10 flex flex-col gap-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                <div><h2 className="text-2xl sm:text-3xl font-extrabold mb-1">Olá, {user.name}! 📊</h2><p className="text-rose-200 font-medium opacity-80">Seu painel de controle de vendas.</p></div>
+                                <div className="flex gap-1.5 bg-black/30 p-1 rounded-xl flex-wrap">
+                                    {[['dia', 'Hoje'], ['semana', 'Semana'], ['mes', 'Mês'], [90, '90 dias'], [365, '1 ano']].map(([d, l]) => (
+                                        <button key={d} onClick={() => { setPeriodo(d); if (d === 'mes') setMesOffset(0); }} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${periodo === d ? 'bg-rose-600 text-white' : 'text-rose-200 hover:bg-white/10'}`}>{l}</button>
+                                    ))}
+                                </div>
                             </div>
+                            {periodo === 'mes' && (
+                                <div className="flex items-center gap-3 bg-black/20 rounded-xl px-4 py-2 w-fit">
+                                    <button onClick={() => setMesOffset(o => o - 1)} title="Mês anterior" className="text-rose-200 hover:text-white font-black px-1">←</button>
+                                    <span className="text-sm font-bold text-white">🗓️ {dados.periodoLabel}</span>
+                                    <button onClick={() => setMesOffset(o => o + 1)} title="Mês seguinte" className="text-rose-200 hover:text-white font-black px-1">→</button>
+                                    {dados.periodoFechaEm && <span className="text-[10px] text-rose-300">fecha em {('0' + dados.periodoFechaEm.getDate()).slice(-2)}/{('0' + (dados.periodoFechaEm.getMonth() + 1)).slice(-2)}</span>}
+                                    {mesOffset !== 0 && <button onClick={() => setMesOffset(0)} className="text-[10px] font-bold text-rose-300 hover:text-white underline">voltar pro mês atual</button>}
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -969,11 +1010,11 @@
                         </div>
                     ) : (
                         <>
-                            <CardGrafico titulo={`💰 Faturamento por dia — R$ (${periodo} dias)`}>
+                            <CardGrafico titulo={`💰 Faturamento por dia — R$ (${dados.periodoLabel})`}>
                                 <Grafico tipo="line" altura={280} options={optMoney} data={{ labels: dados.labelsDia, datasets: [{ label: 'R$', data: dados.serieVal, borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.15)', fill: true, tension: .35, pointRadius: 2, borderWidth: 2 }] }} />
                             </CardGrafico>
 
-                            <CardGrafico titulo={`📈 Vendas por dia — itens vendidos (${periodo} dias)`}>
+                            <CardGrafico titulo={`📈 Vendas por dia — itens vendidos (${dados.periodoLabel})`}>
                                 <Grafico tipo="line" altura={280} options={optBase} data={{ labels: dados.labelsDia, datasets: [{ label: 'Itens', data: dados.serieQtd, borderColor: '#e11d48', backgroundColor: 'rgba(225,29,72,.15)', fill: true, tension: .35, pointRadius: 2, borderWidth: 2 }] }} />
                             </CardGrafico>
 
@@ -1031,7 +1072,8 @@
         const HistoricoScreen = ({ user, showMessage }) => {
             const [purchases, setPurchases] = useState([]);
             const [loading, setLoading] = useState(true);
-            const [periodo, setPeriodo] = useState(30); // 7 | 30 | 90 | 365 | 0 (todos)
+            const [periodo, setPeriodo] = useState('mes'); // 'dia' | 'semana' | 'mes' | 90 | 365 | 0 (todos)
+            const [mesOffset, setMesOffset] = useState(0); // navegação de meses (só usada quando periodo === 'mes')
             const [busca, setBusca] = useState('');
             const [expandido, setExpandido] = useState(null);
             const [editando, setEditando] = useState(null);   // cópia do pedido em edição
@@ -1063,15 +1105,15 @@
                 if (abrir && lixeira.length === 0) carregarLixeira();
             };
 
-            const diaStr = (d) => d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+            const diaStr = diaStrGlobal;
+            const periodoInfo = useMemo(() => calcularPeriodo(periodo, mesOffset), [periodo, mesOffset]);
 
             const filtradas = useMemo(() => {
                 let lista = purchases;
-                if (periodo > 0) {
-                    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-                    const desde = new Date(hoje); desde.setDate(hoje.getDate() - (periodo - 1));
-                    const desdeStr = diaStr(desde);
-                    lista = lista.filter(p => (p.dia || '') >= desdeStr);
+                const { desde, ate } = periodoInfo;
+                if (desde || ate) {
+                    const desdeStr = desde ? diaStr(desde) : null, ateStr = ate ? diaStr(ate) : null;
+                    lista = lista.filter(p => (!desdeStr || (p.dia || '') >= desdeStr) && (!ateStr || (p.dia || '') <= ateStr));
                 }
                 const q = busca.trim().toLowerCase();
                 if (q) {
@@ -1083,7 +1125,7 @@
                     );
                 }
                 return lista;
-            }, [purchases, periodo, busca]);
+            }, [purchases, periodoInfo, busca]);
 
             const totalPeriodo = filtradas.reduce((a, p) => a + (Number(p.valor) || 0), 0);
             const pesoPeriodo = filtradas.reduce((a, p) => a + (Number(p.pesoTotal) || 0), 0);
@@ -1202,17 +1244,28 @@
                         <p className="text-slate-500 text-sm">Prova de cada pedido confirmado: preço na hora, quantidade e peso (kg).</p>
                     </div>
 
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex flex-col sm:flex-row gap-3 sm:items-center">
-                        <input
-                            type="text" value={busca} onChange={e => setBusca(e.target.value)}
-                            placeholder="Buscar por cliente, produto ou nº SPAmov..."
-                            className="flex-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-rose-500"
-                        />
-                        <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl flex-wrap">
-                            {[[7, '7d'], [30, '30d'], [90, '90d'], [365, '1a'], [0, 'Todos']].map(([d, l]) => (
-                                <button key={d} onClick={() => setPeriodo(d)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${periodo === d ? 'bg-rose-700 text-white' : 'text-slate-500 hover:bg-white'}`}>{l}</button>
-                            ))}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+                        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+                            <input
+                                type="text" value={busca} onChange={e => setBusca(e.target.value)}
+                                placeholder="Buscar por cliente, produto ou nº SPAmov..."
+                                className="flex-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-rose-500"
+                            />
+                            <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl flex-wrap">
+                                {[['dia', 'Hoje'], ['semana', 'Semana'], ['mes', 'Mês'], [90, '90d'], [365, '1a'], [0, 'Todos']].map(([d, l]) => (
+                                    <button key={d} onClick={() => { setPeriodo(d); if (d === 'mes') setMesOffset(0); }} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${periodo === d ? 'bg-rose-700 text-white' : 'text-slate-500 hover:bg-white'}`}>{l}</button>
+                                ))}
+                            </div>
                         </div>
+                        {periodo === 'mes' && (
+                            <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 w-fit">
+                                <button onClick={() => setMesOffset(o => o - 1)} title="Mês anterior" className="text-slate-400 hover:text-slate-700 font-black px-1">←</button>
+                                <span className="text-sm font-bold text-slate-700">🗓️ {periodoInfo.label}</span>
+                                <button onClick={() => setMesOffset(o => o + 1)} title="Mês seguinte" className="text-slate-400 hover:text-slate-700 font-black px-1">→</button>
+                                {periodoInfo.fechaEm && <span className="text-[10px] text-slate-400">fecha em {('0' + periodoInfo.fechaEm.getDate()).slice(-2)}/{('0' + (periodoInfo.fechaEm.getMonth() + 1)).slice(-2)}</span>}
+                                {mesOffset !== 0 && <button onClick={() => setMesOffset(0)} className="text-[10px] font-bold text-rose-600 hover:text-rose-800 underline">voltar pro mês atual</button>}
+                            </div>
+                        )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-3">
