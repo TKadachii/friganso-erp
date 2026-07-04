@@ -327,7 +327,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 112;
+        const APP_BUILD_VERSION = 113;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -2065,6 +2065,10 @@
             const [mpClienteId, setMpClienteId] = useState(resumoRascunhoInicial.mpClienteId || '');
             const [mpSpamov, setMpSpamov] = useState(resumoRascunhoInicial.mpSpamov || '');
             const [mpCondicao, setMpCondicao] = useState(resumoRascunhoInicial.mpCondicao || '');
+            // 🧩 Prazo Parcelado é uma combinação de prazos (ex.: 7/14/21, ou só 14/21) — só existe no
+            // manual, então monta com caixinhas de seleção em vez de um texto fixo.
+            const [mpParceladoDias, setMpParceladoDias] = useState(Array.isArray(resumoRascunhoInicial.mpParceladoDias) ? resumoRascunhoInicial.mpParceladoDias : []);
+            const toggleMpParceladoDia = (n) => setMpParceladoDias(prev => prev.includes(n) ? prev.filter(d => d !== n) : [...prev, n].sort((a, b) => a - b));
             const [mpBusca, setMpBusca] = useState('');
             const [mpItens, setMpItens] = useState(Array.isArray(resumoRascunhoInicial.mpItens) ? resumoRascunhoInicial.mpItens : []); // {code, name, qty, valor}
             const mpClienteSugestoes = useMemo(() => {
@@ -2094,20 +2098,25 @@
             };
             const removerMpItem = (code) => setMpItens(prev => prev.filter(i => i.code !== code));
             const mudarMpItem = (code, campo, valor) => setMpItens(prev => prev.map(i => i.code === code ? { ...i, [campo]: valor } : i));
-            const limparMp = () => { setMpAtivo(false); setMpClienteId(''); setMpSpamov(''); setMpCondicao(''); setMpBusca(''); setMpItens([]); };
+            const limparMp = () => { setMpAtivo(false); setMpClienteId(''); setMpSpamov(''); setMpCondicao(''); setMpParceladoDias([]); setMpBusca(''); setMpItens([]); };
             const montarResumoManual = () => {
                 if (!mpClienteId.trim()) { showMessage('Informe o ID do cliente.', 'error'); return; }
                 const validos = mpItens.filter(i => Number(i.qty) > 0);
                 if (!validos.length) { showMessage('Adicione ao menos 1 item.', 'error'); return; }
+                if (mpCondicao === 'Prazo Parcelado' && !mpParceladoDias.length) { showMessage('Marque pelo menos um prazo do parcelamento (ex.: 7, 14, 21).', 'error'); return; }
                 const processed = validos.map(it => {
                     const qty = Number(it.qty) || 1;
                     const preco = Number(it.valor) || 0;
                     return { code: String(it.code), name: it.name, quantity: qty, unitFinalPrice: preco, discountedPrice: preco * qty, originalPrice: preco * qty, hasDiscount: false, peso: qty, precoKg: preco, valorLinha: preco * qty };
                 });
                 const cli = clients.find(c => c.code === mpClienteId.trim());
+                // 🧩 "Prazo Parcelado" vira "Prazo Parcelado (7/14/21)" com os dias marcados
+                const condicaoFinal = (mpCondicao === 'Prazo Parcelado' && mpParceladoDias.length)
+                    ? `Prazo Parcelado (${mpParceladoDias.join('/')})`
+                    : (mpCondicao || '');
                 setPendingCustomer(mpClienteId.trim());
                 setPendingSpamov(mpSpamov.trim());
-                setCondicaoAtual(mpCondicao || '');
+                setCondicaoAtual(condicaoFinal);
                 setDetectedClientName(cli ? cli.name : '');
                 setOrderSummary({ customerCode: mpClienteId.trim(), spamov: mpSpamov.trim(), items: processed, totalDiscounted: processed.reduce((a, c) => a + c.discountedPrice, 0), totalValor: processed.reduce((a, c) => a + c.valorLinha, 0) });
                 if (cli) { setClientToSave(cli); setShowHistoryPrompt(true); }
@@ -2120,10 +2129,10 @@
                 try {
                     window.localStorage.setItem(RESUMO_RASCUNHO_KEY, JSON.stringify({
                         orderText, pendingCustomer, pendingSpamov, orderSummary, editedPrices, editedQty,
-                        detectedClientName, condicaoAtual, mpAtivo, mpClienteId, mpSpamov, mpCondicao, mpItens
+                        detectedClientName, condicaoAtual, mpAtivo, mpClienteId, mpSpamov, mpCondicao, mpParceladoDias, mpItens
                     }));
                 } catch (e) {}
-            }, [orderText, pendingCustomer, pendingSpamov, orderSummary, editedPrices, editedQty, detectedClientName, condicaoAtual, mpAtivo, mpClienteId, mpSpamov, mpCondicao, mpItens]);
+            }, [orderText, pendingCustomer, pendingSpamov, orderSummary, editedPrices, editedQty, detectedClientName, condicaoAtual, mpAtivo, mpClienteId, mpSpamov, mpCondicao, mpParceladoDias, mpItens]);
 
             const handleProcessText = (forcedText) => {
                 const txt = typeof forcedText === 'string' ? forcedText : orderText;
@@ -2481,6 +2490,17 @@
                                         <option value="">— não informar —</option>
                                         {OPCOES_CONDICAO_MANUAL.map(o => <option key={o} value={o}>{o}</option>)}
                                     </select>
+                                    {mpCondicao === 'Prazo Parcelado' && (
+                                        <div className="mt-2 bg-white rounded-xl border border-slate-200 p-3">
+                                            <p className="text-[11px] text-slate-500 mb-2">Marque os prazos que compõem o parcelamento (ex.: 7 + 14 + 21):</p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {[7, 14, 21, 28, 30, 35, 45].map(n => (
+                                                    <button key={n} type="button" onClick={() => toggleMpParceladoDia(n)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${mpParceladoDias.includes(n) ? 'bg-rose-700 text-white border-rose-700' : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'}`}>{n}d</button>
+                                                ))}
+                                            </div>
+                                            {mpParceladoDias.length > 0 && <p className="text-[11px] text-slate-400 mt-2">Fica: <b>Prazo Parcelado ({mpParceladoDias.join('/')})</b></p>}
+                                        </div>
+                                    )}
                                 </div>
                                 <div>
                                     <label className="text-xs font-bold text-slate-500">Adicionar Produto</label>
@@ -3541,6 +3561,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '1.5.1', data: '04/07/2026', areas: ['site'], itens: [
+                'Montagem manual: ao escolher "Prazo Parcelado", agora dá pra marcar quais prazos compõem o parcelamento (ex.: 7/14/21) em caixinhas de seleção',
+            ]},
             { versao: '1.5.0', data: '04/07/2026', areas: ['site'], itens: [
                 'Montagem manual do Resumo: agora dá pra escolher a condição de pagamento também (inclui "Prazo Parcelado", que só existe nessa opção manual)',
                 'O aviso de condição de pagamento agora compara com a ÚLTIMA compra do cliente (não mais com a mais frequente do histórico)',
