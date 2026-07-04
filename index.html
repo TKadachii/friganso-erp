@@ -1530,6 +1530,10 @@
                         const removidos = produtosAtivosAntes.filter(p => !extractedProducts.some(np => String(np.code) === String(p.code))).length;
                         setPriceChanges(produtosAtivosAntes.length > 0 ? { changes, novos, removidos } : null);
                         setProducts(extractedProducts);
+                        // 🔒 marca como "já sincronizado agora" — senão a sincronização automática da nuvem
+                        // (useEffect do onSnapshot, lá embaixo) enxerga a última tabela DISTRIBUÍDA como
+                        // "mais nova" que essa leitura local e sobrescreve ela de volta pros dados antigos.
+                        try { window.localStorage.setItem('friganso_tabela_sync_ms', String(Date.now())); } catch (e) {}
                         showMessage(`Tabela lida direto do SPAmov! ${extractedProducts.length} produtos.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
                     } catch (e) { showMessage('Erro ao processar a tabela lida do SPAmov.', 'error'); }
                 };
@@ -1652,6 +1656,9 @@
                     setPriceChanges((produtosAtivosAntes.length > 0) ? { changes, novos, removidos } : null);
 
                     setProducts(extractedProducts);
+                    // 🔒 mesma marca de "já sincronizado agora" do processarTabela — evita a sincronização
+                    // automática da nuvem sobrescrever essa leitura de PDF com a última tabela distribuída.
+                    try { window.localStorage.setItem('friganso_tabela_sync_ms', String(Date.now())); } catch (e) {}
                     showMessage(`Sucesso! ${extractedProducts.length} produtos carregados.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
                 } catch (err) { showMessage('Erro ao processar PDF.', 'error'); } finally { setIsLoading(false); }
             };
