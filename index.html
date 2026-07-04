@@ -1716,6 +1716,23 @@
             const [soLista, setSoLista] = useState(false); // mostrar só os itens da lista negra
             const [soValorMaximo, setSoValorMaximo] = useState(false); // mostrar só os itens com Valor Máximo definido
             const [soInativos, setSoInativos] = useState(false); // mostrar só os itens fora da tabela atual
+            // 💳 Forma de pagamento (só pra VISUALIZAR na Tabela por enquanto — ainda não mexe no Resumo).
+            // Regra de preço combinada: no Cartão cobra o preço de cartão (sem desconto); no Prazo Parcelado
+            // o máximo é o preço à vista (sem desconto); à vista e a prazo (prazo único) podem vender o preço
+            // à vista com até 3% de desconto — por isso "prazo" usa a MESMA conta de "avista" pra cobrar,
+            // só mostra o preço de tabela do prazo escolhido como referência.
+            const [modoPreco, setModoPreco] = useState('avista'); // avista | cartao | prazo | parcelado
+            const [prazoDias, setPrazoDias] = useState(30);
+            const precoParaModo = (p) => {
+                if (modoPreco === 'cartao') return { valor: p.precoCartao != null ? p.precoCartao : null, semDesconto: true, ref: null };
+                if (modoPreco === 'parcelado') return { valor: p.originalPrice, semDesconto: true, ref: null };
+                const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
+                if (modoPreco === 'prazo') {
+                    const ref = (p.precosPrazo && p.precosPrazo[prazoDias] != null) ? p.precosPrazo[prazoDias] : null;
+                    return { valor: unitFinalPrice, semDesconto: false, ref };
+                }
+                return { valor: unitFinalPrice, semDesconto: false, ref: null };
+            };
             const qtdInativos = useMemo(() => products.filter(p => p.ativo === false).length, [products]);
             const filteredProducts = useMemo(() => {
                 let base = products;
@@ -1863,16 +1880,33 @@
                     {products.length > 0 && (
                         <div className="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col h-[60vh] overflow-hidden">
                             <div className="p-4 border-b border-slate-100 bg-slate-50 relative"><div className="absolute left-7 top-1/2 -translate-y-1/2 text-slate-400 h-5 w-5"><IconSearch /></div><input type="text" placeholder="Pesquise por código ou nome..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:border-rose-500 outline-none font-medium" /></div>
+                            <div className="px-4 py-3 border-b border-slate-100 bg-white flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-bold text-slate-500 uppercase tracking-wide mr-1">Forma de pagamento:</span>
+                                {[['avista', 'À Vista'], ['cartao', 'Cartão'], ['prazo', 'A Prazo'], ['parcelado', 'Prazo Parcelado']].map(([key, label]) => (
+                                    <button key={key} onClick={() => setModoPreco(key)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${modoPreco === key ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{label}</button>
+                                ))}
+                                {modoPreco === 'prazo' && (
+                                    <div className="flex items-center gap-1 ml-2">
+                                        <span className="text-xs text-slate-400 mr-1">prazo:</span>
+                                        {[7, 14, 21, 28, 30, 35, 45].map(n => (
+                                            <button key={n} onClick={() => setPrazoDias(n)} className={`px-2 py-1 rounded-md text-[11px] font-bold ${prazoDias === n ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{n}d</button>
+                                        ))}
+                                    </div>
+                                )}
+                                {(modoPreco === 'cartao' || modoPreco === 'parcelado') && (
+                                    <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-1 ml-1">🔒 sem desconto</span>
+                                )}
+                            </div>
                             <div className="overflow-auto flex-1">
                                 <table className="w-full text-left border-collapse">
-                                    <thead className="bg-white sticky top-0 shadow-sm"><tr><th className="p-4 font-bold text-slate-600 border-b">Cód</th><th className="p-4 font-bold text-slate-600 border-b">Produto</th><th className="p-4 font-bold text-slate-600 border-b text-right">Orig.</th><th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">À Vista</th><th className="p-4 font-bold text-slate-600 border-b text-right" title="Preço fixo (R$/kg) — some no Zap/Resumo como se fosse um desconto normal de 3%">🎯 Valor Máx.</th><th className="p-4 font-bold text-slate-600 border-b text-center" title="Lista Negra: itens marcados não saem no Zap/Disparos">Zap</th></tr></thead>
+                                    <thead className="bg-white sticky top-0 shadow-sm"><tr><th className="p-4 font-bold text-slate-600 border-b">Cód</th><th className="p-4 font-bold text-slate-600 border-b">Produto</th><th className="p-4 font-bold text-slate-600 border-b text-right">Orig.</th><th className="p-4 font-bold text-rose-700 border-b bg-rose-50 text-right">{modoPreco === 'avista' ? 'À Vista' : modoPreco === 'cartao' ? 'Cartão' : modoPreco === 'parcelado' ? 'Prazo Parcelado' : `A Prazo (${prazoDias}d)`}</th><th className="p-4 font-bold text-slate-600 border-b text-right" title="Preço fixo (R$/kg) — some no Zap/Resumo como se fosse um desconto normal de 3%">🎯 Valor Máx.</th><th className="p-4 font-bold text-slate-600 border-b text-center" title="Lista Negra: itens marcados não saem no Zap/Disparos">Zap</th></tr></thead>
                                     <tbody>
                                         {filteredProducts.map((p, i) => {
                                             const banido = lnSet.has(String(p.code));
                                             const inativo = p.ativo === false;
                                             const vm = vmMap[String(p.code)];
                                             const temVm = vm != null;
-                                            const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
+                                            const precoModo = precoParaModo(p);
                                             return (
                                             <tr key={i} className={`hover:bg-slate-50 border-b border-slate-50 ${banido ? 'opacity-60 bg-slate-50' : ''} ${inativo ? 'bg-red-50/50' : ''}`}>
                                                 <td className={`p-4 font-bold align-top ${inativo ? 'text-red-400' : 'text-slate-500'}`}>{p.code}</td>
@@ -1891,7 +1925,12 @@
                                                     )}
                                                 </td>
                                                 <td className="p-4 text-right text-slate-600 align-top">{formatPrice(p.originalPrice)}</td>
-                                                <td className={`p-4 text-right font-bold align-top ${temVm ? 'text-amber-700 bg-amber-50/40' : 'text-rose-700 bg-rose-50/30'}`}>{formatPrice(unitFinalPrice)}</td>
+                                                <td className={`p-4 text-right font-bold align-top ${temVm && modoPreco === 'avista' ? 'text-amber-700 bg-amber-50/40' : 'text-rose-700 bg-rose-50/30'}`}>
+                                                    {precoModo.valor != null ? formatPrice(precoModo.valor) : '—'}
+                                                    {modoPreco === 'prazo' && (
+                                                        <div className="text-[10px] font-normal text-slate-400 mt-0.5">tabela SPAmov: {precoModo.ref != null ? formatPrice(precoModo.ref) : '—'}</div>
+                                                    )}
+                                                </td>
                                                 <td className="p-3 text-right align-top">
                                                     <CampoValorMaximo valor={temVm ? vm : null} onSave={(novo) => setValorMaximoProduto(p.code, novo)} />
                                                 </td>
