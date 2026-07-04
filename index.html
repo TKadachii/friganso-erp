@@ -365,7 +365,7 @@
             }
         });
 
-        const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user, spamov) => {
+        const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user, spamov, condicaoPagamento) => {
             try {
                 const itensSafe = (itensValidos || [])
                     .map(i => ({ code: String(i.code), name: i.name || i.nome || ('Produto ' + i.code), qty: Number(i.qty != null ? i.qty : i.quantity), peso: Number(i.peso) || 0, valorKg: Number(i.valorKg) || 0 }))
@@ -404,6 +404,7 @@
                                 itens: itensSafe,
                                 valor: valorTotal,
                                 pesoTotal: pesoTotal,
+                                condicaoPagamento: condicaoPagamento || dadosAntigos.condicaoPagamento || '',
                                 editadoEm: agora,
                                 editadoPor: (user && user.code) || '',
                                 historicoEdicoes: firebase.firestore.FieldValue.arrayUnion(entradaHist)
@@ -424,6 +425,7 @@
                     valor: valorTotal,
                     pesoTotal: pesoTotal,
                     spamov: spamovStr,
+                    condicaoPagamento: condicaoPagamento || '',
                     dia: dia,
                     ts: agora,
                     via: via || '',
@@ -431,6 +433,38 @@
                 });
                 await atualizarHistoricoCliente();
             } catch (e) { /* silencioso */ }
+        };
+
+        // 💳 Reduz o texto cru da condição de pagamento do SPAmov (ex.: "21 Dias", "À Vista / PIX",
+        // "Cartao Credito") pra uma das 4 categorias da regra de negócio. "parcelado" não tem opção
+        // própria no SPAmov (é um arranjo manual do vendedor), então nunca é detectado automaticamente.
+        const normalizarCondicaoPagamento = (texto) => {
+            const t = (texto || '').toLowerCase().trim();
+            if (!t) return null;
+            if (t.indexOf('vista') !== -1 || t.indexOf('pix') !== -1) return 'avista';
+            if (t.indexOf('cart') !== -1) return 'cartao';
+            if (/\d+\s*dias?/.test(t)) return 'prazo';
+            return 'outro';
+        };
+        const LABEL_CONDICAO = { avista: 'À Vista', cartao: 'Cartão', prazo: 'A Prazo', parcelado: 'Prazo Parcelado', outro: 'Outra' };
+
+        // 📊 Histórico de condição de pagamento de um cliente: conta quantas compras passadas foram em
+        // cada categoria e devolve a dominante (mais frequente). Usado pra avisar quando o pedido atual
+        // destoa do padrão de compra do cliente (ex.: cliente que sempre compra à vista, mas veio como cartão).
+        const condicaoDominanteCliente = async (clienteCode) => {
+            try {
+                const snap = await db.collection('purchases').where('clienteCode', '==', String(clienteCode)).get();
+                const contagens = {};
+                snap.forEach(doc => {
+                    const cat = normalizarCondicaoPagamento(doc.data().condicaoPagamento);
+                    if (!cat) return;
+                    contagens[cat] = (contagens[cat] || 0) + 1;
+                });
+                const total = Object.values(contagens).reduce((a, b) => a + b, 0);
+                let dominante = null, max = 0;
+                Object.keys(contagens).forEach(cat => { if (contagens[cat] > max) { max = contagens[cat]; dominante = cat; } });
+                return { dominante, contagens, total };
+            } catch (e) { return { dominante: null, contagens: {}, total: 0 }; }
         };
 
         const CustomMessageBox = ({ message, type = 'info', onClose }) => {
@@ -1975,10 +2009,21 @@
             const [showManualHistory, setShowManualHistory] = useState(false);
             const [manualSearch, setManualSearch] = useState('');
             const [manualSelected, setManualSelected] = useState(null);
+            // 💳 Condição de pagamento lida do pedido atual (texto cru do SPAmov, ex. "21 Dias") + o
+            // histórico de condições do cliente (pra avisar se esse pedido destoa do padrão dele).
+            const [condicaoAtual, setCondicaoAtual] = useState('');
+            const [condicaoHistorico, setCondicaoHistorico] = useState(null);
+            useEffect(() => {
+                if (!pendingCustomer) { setCondicaoHistorico(null); return; }
+                let cancelado = false;
+                condicaoDominanteCliente(pendingCustomer).then(r => { if (!cancelado) setCondicaoHistorico(r); });
+                return () => { cancelado = true; };
+            }, [pendingCustomer]);
 
             const handleProcessText = (forcedText) => {
                 const txt = typeof forcedText === 'string' ? forcedText : orderText;
                 if (!txt.trim()) { showMessage('Cole o texto do pedido no campo acima.', 'error'); return; }
+                setCondicaoAtual(''); // texto colado manualmente não traz condição de pagamento (só o pedido lido do SPAmov traz)
                 setIsProcessing(true);
                 try {
                     // Extrai cliente e SPAmov SEMPRE
@@ -2068,6 +2113,7 @@
                             setPendingCustomer(data.cliente || '');
                             setPendingSpamov(data.spamov || '');
                             setDetectedClientName(data.clienteNome || '');
+                            setCondicaoAtual(data.condicaoPagamento || '');
                             setOrderSummary({ customerCode: data.cliente || '', spamov: data.spamov || '', items: processed, totalDiscounted: processed.reduce((a, c) => a + c.discountedPrice, 0), totalValor: processed.reduce((a, c) => a + (c.valorLinha || 0), 0) });
                             const existing = clients.find(c => c.code === (data.cliente || ''));
                             if (existing) { setClientToSave(existing); setShowHistoryPrompt(true); }
@@ -2307,7 +2353,7 @@
                             {orderText.trim() && (
                                 <div className="absolute bottom-3 right-3 flex items-center gap-2">
                                     <span className="text-[10px] text-slate-400 font-mono">{orderText.split('\n').length} linhas</span>
-                                    <button onClick={() => { setOrderText(''); setOrderSummary(null); setShowHistoryPrompt(false); }} className="text-[10px] font-bold text-slate-400 hover:text-red-500 bg-white border border-slate-200 px-2 py-0.5 rounded-md transition-colors">limpar</button>
+                                    <button onClick={() => { setOrderText(''); setOrderSummary(null); setShowHistoryPrompt(false); setCondicaoAtual(''); }} className="text-[10px] font-bold text-slate-400 hover:text-red-500 bg-white border border-slate-200 px-2 py-0.5 rounded-md transition-colors">limpar</button>
                                 </div>
                             )}
                         </div>
@@ -2333,7 +2379,16 @@
                                     <div className="flex flex-wrap gap-2 mt-2">
                                         {orderSummary.customerCode && <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-1 rounded-lg border border-slate-200">ID: {orderSummary.customerCode}</span>}
                                         {orderSummary.spamov && <span className="text-xs font-bold bg-rose-100 text-rose-700 px-2 py-1 rounded-lg border border-rose-200">SPAmov: {orderSummary.spamov}</span>}
+                                        {condicaoAtual && <span className="text-xs font-bold bg-blue-100 text-blue-700 px-2 py-1 rounded-lg border border-blue-200">💳 {condicaoAtual}</span>}
                                     </div>
+                                    {condicaoHistorico && condicaoHistorico.total > 0 && (
+                                        <p className="text-[11px] text-slate-400 mt-1.5">
+                                            Histórico de pagamento desse cliente: {Object.keys(condicaoHistorico.contagens).map(cat => `${LABEL_CONDICAO[cat] || cat} (${condicaoHistorico.contagens[cat]}x)`).join(' · ')}
+                                            {condicaoAtual && condicaoHistorico.dominante && normalizarCondicaoPagamento(condicaoAtual) !== condicaoHistorico.dominante && (
+                                                <span className="ml-2 text-amber-600 font-bold">⚠️ esse pedido está diferente do costume dele</span>
+                                            )}
+                                        </p>
+                                    )}
                                 </div>
                                 <div className="overflow-auto flex-1">
                                     <table className="w-full text-left border-collapse">
@@ -2459,11 +2514,21 @@
                                 <div className="p-4 border-b bg-slate-50 flex justify-between items-center">
                                     <h3 className="font-semibold text-slate-700 flex items-center gap-2"><div className="h-5 w-5 text-emerald-600"><IconWhatsApp /></div> Resumo WhatsApp</h3>
                                     <button onClick={() => {
+                                        // ⚠️ Se o cliente tem histórico de pagamento e essa condição destoa do costume dele, confirma antes.
+                                        if (condicaoAtual && condicaoHistorico && condicaoHistorico.dominante && condicaoHistorico.total >= 3) {
+                                            const catAtual = normalizarCondicaoPagamento(condicaoAtual);
+                                            if (catAtual && catAtual !== condicaoHistorico.dominante) {
+                                                const nomeAtual = LABEL_CONDICAO[catAtual] || condicaoAtual;
+                                                const nomeCostume = LABEL_CONDICAO[condicaoHistorico.dominante] || condicaoHistorico.dominante;
+                                                const ok = window.confirm(`Esse cliente costuma comprar ${nomeCostume} (${condicaoHistorico.contagens[condicaoHistorico.dominante]} de ${condicaoHistorico.total} pedidos), mas esse aqui está como ${nomeAtual} (${condicaoAtual}). Confirma que está certo?`);
+                                                if (!ok) return;
+                                            }
+                                        }
                                         navigator.clipboard.writeText(generateWhatsAppText());
                                         // 🧾 Grava na ficha do cliente (todo pedido confirmado passa por aqui)
                                         if (orderSummary && orderSummary.customerCode) {
                                             const itens = (orderSummary.items || []).map(it => { const a = itemAtual(it); return { code: a.code, name: a.name, qty: Number(getQty(it)), peso: Number(a.peso) || 0, valorKg: Number(a.valorKg) || 0 }; });
-                                            registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user, orderSummary.spamov);
+                                            registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user, orderSummary.spamov, condicaoAtual);
                                         }
                                         showMessage('Copiado pro Zap e salvo na ficha do cliente! 🧾', 'success');
                                     }} className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-4 py-2 rounded-xl text-sm font-bold transition-colors">Copiar Resumo</button>

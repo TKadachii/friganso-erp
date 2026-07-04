@@ -153,9 +153,20 @@ desconto diferente:
 Já implementado: filtro "Forma de pagamento" na Tabela (tela PdfScreen), com 3 colunas de preço —
 "Tabela (modo)" (puro, sem regra, muda com o filtro), "À Vista" (fixo, sempre o preço à vista bruto) e
 "À Vista c/ desc." (até 3%, só pra À Vista/A Prazo — vazio pra Cartão/Parcelado). Funções
-`precoTabelaModo`/`precoComDesconto` no index.html. Ainda NÃO mexe no Resumo — a ideia futura é usar a
-extensão pra capturar direto do site da Friganso qual forma de pagamento o cliente escolheu, e aplicar
-essa regra automaticamente lá.
+`precoTabelaModo`/`precoComDesconto` no index.html.
+
+**Também implementado (2026-07-04): captura + histórico + aviso no Resumo.** `extrairCondicaoPagamento()`
+no content.js acha o `<select>` de "Condição de Pagamento" na tela do pedido do SPAmov (perto do rótulo,
+por posição Y) e devolve o TEXTO da opção selecionada (ex.: "21 Dias"), não só o value cru ("4", sem
+significado fora do SPAmov). Isso vai junto no `montarPedidoLeitura()` (botão "📋 Enviar pro Friganso
+ERP", extensão/PC) e no `window.__frigDadosFrame()` + `enviarResumoTopo()` (app mobile, `SpamovActivity.
+java` — MEXEU EM JAVA, precisa de um novo APK pra valer no celular). No site: `registrarCompra` salva
+`condicaoPagamento` em cada compra; `normalizarCondicaoPagamento()` reduz o texto cru pra uma de 4
+categorias (avista/cartao/prazo/outro — "parcelado" não existe como opção no SPAmov, é um arranjo manual
+do vendedor, nunca detectado sozinho); `condicaoDominanteCliente()` conta o histórico de um cliente e
+acha a condição mais frequente. No ResumoScreen: mostra um badge com a condição do pedido atual + o
+histórico do cliente, e no clique de "Copiar Resumo" (se o cliente já tem 3+ compras registradas e a
+condição atual destoa da dominante) pergunta com `window.confirm` antes de salvar/copiar.
 
 ## ⚠️ Lição aprendida (2026-07-04): extração dos 9 preços da Lista de Preços — usar ORDEM, não distância
 Tentei 3 vezes consertar o preço "à vista" saindo trocado pelo do "Cartão" usando o método de sempre

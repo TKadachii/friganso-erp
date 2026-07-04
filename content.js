@@ -224,10 +224,47 @@
         raw.forEach(function (r) { const code = r.rawCode; if (!code || seen.has(code)) return; seen.add(code); itens.push({ code: code, nome: r.nome, qty: r.qty, peso: r.peso, valorUnit: r.valorUnit }); });
         return itens;
     }
+    // 💳 Acha o <select> de "Condição de Pagamento" (achando o rótulo perto e o <select> mais próximo
+    // dele em Y) e devolve o texto da opção SELECIONADA (ex.: "21 Dias", "À Vista", "Cartão de Crédito")
+    // — não só o value cru do SPAmov, que é só um número interno sem significado por fora ("4").
+    // Também devolve TODAS as opções, pra gente montar a tabela de conversão valor→texto no futuro.
+    function extrairCondicaoPagamento() {
+        try {
+            const labels = document.querySelectorAll("b, td, div, span, font");
+            let labelY = null;
+            for (let i = 0; i < labels.length; i++) {
+                if (labels[i].children && labels[i].children.length) continue;
+                const t = (labels[i].innerText || labels[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+                if (t.length > 40) continue;
+                if (t.indexOf("condi") !== -1 && t.indexOf("pagamento") !== -1) {
+                    const r = labels[i].getBoundingClientRect();
+                    if (r.width && r.height) { labelY = r.top; break; }
+                }
+            }
+            if (labelY === null) return null;
+            const selects = document.querySelectorAll("select");
+            let melhor = null, melhorD = 1e9;
+            selects.forEach(function (sel) {
+                const r = sel.getBoundingClientRect();
+                if (!r.width || !r.height) return;
+                const d = Math.abs(r.top - labelY);
+                if (d < 40 && d < melhorD) { melhorD = d; melhor = sel; }
+            });
+            if (!melhor) return null;
+            const opt = melhor.options[melhor.selectedIndex];
+            const texto = opt ? (opt.textContent || opt.value || "").replace(/\s+/g, " ").trim() : "";
+            const opcoes = [];
+            for (let i = 0; i < melhor.options.length; i++) {
+                opcoes.push({ valor: melhor.options[i].value, texto: (melhor.options[i].textContent || "").replace(/\s+/g, " ").trim() });
+            }
+            return { valor: melhor.value, texto: texto, opcoes: opcoes };
+        } catch (e) { return null; }
+    }
     function montarPedidoLeitura() {
         const c = extrairCliente(); const sp = extrairSpamov(); const itens = extrairItens(sp);
-        try { console.log('[FRIG-LER] >>> cliente=' + c.code + ' (' + c.nome + ') | spamov=' + sp + ' | tabela=' + (acharTabelaItens() ? 'achada' : 'NAO achada') + ' | itens=' + JSON.stringify(itens.map(function (x) { return { c: x.code, q: x.qty, n: (x.nome || '').slice(0, 30) }; }))); } catch (e) {}
-        return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens };
+        const cond = extrairCondicaoPagamento();
+        try { console.log('[FRIG-LER] >>> cliente=' + c.code + ' (' + c.nome + ') | spamov=' + sp + ' | tabela=' + (acharTabelaItens() ? 'achada' : 'NAO achada') + ' | condicaoPagamento=' + (cond ? cond.texto : '(nao achada)') + ' | itens=' + JSON.stringify(itens.map(function (x) { return { c: x.code, q: x.qty, n: (x.nome || '').slice(0, 30) }; }))); } catch (e) {}
+        return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens, condicaoPagamento: cond ? cond.texto : '', condicaoPagamentoValor: cond ? cond.valor : '' };
     }
     function temPedidoLeitura(p) { return p && (p.cliente || p.spamov || (p.itens && p.itens.length > 0)); }
     function enviarParaApp() {
@@ -376,10 +413,12 @@
         window.__frigDadosFrame = function () {
             try {
                 const c = extrairCliente(), sp = extrairSpamov(), itens = extrairItens(sp);
+                const cond = extrairCondicaoPagamento();
                 const bt = bodyText();
                 // 🔬 diagnóstico: pra descobrir se ESTE frame chega a ver a tabela de itens ou não
                 return {
                     cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens,
+                    condicaoPagamento: cond ? cond.texto : '', condicaoPagamentoValor: cond ? cond.valor : '',
                     _diag: { url: (location.href || '').slice(0, 90), bodyLen: bt.length, temQuantMov: /quant.{0,4}mov/i.test(bt), temPLiq: /p\.?\s*liq/i.test(bt) }
                 };
             } catch (e) { return null; }
