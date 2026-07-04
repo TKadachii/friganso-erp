@@ -1816,8 +1816,8 @@
                                     🎯 Valor Máximo{Object.keys(vmMap).length ? ' (' + Object.keys(vmMap).length + ')' : ''}
                                 </button>
                             )}
-                            {qtdInativos > 0 && (
-                                <button onClick={() => setSoInativos(s => !s)} title="Produtos que já apareceram numa tabela, mas não estão na de hoje (continuam com o último preço visto)" className={`px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md ${soInativos ? 'bg-slate-900 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'}`}>
+                            {products.length > 0 && (
+                                <button onClick={() => qtdInativos > 0 && setSoInativos(s => !s)} disabled={qtdInativos === 0} title="Produtos que já apareceram numa tabela, mas não estão na de hoje (continuam com o último preço visto)" className={`px-5 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-md ${qtdInativos === 0 ? 'bg-slate-50 text-slate-400 cursor-default shadow-none' : soInativos ? 'bg-slate-900 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'}`}>
                                     🔴 Fora da tabela ({qtdInativos})
                                 </button>
                             )}
