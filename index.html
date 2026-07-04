@@ -3363,6 +3363,68 @@
             );
         };
 
+        // 🔄 CHANGELOG — histórico de atualizações do sistema, estilo "notas de atualização" (Steam).
+        // Versão vX.Y.Z: Z = correções/microajustes, Y = features novas (reseta Z), X = só quando Y passa de 9
+        // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
+        // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
+        const CHANGELOG = [
+            { versao: '1.2.0', data: '04/07/2026', areas: ['site'], itens: [
+                'Histórico de condição de pagamento por cliente (à vista, cartão, a prazo)',
+                'Aviso no Resumo quando o pedido atual destoa da forma de pagamento que o cliente costuma usar',
+            ]},
+            { versao: '1.1.3', data: '04/07/2026', areas: ['site'], itens: [
+                'O botão "🔴 Fora da tabela" agora sempre aparece na Tabela, mesmo com 0 itens faltando',
+            ]},
+            { versao: '1.1.2', data: '04/07/2026', areas: ['site'], itens: [
+                'Corrigido: ler a tabela local (SPAmov/PDF) não era mais desfeito pela sincronização automática da nuvem',
+            ]},
+            { versao: '1.1.1', data: '04/07/2026', areas: ['extensao'], itens: [
+                'Corrigido: preço à vista saindo trocado pelo preço de cartão na Lista de Preços (agora lido pela ordem das colunas)',
+            ]},
+            { versao: '1.1.0', data: '04/07/2026', areas: ['site', 'extensao'], itens: [
+                'Tabela: captura os 9 preços de cada produto (à vista, cartão, 07/14/21/28/30/35/45 dias)',
+                'Novo filtro "Forma de pagamento" na Tabela, com colunas Tabela / À Vista / À Vista c/ desconto',
+            ]},
+            { versao: '1.0.0', data: '—', areas: ['site', 'app', 'extensao'], itens: [
+                'Linha de base: tudo que já existia antes desse histórico começar a ser registrado — login, PWA, Dashboard, CRM, Radar de Clientes, Histórico de Vendas, Gerador de Zap, Disparos, automação do SPAmov (PC e app), Valor Máximo de Venda, acumulação de produtos na Tabela, auto-atualização do app, entre outros.',
+            ]},
+        ];
+        const AREA_INFO = {
+            site: { label: 'Site', className: 'bg-rose-100 text-rose-700 border-rose-200' },
+            app: { label: 'App', className: 'bg-blue-100 text-blue-700 border-blue-200' },
+            extensao: { label: 'Extensão', className: 'bg-amber-100 text-amber-700 border-amber-200' },
+            pc: { label: 'PC', className: 'bg-slate-100 text-slate-700 border-slate-200' },
+        };
+        const AtualizacoesScreen = () => (
+            <div className="animate-in fade-in max-w-3xl mx-auto space-y-6">
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 text-center">
+                    <h2 className="text-2xl font-black text-slate-800 flex items-center justify-center gap-2"><span>🔄</span> Atualizações</h2>
+                    <p className="text-slate-500 text-sm mt-1">Histórico de tudo que mudou no sistema — site, app, extensão e PC.</p>
+                </div>
+                <div className="space-y-4">
+                    {CHANGELOG.map((c, idx) => (
+                        <div key={idx} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                    <span className="font-mono font-black text-lg text-slate-800">v{c.versao}</span>
+                                    {idx === 0 && <span className="text-[10px] font-bold bg-emerald-500 text-white px-2 py-0.5 rounded-full uppercase tracking-wide">Mais recente</span>}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    {(c.areas || []).map(a => (
+                                        <span key={a} className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${(AREA_INFO[a] || {}).className || 'bg-slate-100 text-slate-700 border-slate-200'}`}>{(AREA_INFO[a] || {}).label || a}</span>
+                                    ))}
+                                    <span className="text-xs text-slate-400 font-medium">{c.data}</span>
+                                </div>
+                            </div>
+                            <ul className="p-4 space-y-1.5 list-disc list-inside">
+                                {c.itens.map((it, i2) => <li key={i2} className="text-sm text-slate-700">{it}</li>)}
+                            </ul>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+
         const CreditsScreen = () => (
             <div className="animate-in fade-in flex items-center justify-center min-h-[70vh]">
                 <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden max-w-lg w-full text-center relative">
@@ -5169,6 +5231,7 @@
                     case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
                     case 'credits': return <CreditsScreen />;
+                    case 'changelog': return <AtualizacoesScreen />;
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} valorMaximo={valorMaximo} setValorMaximoProduto={setValorMaximoProduto} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
@@ -5285,6 +5348,7 @@
                                 <div className="h-5 w-5 flex items-center justify-center text-base">🎨</div> Temas
                             </button>
                             <NavButton route="tutorial" icon={IconBook} label="Tutorial" />
+                            <NavButton route="changelog" icon={IconHistory} label="🔄 Atualizações" />
                             <NavButton route="support" icon={IconSupport} label="Suporte Técnico" />
                             <NavButton route="credits" icon={IconCode} label="Sobre o Desenvolvedor" />
                             {user.role === 'admin' && <NavButton route="debug" icon={IconSettings} label="🐞 Debug" />}

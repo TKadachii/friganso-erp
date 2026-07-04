@@ -19,6 +19,18 @@ A cada mudança, **publicar SÓ o site** (commit + push do `friganso-app`). **N�
 programa de PC nem gerar o APK a cada mudança. Quando o usuário pedir **"atualizar"**, aí sim:
 rodar `precompile.js` (PC), gerar o APK, e entregar o "dossiê" (APK novo + reabrir o programa + resumo).
 
+## 🔄 Changelog (aba "Atualizações", desde 2026-07-04) — ATUALIZAR SEMPRE
+Toda entrega (site/extensão/app/PC) precisa ganhar uma entrada nova no array `CHANGELOG` do
+`index.html` (perto de `CreditsScreen`). Versionamento estilo Steam, vX.Y.Z:
+- **Z** (patch): correções/microajustes — soma 1 a cada fix.
+- **Y** (minor): feature nova — soma 1 e ZERA o Z. Se Z chegasse a 100, também soma 1 no Y (e zera Z).
+- **X** (major): só sobe quando o Y passaria de 9 — soma 1 no X e ZERA o Y.
+- Exemplo do usuário: v1.12.124 (bruto, sem carry) vira v2.3.24 depois do carry (Z 124→24 carrega +1
+  pro Y; Y 12+1=13→3 carrega +1 pro X; X 1+1=2).
+- Cada entrada tem `{ versao, data, areas: ['site'|'app'|'extensao'|'pc'], itens: [...] }` — mais
+  recente primeiro (topo do array). `v1.0.0` é a "linha de base" pra tudo que existia antes desse
+  histórico começar a ser registrado.
+
 ## Estrutura (pastas locais — NÃO estão todas no git)
 - `friganso-app/` → **está no GitHub** (é o site). Arquivos: `index.html` (tudo), `sw.js` (cache, versão `friganso-vNN`), `manifest.json`, `icon.svg`.
 - `friganso-desktop/` → Electron (local). `main.js`, `preload.js`, `content.js` (automação SPAmov), `precompile.js` (gera `index-compiled.html`), `icon.ico`.
