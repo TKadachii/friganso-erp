@@ -2242,6 +2242,7 @@
                 let txt = '';
                 if (orderSummary.customerCode) txt += `ID: ${orderSummary.customerCode}\n`;
                 if (orderSummary.spamov) txt += `SPAmov: ${orderSummary.spamov}\n`;
+                if (condicaoAtual) txt += `Condição: ${condicaoAtual}\n`;
                 if (txt !== '') txt += '\n';
                 orderSummary.items.forEach(it0 => {
                     const item = itemAtual(it0); // nome+preço da Tabela do Dia, na hora
@@ -3368,6 +3369,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '1.2.1', data: '04/07/2026', areas: ['site'], itens: [
+                'Resumo do Zap agora mostra a condição de pagamento do pedido (ex.: "Condição: 21 Dias")',
+            ]},
             { versao: '1.2.0', data: '04/07/2026', areas: ['site'], itens: [
                 'Histórico de condição de pagamento por cliente (à vista, cartão, a prazo)',
                 'Aviso no Resumo quando o pedido atual destoa da forma de pagamento que o cliente costuma usar',
