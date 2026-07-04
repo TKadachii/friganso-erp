@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.3.1953
+// @version      2026.7.4.0233
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -310,8 +310,11 @@
         });
 
         // coleta TODAS as células-folha com texto e posição (uma vez só)
+        // ⚠️ mesma lista de tags do colXHeader acima — "th" incluído porque o SPAmov às vezes marca a
+        // coluna "À Vista/PIX" (destaque) com <th> em vez de <td>; se faltasse aqui, o valor sumia da
+        // coleta e o "mais perto da coluna X" acabava pegando o valor da coluna vizinha (Cartão) por engano.
         const todas = [];
-        document.querySelectorAll("td, div, span, b, font, nobr").forEach(function (el) {
+        document.querySelectorAll("td, th, div, span, b, font, nobr").forEach(function (el) {
             if (el.children && el.children.length) return;
             const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
             if (!t || t.length > 90) return;
