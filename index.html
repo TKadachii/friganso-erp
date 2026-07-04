@@ -327,7 +327,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 111;
+        const APP_BUILD_VERSION = 112;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -446,28 +446,35 @@
             if (!t) return null;
             if (t.indexOf('vista') !== -1 || t.indexOf('pix') !== -1) return 'avista';
             if (t.indexOf('cart') !== -1) return 'cartao';
+            if (t.indexOf('parcel') !== -1) return 'parcelado'; // só aparece se escolhido na mão (SPAmov não tem essa opção)
             if (/\d+\s*dias?/.test(t)) return 'prazo';
             return 'outro';
         };
         const LABEL_CONDICAO = { avista: 'À Vista', cartao: 'Cartão', prazo: 'A Prazo', parcelado: 'Prazo Parcelado', outro: 'Outra' };
+        // Opções pro seletor manual — os textos batem com o que o SPAmov usa (pra normalizarCondicaoPagamento
+        // reconhecer igualzinho), + "Prazo Parcelado" que só existe aqui (arranjo manual do vendedor).
+        const OPCOES_CONDICAO_MANUAL = ['À Vista / PIX', 'Cartao Credito', '07 Dias', '14 Dias', '21 Dias', '28 Dias', '30 Dias', '35 Dias', '45 Dias', 'Prazo Parcelado'];
 
         // 📊 Histórico de condição de pagamento de um cliente: conta quantas compras passadas foram em
-        // cada categoria e devolve a dominante (mais frequente). Usado pra avisar quando o pedido atual
-        // destoa do padrão de compra do cliente (ex.: cliente que sempre compra à vista, mas veio como cartão).
+        // cada categoria (dominante = mais frequente) E acha a condição da ÚLTIMA compra dele. O aviso no
+        // Resumo compara com a ÚLTIMA (não a dominante) — ex.: cliente que sempre compra à vista mas cuja
+        // última compra foi a prazo de 7 dias, e agora tá vindo 21 dias, é isso que dispara o aviso.
         const condicaoDominanteCliente = async (clienteCode) => {
             try {
                 const snap = await db.collection('purchases').where('clienteCode', '==', String(clienteCode)).get();
                 const contagens = {};
+                let ultimaTs = -1, ultimaCondicaoRaw = null;
                 snap.forEach(doc => {
-                    const cat = normalizarCondicaoPagamento(doc.data().condicaoPagamento);
-                    if (!cat) return;
-                    contagens[cat] = (contagens[cat] || 0) + 1;
+                    const d = doc.data();
+                    const cat = normalizarCondicaoPagamento(d.condicaoPagamento);
+                    if (cat) contagens[cat] = (contagens[cat] || 0) + 1;
+                    if (d.condicaoPagamento && Number(d.ts || 0) > ultimaTs) { ultimaTs = Number(d.ts || 0); ultimaCondicaoRaw = d.condicaoPagamento; }
                 });
                 const total = Object.values(contagens).reduce((a, b) => a + b, 0);
                 let dominante = null, max = 0;
                 Object.keys(contagens).forEach(cat => { if (contagens[cat] > max) { max = contagens[cat]; dominante = cat; } });
-                return { dominante, contagens, total };
-            } catch (e) { return { dominante: null, contagens: {}, total: 0 }; }
+                return { dominante, contagens, total, ultimaCondicaoRaw, ultimaCondicaoCat: normalizarCondicaoPagamento(ultimaCondicaoRaw) };
+            } catch (e) { return { dominante: null, contagens: {}, total: 0, ultimaCondicaoRaw: null, ultimaCondicaoCat: null }; }
         };
 
         const CustomMessageBox = ({ message, type = 'info', onClose }) => {
@@ -2057,6 +2064,7 @@
             const [mpAtivo, setMpAtivo] = useState(!!resumoRascunhoInicial.mpAtivo);
             const [mpClienteId, setMpClienteId] = useState(resumoRascunhoInicial.mpClienteId || '');
             const [mpSpamov, setMpSpamov] = useState(resumoRascunhoInicial.mpSpamov || '');
+            const [mpCondicao, setMpCondicao] = useState(resumoRascunhoInicial.mpCondicao || '');
             const [mpBusca, setMpBusca] = useState('');
             const [mpItens, setMpItens] = useState(Array.isArray(resumoRascunhoInicial.mpItens) ? resumoRascunhoInicial.mpItens : []); // {code, name, qty, valor}
             const mpClienteSugestoes = useMemo(() => {
@@ -2086,7 +2094,7 @@
             };
             const removerMpItem = (code) => setMpItens(prev => prev.filter(i => i.code !== code));
             const mudarMpItem = (code, campo, valor) => setMpItens(prev => prev.map(i => i.code === code ? { ...i, [campo]: valor } : i));
-            const limparMp = () => { setMpAtivo(false); setMpClienteId(''); setMpSpamov(''); setMpBusca(''); setMpItens([]); };
+            const limparMp = () => { setMpAtivo(false); setMpClienteId(''); setMpSpamov(''); setMpCondicao(''); setMpBusca(''); setMpItens([]); };
             const montarResumoManual = () => {
                 if (!mpClienteId.trim()) { showMessage('Informe o ID do cliente.', 'error'); return; }
                 const validos = mpItens.filter(i => Number(i.qty) > 0);
@@ -2099,6 +2107,7 @@
                 const cli = clients.find(c => c.code === mpClienteId.trim());
                 setPendingCustomer(mpClienteId.trim());
                 setPendingSpamov(mpSpamov.trim());
+                setCondicaoAtual(mpCondicao || '');
                 setDetectedClientName(cli ? cli.name : '');
                 setOrderSummary({ customerCode: mpClienteId.trim(), spamov: mpSpamov.trim(), items: processed, totalDiscounted: processed.reduce((a, c) => a + c.discountedPrice, 0), totalValor: processed.reduce((a, c) => a + c.valorLinha, 0) });
                 if (cli) { setClientToSave(cli); setShowHistoryPrompt(true); }
@@ -2111,10 +2120,10 @@
                 try {
                     window.localStorage.setItem(RESUMO_RASCUNHO_KEY, JSON.stringify({
                         orderText, pendingCustomer, pendingSpamov, orderSummary, editedPrices, editedQty,
-                        detectedClientName, condicaoAtual, mpAtivo, mpClienteId, mpSpamov, mpItens
+                        detectedClientName, condicaoAtual, mpAtivo, mpClienteId, mpSpamov, mpCondicao, mpItens
                     }));
                 } catch (e) {}
-            }, [orderText, pendingCustomer, pendingSpamov, orderSummary, editedPrices, editedQty, detectedClientName, condicaoAtual, mpAtivo, mpClienteId, mpSpamov, mpItens]);
+            }, [orderText, pendingCustomer, pendingSpamov, orderSummary, editedPrices, editedQty, detectedClientName, condicaoAtual, mpAtivo, mpClienteId, mpSpamov, mpCondicao, mpItens]);
 
             const handleProcessText = (forcedText) => {
                 const txt = typeof forcedText === 'string' ? forcedText : orderText;
@@ -2467,6 +2476,13 @@
                                     <input type="text" value={mpSpamov} onChange={e => setMpSpamov(e.target.value)} placeholder="Ex: 1941226" className="w-full mt-1 px-3 py-2.5 bg-white border rounded-xl text-sm outline-none focus:border-rose-500" />
                                 </div>
                                 <div>
+                                    <label className="text-xs font-bold text-slate-500">Condição de Pagamento (opcional)</label>
+                                    <select value={mpCondicao} onChange={e => setMpCondicao(e.target.value)} className="w-full mt-1 px-3 py-2.5 bg-white border rounded-xl text-sm outline-none focus:border-rose-500">
+                                        <option value="">— não informar —</option>
+                                        {OPCOES_CONDICAO_MANUAL.map(o => <option key={o} value={o}>{o}</option>)}
+                                    </select>
+                                </div>
+                                <div>
                                     <label className="text-xs font-bold text-slate-500">Adicionar Produto</label>
                                     <input type="text" value={mpBusca} onChange={e => setMpBusca(e.target.value)} placeholder="Buscar por código ou nome..." className="w-full mt-1 px-3 py-2.5 bg-white border rounded-xl text-sm outline-none focus:border-rose-500" />
                                     {mpResultados.length > 0 && (
@@ -2541,8 +2557,9 @@
                                     {condicaoHistorico && condicaoHistorico.total > 0 && (
                                         <p className="text-[11px] text-slate-400 mt-1.5">
                                             Histórico de pagamento desse cliente: {Object.keys(condicaoHistorico.contagens).map(cat => `${LABEL_CONDICAO[cat] || cat} (${condicaoHistorico.contagens[cat]}x)`).join(' · ')}
-                                            {condicaoAtual && condicaoHistorico.dominante && normalizarCondicaoPagamento(condicaoAtual) !== condicaoHistorico.dominante && (
-                                                <span className="ml-2 text-amber-600 font-bold">⚠️ esse pedido está diferente do costume dele</span>
+                                            {condicaoHistorico.ultimaCondicaoRaw && <> · última compra: <b>{condicaoHistorico.ultimaCondicaoRaw}</b></>}
+                                            {condicaoAtual && condicaoHistorico.ultimaCondicaoCat && normalizarCondicaoPagamento(condicaoAtual) !== condicaoHistorico.ultimaCondicaoCat && (
+                                                <span className="ml-2 text-amber-600 font-bold">⚠️ esse pedido está diferente da última compra dele</span>
                                             )}
                                         </p>
                                     )}
@@ -2671,13 +2688,12 @@
                                 <div className="p-4 border-b bg-slate-50 flex justify-between items-center">
                                     <h3 className="font-semibold text-slate-700 flex items-center gap-2"><div className="h-5 w-5 text-emerald-600"><IconWhatsApp /></div> Resumo WhatsApp</h3>
                                     <button onClick={() => {
-                                        // ⚠️ Se o cliente tem histórico de pagamento e essa condição destoa do costume dele, confirma antes.
-                                        if (condicaoAtual && condicaoHistorico && condicaoHistorico.dominante && condicaoHistorico.total >= 3) {
+                                        // ⚠️ Se a condição atual for diferente da ÚLTIMA compra desse cliente, confirma antes.
+                                        if (condicaoAtual && condicaoHistorico && condicaoHistorico.ultimaCondicaoRaw) {
                                             const catAtual = normalizarCondicaoPagamento(condicaoAtual);
-                                            if (catAtual && catAtual !== condicaoHistorico.dominante) {
+                                            if (catAtual && catAtual !== condicaoHistorico.ultimaCondicaoCat) {
                                                 const nomeAtual = LABEL_CONDICAO[catAtual] || condicaoAtual;
-                                                const nomeCostume = LABEL_CONDICAO[condicaoHistorico.dominante] || condicaoHistorico.dominante;
-                                                const ok = window.confirm(`Esse cliente costuma comprar ${nomeCostume} (${condicaoHistorico.contagens[condicaoHistorico.dominante]} de ${condicaoHistorico.total} pedidos), mas esse aqui está como ${nomeAtual} (${condicaoAtual}). Confirma que está certo?`);
+                                                const ok = window.confirm(`A última compra desse cliente foi em "${condicaoHistorico.ultimaCondicaoRaw}", mas esse pedido está como ${nomeAtual} (${condicaoAtual}). Confirma que está certo?`);
                                                 if (!ok) return;
                                             }
                                         }
@@ -3525,6 +3541,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '1.5.0', data: '04/07/2026', areas: ['site'], itens: [
+                'Montagem manual do Resumo: agora dá pra escolher a condição de pagamento também (inclui "Prazo Parcelado", que só existe nessa opção manual)',
+                'O aviso de condição de pagamento agora compara com a ÚLTIMA compra do cliente (não mais com a mais frequente do histórico)',
+            ]},
             { versao: '1.4.0', data: '04/07/2026', areas: ['site'], itens: [
                 'Atualização obrigatória do site/PWA/PC: quando sai uma versão nova, aparece um aviso que não dá pra fechar até clicar em "Atualizar agora" (limpa o cache e recarrega sozinho)',
             ]},
