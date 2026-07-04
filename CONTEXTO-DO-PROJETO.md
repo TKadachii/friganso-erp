@@ -19,6 +19,16 @@ A cada mudança, **publicar SÓ o site** (commit + push do `friganso-app`). **N�
 programa de PC nem gerar o APK a cada mudança. Quando o usuário pedir **"atualizar"**, aí sim:
 rodar `precompile.js` (PC), gerar o APK, e entregar o "dossiê" (APK novo + reabrir o programa + resumo).
 
+## 🔄 Atualização OBRIGATÓRIA do site/PWA/PC (desde 2026-07-04) — MAIS UM NÚMERO PRA BUMPAR
+`APP_BUILD_VERSION` (const no topo do `index.html`, perto de `isCapacitor`) PRECISA bater com o
+`version` do `web-version.json` a cada publicação — se esquecer de bumpar o `APP_BUILD_VERSION` pro
+MESMO número, o app vai ficar preso num loop de "atualização disponível" pra sempre (porque depois de
+atualizar, a versão embutida na página continua menor que a do `web-version.json`). O app checa a cada
+3 min (+ toda vez que a aba volta a ficar visível) e, se a remota for maior, trava a tela com
+`SiteUpdateModal` (sem botão de fechar) até clicar em "Atualizar agora" (que desregistra o Service
+Worker, limpa o Cache Storage e recarrega — equivalente a um Ctrl+Shift+R). NÃO roda no app Android
+(Capacitor), que já tem seu próprio OTA silencioso via `WebUpdater` nativo.
+
 ## 🔄 Changelog (aba "Atualizações", desde 2026-07-04) — ATUALIZAR SEMPRE
 Toda entrega (site/extensão/app/PC) precisa ganhar uma entrada nova no array `CHANGELOG` do
 `index.html` (perto de `CreditsScreen`). Versionamento estilo Steam, vX.Y.Z:

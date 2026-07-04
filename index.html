@@ -325,6 +325,9 @@
         const isElectron = (typeof window !== 'undefined') && (!!window.electronBridge || (navigator.userAgent || '').indexOf('Electron') !== -1);
         // 📱 App Android nativo (Capacitor): tem o navegador controlado pra automação do SPAmov
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
+        // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
+        // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
+        const APP_BUILD_VERSION = 111;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -483,6 +486,29 @@
                         <h3 className="text-lg font-bold text-slate-800 mb-2">{type === 'error' ? 'Atenção' : type === 'success' ? 'Sucesso' : 'Aviso'}</h3>
                         <p className="text-slate-600 text-sm mb-6">{message}</p>
                         <button onClick={onClose} className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-xl transition-colors">Entendi</button>
+                    </div>
+                </div>
+            );
+        };
+
+        // 🔄 Atualização OBRIGATÓRIA do site/PWA/PC — sem botão de fechar, sem clicar fora, sem ESC.
+        // Só sai daqui clicando em "Atualizar agora" (limpa cache + Service Worker e recarrega).
+        const SiteUpdateModal = ({ siteUpdate, onAtualizar }) => {
+            const [atualizando, setAtualizando] = useState(false);
+            return (
+                <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-sm flex items-center justify-center p-4 z-[999] animate-in fade-in">
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 text-center">
+                        <div className="bg-gradient-to-r from-rose-700 to-rose-500 p-6 text-white">
+                            <div className="text-4xl mb-2">🔄</div>
+                            <h2 className="text-xl font-black">Atualização disponível!</h2>
+                            <p className="text-rose-100 text-sm mt-1">Uma nova versão do sistema já está pronta.</p>
+                        </div>
+                        <div className="p-6 space-y-3">
+                            <p className="text-sm text-slate-500">Pra continuar usando, atualize agora — é rápido e não perde nada do que você já salvou.</p>
+                            <button onClick={() => { setAtualizando(true); onAtualizar(); }} disabled={atualizando} className="w-full bg-rose-700 hover:bg-rose-800 disabled:opacity-60 text-white font-black py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2">
+                                {atualizando ? <><div className="h-5 w-5 animate-spin"><IconLoader2/></div> Atualizando...</> : '🔄 Atualizar agora'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             );
@@ -3499,6 +3525,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '1.4.0', data: '04/07/2026', areas: ['site'], itens: [
+                'Atualização obrigatória do site/PWA/PC: quando sai uma versão nova, aparece um aviso que não dá pra fechar até clicar em "Atualizar agora" (limpa o cache e recarrega sozinho)',
+            ]},
             { versao: '1.3.1', data: '04/07/2026', areas: ['site'], itens: [
                 'Fazer Pedido: a lista de produtos não fecha mais ao selecionar um item — dá pra escolher vários em sequência sem redigitar',
                 'Fazer Pedido: clicar de novo no mesmo item agora soma 1 na quantidade em vez de ignorar',
@@ -5143,6 +5172,32 @@
                 return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', puxarResumo); };
             }, []);
 
+            // 🔄 ATUALIZAÇÃO OBRIGATÓRIA do site/PWA/PC: compara essa página (APP_BUILD_VERSION) com o
+            // web-version.json publicado. Se tem versão mais nova, trava a tela com um aviso SEM jeito de
+            // fechar até clicar em "Atualizar agora" — que limpa o Service Worker + Cache Storage e recarrega
+            // (equivalente a um Ctrl+Shift+R, já que dar reload normal sozinho não força ignorar o cache).
+            const [siteUpdate, setSiteUpdate] = useState(null);
+            useEffect(() => {
+                if (isCapacitor) return; // o app Android já se atualiza sozinho via OTA nativo (WebUpdater)
+                const checar = async () => {
+                    try {
+                        const resp = await fetch('https://tkadachii.github.io/friganso-erp/web-version.json?t=' + Date.now(), { cache: 'no-store' });
+                        const remoto = await resp.json();
+                        if (Number(remoto.version) > APP_BUILD_VERSION) setSiteUpdate(remoto);
+                    } catch (e) { /* sem internet — segue normal, tenta de novo depois */ }
+                };
+                checar();
+                const id = setInterval(checar, 3 * 60 * 1000);
+                const onVis = () => { if (!document.hidden) checar(); };
+                document.addEventListener('visibilitychange', onVis);
+                return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+            }, []);
+            const atualizarSiteAgora = async () => {
+                try { const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r => r.unregister())); } catch (e) {}
+                try { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); } catch (e) {}
+                window.location.reload();
+            };
+
             // 📲 AUTO-ATUALIZAÇÃO do APK (estilo Discord): ao abrir, compara a versão instalada
             // com o apk-version.json publicado no site. Se tem nova, mostra o aviso com botão de baixar.
             const [apkUpdate, setApkUpdate] = useState(null);
@@ -5370,6 +5425,7 @@
                     <>
                         <LoginScreen onLogin={handleSetUser} showMessage={showMessage} />
                         {messageBox && <CustomMessageBox {...messageBox} onClose={() => setMessageBox(null)} />}
+                        {siteUpdate && <SiteUpdateModal siteUpdate={siteUpdate} onAtualizar={atualizarSiteAgora} />}
                     </>
                 );
             }
@@ -5405,6 +5461,7 @@
             return (
                 <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
                     {messageBox && <CustomMessageBox {...messageBox} onClose={() => setMessageBox(null)} />}
+                    {siteUpdate && <SiteUpdateModal siteUpdate={siteUpdate} onAtualizar={atualizarSiteAgora} />}
 
                     {/* 📲 Aviso de atualização do APK (estilo Discord) */}
                     {apkUpdate && (
