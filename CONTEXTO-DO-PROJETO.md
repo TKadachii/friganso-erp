@@ -137,6 +137,24 @@ deve ser **1** (se vier 2+, o arquivo está corrompido de novo).
 - Aba 🎨 Temas: Auto/Claro/Escuro/Sakura/Oceano/Esmeralda (window.aplicarTema + localStorage friganso_tema).
   Sakura ativa sozinho em 21 e 27 de junho no modo "auto".
 
+## 💳 Regra de preço por forma de pagamento (2026-07-04 — só REGISTRADA, ainda não aplicada no Resumo)
+Quando fecha com o cliente, ele escolhe uma de 4 formas de pagamento, cada uma com uma regra de
+desconto diferente:
+- **À Vista** (dinheiro/PIX): pode vender o preço à vista da tabela com **até 3% de desconto** (regra
+  de sempre, `checkDiscountRules`).
+- **Cartão**: tem que cobrar o **preço de cartão** (`precoCartao`, vindo da Lista de Preços) — **sem
+  desconto**, fixo.
+- **A Prazo** (prazo único — cliente escolhe pagar tudo em 7/14/21/28/30/35/45 dias): mesma regra do
+  à vista — pode vender o preço à vista com até 3% de desconto (o preço de prazo da tabela do SPAmov,
+  `precosPrazo[dias]`, é só referência/catálogo, não é obrigatório cobrar ele).
+- **A Prazo Parcelado** (divide a compra em pedacinhos pagos em prazos diferentes, ex.: uma parte em
+  7 dias, outra em 14, outra em 21...): o máximo que dá pra vender é o **preço à vista, sem desconto**.
+
+Já implementado: filtro "Forma de pagamento" na Tabela (tela PdfScreen) — só pra VISUALIZAR o preço de
+cada modo por produto (`modoPreco`/`precoParaModo` no index.html). Ainda NÃO mexe no Resumo — a ideia
+futura é usar a extensão pra capturar direto do site da Friganso qual forma de pagamento o cliente
+escolheu, e aplicar essa regra automaticamente lá.
+
 ## 🐞 PENDENTE / em investigação
 - **Bug do preço 00,00 no PDF `2206.pdf`**: vários itens vieram R$ 0,00. Ex.: código **13291**
   (correto = 30,63). Causa descoberta: NESSE PDF as colunas estão em posições X **diferentes** das
