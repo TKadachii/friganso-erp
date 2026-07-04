@@ -261,15 +261,11 @@
         const colPecas = colXHeader(document, function (t) { return /^pe[çc]as$/.test(t); });
         const colUnidPreco = colXHeader(document, function (t) { return t.indexOf("unidade") !== -1 && t.indexOf("pre") !== -1; });
         const colEstVenda = colXHeader(document, function (t) { return t.indexOf("est") !== -1 && t.indexOf("venda") !== -1; });
-        const colPreco = colXHeader(document, function (t) { return t.indexOf("vista") !== -1 || t.indexOf("pix") !== -1; });
-        // 💳 Colunas de condição de pagamento (Cartão Crédito + prazos em dias) — usadas só pra guardar,
-        // o preço "à vista" (colPreco acima) continua sendo o padrão usado em Resumo/Zap/Disparos.
-        const colCartao = colXHeader(document, function (t) { return t.indexOf("cart") !== -1 && t.indexOf("dito") !== -1; });
+        // 💲 Preços (À Vista, Cartão, 07/14/21/28/30/35/45 dias): em vez de calcular a distância até
+        // cada cabeçalho (deu errado repetidas vezes — o valor do Cartão saía no lugar do À Vista mesmo
+        // com o cabeçalho certo detectado), agora pega TODOS os números com formato de preço da linha
+        // e usa a ORDEM da esquerda pra direita, que é sempre fixa nessa tela do SPAmov.
         const diasCols = [7, 14, 21, 28, 30, 35, 45];
-        const colsPrazo = {};
-        diasCols.forEach(function (n) {
-            colsPrazo[n] = colXHeader(document, function (t) { return new RegExp("^0?" + n + "\\s*dias$").test(t); });
-        });
 
         // coleta TODAS as células-folha com texto e posição (uma vez só)
         // ⚠️ lista de tags igual à do extrairItens() (que já funciona certo em produção) — o preço
@@ -314,15 +310,19 @@
             const pcsItem = perto(colPecas, 160);
             const unidade = perto(colUnidPreco, 160);
             const kgUn = perto(colEstVenda, 160);
-            const originalPrice = parseNumBR(perto(colPreco, 160));
+            // 💲 números com CARA de preço (só dígitos + separador + 2 casas — não bate com "1 Kg",
+            // "3 Un" nem "12941.8 Kg/253 Un"), na ordem X: [à vista, cartão, 07d, 14d, 21d, 28d, 30d, 35d, 45d]
+            const precos = linha
+                .filter(function (c) { return /^\d{1,4}[.,]\d{2}$/.test(c.t.trim()); })
+                .sort(function (a, b) { return a.x - b.x; })
+                .map(function (c) { return parseNumBR(c.t); });
+            const originalPrice = precos.length ? precos[0] : null;
             if (originalPrice === null || originalPrice <= 0) return;
-            // colunas de cartão/prazo ficam bem juntas (a partir de ~81px de distância) — tolerância
-            // menor pra não "vazar" o valor da coluna vizinha.
-            const precoCartao = parseNumBR(perto(colCartao, 40));
+            const precoCartao = precos.length > 1 ? precos[1] : null;
             const precosPrazo = {};
-            diasCols.forEach(function (n) {
-                const v = parseNumBR(perto(colsPrazo[n], 40));
-                if (v !== null) precosPrazo[n] = v;
+            diasCols.forEach(function (n, i) {
+                const v = precos[2 + i];
+                if (v !== undefined && v !== null) precosPrazo[n] = v;
             });
             produtos.push({ code: code, name: name, tipo: tipo, pesoItem: pesoItem, pcsItem: pcsItem, unidade: unidade, kgUn: kgUn, originalPrice: originalPrice, precoCartao: precoCartao, precosPrazo: precosPrazo });
         });

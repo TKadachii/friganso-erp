@@ -150,10 +150,28 @@ desconto diferente:
 - **A Prazo Parcelado** (divide a compra em pedacinhos pagos em prazos diferentes, ex.: uma parte em
   7 dias, outra em 14, outra em 21...): o máximo que dá pra vender é o **preço à vista, sem desconto**.
 
-Já implementado: filtro "Forma de pagamento" na Tabela (tela PdfScreen) — só pra VISUALIZAR o preço de
-cada modo por produto (`modoPreco`/`precoParaModo` no index.html). Ainda NÃO mexe no Resumo — a ideia
-futura é usar a extensão pra capturar direto do site da Friganso qual forma de pagamento o cliente
-escolheu, e aplicar essa regra automaticamente lá.
+Já implementado: filtro "Forma de pagamento" na Tabela (tela PdfScreen), com 3 colunas de preço —
+"Tabela (modo)" (puro, sem regra, muda com o filtro), "À Vista" (fixo, sempre o preço à vista bruto) e
+"À Vista c/ desc." (até 3%, só pra À Vista/A Prazo — vazio pra Cartão/Parcelado). Funções
+`precoTabelaModo`/`precoComDesconto` no index.html. Ainda NÃO mexe no Resumo — a ideia futura é usar a
+extensão pra capturar direto do site da Friganso qual forma de pagamento o cliente escolheu, e aplicar
+essa regra automaticamente lá.
+
+## ⚠️ Lição aprendida (2026-07-04): extração dos 9 preços da Lista de Preços — usar ORDEM, não distância
+Tentei 3 vezes consertar o preço "à vista" saindo trocado pelo do "Cartão" usando o método de sempre
+(achar o cabeçalho da coluna com `colXHeader` e pegar o texto mais PRÓXIMO em X) — tolerância errada,
+depois tag faltando no seletor, depois mais tags ainda. Nenhuma bateu com o que o usuário via na tela,
+mesmo com o diagnóstico (que grava a tag de cada célula) provando que tanto o preço à vista quanto o de
+cartão são `<td>` normais, sem nada de especial. A causa real nunca foi confirmada, mas o método de
+"distância até o cabeçalho" se provou frágil demais pra essa tela (9 colunas de preço bem coladas).
+**Solução que funcionou**: abandonar a distância e usar a ORDEM DOS NÚMEROS na linha. As 9 colunas de
+preço sempre aparecem na mesma ordem da esquerda pra direita (À Vista, Cartão, 07d, 14d, 21d, 28d, 30d,
+35d, 45d) — então basta pegar todo texto da linha que tem CARA de preço (regex `^\d{1,4}[.,]\d{2}$`,
+que não bate com "1 Kg"/"3 Un"/"12941.8 Kg/253 Un") e usar a posição (1º = à vista, 2º = cartão, resto
+= prazos, nessa ordem), sem precisar achar cabeçalho nenhum pra essas colunas. Validado contra 3
+diagnósticos reais completos (737-741 produtos) antes de publicar. Lição: quando um método baseado em
+"achar a coisa mais próxima de X" falha repetidas vezes sem explicação clara, e a ORDEM dos elementos é
+previsível, prefira extrair por ORDEM em vez de por DISTÂNCIA.
 
 ## 🐞 PENDENTE / em investigação
 - **Bug do preço 00,00 no PDF `2206.pdf`**: vários itens vieram R$ 0,00. Ex.: código **13291**
