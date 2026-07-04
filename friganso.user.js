@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.4.0233
+// @version      2026.7.4.0242
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -310,11 +310,12 @@
         });
 
         // coleta TODAS as células-folha com texto e posição (uma vez só)
-        // ⚠️ mesma lista de tags do colXHeader acima — "th" incluído porque o SPAmov às vezes marca a
-        // coluna "À Vista/PIX" (destaque) com <th> em vez de <td>; se faltasse aqui, o valor sumia da
-        // coleta e o "mais perto da coluna X" acabava pegando o valor da coluna vizinha (Cartão) por engano.
+        // ⚠️ lista de tags igual à do extrairItens() (que já funciona certo em produção) — o preço
+        // "à vista" tava saindo trocado pelo do Cartão em TODOS os produtos porque a célula dele
+        // provavelmente vem numa tag que faltava aqui (ex.: <a>, célula clicável), então ela sumia
+        // da coleta e o "mais perto da coluna X" caía sempre na coluna vizinha (Cartão) por engano.
         const todas = [];
-        document.querySelectorAll("td, th, div, span, b, font, nobr").forEach(function (el) {
+        document.querySelectorAll("td, th, span, font, b, div, a, p, label, i, small, strong, em, nobr, li").forEach(function (el) {
             if (el.children && el.children.length) return;
             const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
             if (!t || t.length > 90) return;
@@ -439,7 +440,7 @@
                 if (!t || t.length > 60) return;
                 const r = el.getBoundingClientRect();
                 if (!r.width || !r.height) return;
-                textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t });
+                textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t, tag: el.tagName });
             });
             const campos = [];
             document.querySelectorAll("input, select").forEach(function (el) {
