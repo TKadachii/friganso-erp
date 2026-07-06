@@ -327,7 +327,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 113;
+        const APP_BUILD_VERSION = 114;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -1734,14 +1734,21 @@
                 try {
                     setIsLoading(true);
                     const now = new Date();
-                    await db.collection('system_data').doc('shared_pdf').set({ products, updatedAt: now });
-                    await db.collection('pdf_versions').add({ products, updatedAt: now, productCount: products.length });
+                    // 🧹 Sanitiza: o Firestore rejeita qualquer campo com valor "undefined" (aceita null,
+                    // mas não undefined). O round-trip por JSON remove essas chaves sozinho, sem mudar nada
+                    // que já era válido — proteção barata contra produto antigo com campo faltando.
+                    const productsSafe = JSON.parse(JSON.stringify(products));
+                    await db.collection('system_data').doc('shared_pdf').set({ products: productsSafe, updatedAt: now });
+                    await db.collection('pdf_versions').add({ products: productsSafe, updatedAt: now, productCount: productsSafe.length });
                     // marca já como sincronizado NESTE aparelho, pra ele não reprocessar a própria distribuição
                     // quando o listener automático (App) ecoar essa mesma escrita de volta
                     try { window.localStorage.setItem('friganso_tabela_sync_ms', String(now.getTime())); } catch (e) {}
                     showMessage('Tabela distribuída! Todo mundo recebe automaticamente agora. 🔄', 'success');
                     fetchCloudInfo();
-                } catch(e) { showMessage('Erro ao distribuir tabela.', 'error'); } finally { setIsLoading(false); }
+                } catch(e) {
+                    console.error('[Distribuir Tabela] erro:', e);
+                    showMessage('Erro ao distribuir tabela: ' + (e && (e.message || e.code) ? (e.code ? e.code + ' — ' : '') + (e.message || '') : 'desconhecido') + ' (' + products.length + ' produtos)', 'error');
+                } finally { setIsLoading(false); }
             };
 
             const handleDownloadCloud = async () => {
@@ -3561,6 +3568,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '1.5.2', data: '04/07/2026', areas: ['site'], itens: [
+                '"Distribuir Tabela" agora mostra o motivo real do erro (antes só dizia "Erro ao distribuir tabela", sem detalhe) e remove qualquer campo inválido antes de enviar pra nuvem',
+            ]},
             { versao: '1.5.1', data: '04/07/2026', areas: ['site'], itens: [
                 'Montagem manual: ao escolher "Prazo Parcelado", agora dá pra marcar quais prazos compõem o parcelamento (ex.: 7/14/21) em caixinhas de seleção',
             ]},
