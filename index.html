@@ -335,7 +335,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 116;
+        const APP_BUILD_VERSION = 117;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -355,6 +355,18 @@
             if (codeStr === '24962') hasDiscount = false; // Fraldinha Ramax (por código, garantido)
             if (nameStr.includes('fraldinha ramax') || (nameStr.includes('fraldinha') && nameStr.includes('ramax'))) hasDiscount = false;
             return { hasDiscount, origPrice, unitFinalPrice: hasDiscount ? Math.round((origPrice * 0.97) * 100) / 100 : origPrice };
+        };
+        // 📲 Bloco de um produto pro texto do WhatsApp (Gerador de Zap e Disparos) — formato "soft":
+        // uma linha de preço (sem "(Com 3% de Desconto)" por extenso, o 🔥 já sinaliza) + Cartão/Parcelado
+        // combinados numa linha só, só quando o produto tem preço de cartão (lido pela Lista de Preços).
+        const montarBlocoProdutoZap = (p) => {
+            const { hasDiscount, origPrice, unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
+            let b = `Cod: ${p.code}\n*${p.name}*\n\n`;
+            b += hasDiscount
+                ? `💰 Valor: ~${formatPrice(origPrice)}~ por *${formatPrice(unitFinalPrice)}/kg* 🔥\n`
+                : `💰 Valor: *${formatPrice(origPrice)}/kg*\n`;
+            if (p.precoCartao != null) b += `💳 Cartão: ${formatPrice(p.precoCartao)}/kg 🧩 Parcelado: ${formatPrice(origPrice)}/kg\n`;
+            return b;
         };
 
         // 🧾 Registra a compra na ficha do cliente (nuvem). Anti-duplicata de 5 min.
@@ -2775,12 +2787,9 @@
             
             const generateText = () => {
                 if(selectedCodes.size === 0) return '';
-                let txt = search.trim() ? `🥩 *${search.toUpperCase()}*\n\n` : `🥩 *ORÇAMENTO*\n\n`;
+                let txt = `🥩 *ORÇAMENTO*\n\n`;
                 products.filter(p => selectedCodes.has(p.code) && !lnSet.has(String(p.code))).forEach(p => {
-                    const { hasDiscount, origPrice, unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
-                    txt += `Cod: ${p.code}\n\n${p.name}\n`;
-                    if(hasDiscount) txt += `💰 Valor: ~${formatPrice(origPrice)}~ por *${formatPrice(unitFinalPrice)}/kg* 🔥 (Com 3% de Desconto)\n\n`;
-                    else txt += `💰 Valor: *${formatPrice(origPrice)}/kg*\n\n`;
+                    txt += montarBlocoProdutoZap(p) + '\n';
                 }); return txt.trim();
             };
 
@@ -3576,6 +3585,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '1.7.0', data: '07/07/2026', areas: ['site'], itens: [
+                'Mensagens do Gerador de Zap/Disparos: corrigido o título mostrando o termo pesquisado (ex.: "FRANG") em vez de "ORÇAMENTO" fixo',
+                'Novo formato mais completo (e ainda enxuto): mostra Cartão e Parcelado numa linha só, quando o produto tem esses preços',
+            ]},
             { versao: '1.6.1', data: '07/07/2026', areas: ['extensao', 'app'], itens: [
                 'Lançamento automático de pedido no SPAmov: aumentei bastante os prazos de espera (2min → 8min sem progresso; login/navegação de 5min → 15min) — com internet lenta, o pedido inteiro era descartado no meio do processo',
             ]},
@@ -4530,13 +4543,7 @@
             };
 
             // Monta o bloco de ofertas no formato do WhatsApp (preço riscado + desconto)
-            const montarOfertas = (prods) => prods.map(p => {
-                const { hasDiscount, origPrice, unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
-                let b = `Cod: ${p.code}\n\n${p.name}\n`;
-                if (hasDiscount) b += `💰 Valor: ~${formatPrice(origPrice)}~ por *${formatPrice(unitFinalPrice)}/kg* 🔥 (Com 3% de Desconto)`;
-                else b += `💰 Valor: *${formatPrice(origPrice)}/kg*`;
-                return b;
-            }).join('\n\n');
+            const montarOfertas = (prods) => prods.map(p => montarBlocoProdutoZap(p).trim()).join('\n\n');
 
             // Saudação: usa o texto personalizado se houver, senão Bom dia/tarde/noite pela hora
             const saudacao = () => {
