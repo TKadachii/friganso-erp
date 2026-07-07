@@ -1,6 +1,6 @@
 {
-    "versionCode": 10,
-    "versionName": "2.8",
+    "versionCode": 11,
+    "versionName": "2.9",
     "url": "https://tkadachii.github.io/friganso-erp/FrigansoERP.apk",
-    "novidades": "• Diagnóstico do botão 📋 ERP: agora mostra no log qual URL cada frame tem, se acha a tabela de itens, e quantas janelas (webviews) estão abertas — pra descobrir de vez por que o resumo às vezes não lê a página ao entrar pela aba Navegador"
+    "novidades": "• Captura a condição de pagamento (à vista/cartão/prazo) ao ler o pedido pela aba Navegador\n• Automação de lançamento de pedido: prazos bem mais folgados pra internet lenta (não descarta mais o pedido no meio do processo)"
 }
