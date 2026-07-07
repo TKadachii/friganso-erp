@@ -897,7 +897,10 @@
         const run = await getRun();
         if (!run || !run.ativo) { return; }
         if (!ehFramePrincipal()) { dlog("(frame ignorado — sem UI do SPAmov)"); return; }
-        if (Date.now() - (run.ts || 0) > 120 * 1000) { await clearRun(); dlog("⏰ expirou (2min sem progresso) — limpei"); return; }
+        // ⏳ 8 min sem progresso (era 2min) — cada item recarrega a página inteira do SPAmov, e com
+        // internet lenta isso pode demorar bem mais que 2min; 2min descartava o pedido todo no meio do
+        // lançamento (itens que ainda faltavam ficavam pra trás sem aviso nenhum).
+        if (Date.now() - (run.ts || 0) > 8 * 60 * 1000) { await clearRun(); dlog("⏰ expirou (8min sem progresso) — limpei"); return; }
 
         const status = statusBox();
         const stage = run.stage || "itens";
@@ -1188,7 +1191,7 @@
                         try { v.focus && v.focus(); } catch (e) {}
                         try { v.click(); } catch (e) {}          // clique NATIVO (navega / executa javascript:)
                         clearInterval(iv);
-                    } else if (tentou > 16) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu (manda o log)"); }
+                    } else if (tentou > 40) { clearInterval(iv); dlog("menu: VENDAS - VENDEDOR não apareceu (manda o log)"); }  // ~16s (era ~6.4s)
                 }, 400);
             });
         } catch (e) { dlog("menu ERRO: " + (e && e.message)); }
@@ -1200,7 +1203,9 @@
             chrome.storage.local.get(["friganso_run_auto", "friganso_run"], function (r) {
                 const auto = r && r.friganso_run_auto;
                 if (!auto || !auto.pedido) return;
-                if (Date.now() - (auto.ts || 0) > 5 * 60 * 1000) { chrome.storage.local.remove("friganso_run_auto"); return; }
+                // ⏳ 15 min (era 5) — internet lenta pode fazer login+navegação demorar bem mais que isso,
+                // e o pedido inteiro era descartado em silêncio se passasse do prazo antigo.
+                if (Date.now() - (auto.ts || 0) > 15 * 60 * 1000) { chrome.storage.local.remove("friganso_run_auto"); return; }
                 if (r.friganso_run && r.friganso_run.ativo) return;          // já tem lançamento rolando
                 if (document.querySelector("input[type=password]")) return;  // ainda na tela de login
                 let t = 0;
@@ -1219,7 +1224,7 @@
                             statusBox()("🤖 Lançando automático: cliente " + (auto.pedido.cliente || "?") + "...");
                             setRun({ pedido: auto.pedido, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
                         });
-                    } else if (t > 20) { clearInterval(iv); }  // ~10s esperando a tela de vendas neste load
+                    } else if (t > 60) { clearInterval(iv); }  // ~30s (era ~10s) esperando a tela de vendas neste load
                 }, 500);
             });
         } catch (e) {}
