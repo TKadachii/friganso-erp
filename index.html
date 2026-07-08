@@ -337,7 +337,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 123;
+        const APP_BUILD_VERSION = 124;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3619,6 +3619,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.1.0', data: '08/07/2026', areas: ['site'], itens: [
+                'Gerador de Catálogo: rodapé de contato agora é editável ("⚙️ Editar rodapé") — muda, apaga ou adiciona linhas, salvo compartilhado pra todas as contas',
+            ]},
             { versao: '2.0.1', data: '08/07/2026', areas: ['site'], itens: [
                 'Gerador de Catálogo: corrigido bug onde a foto do produto não aparecia na imagem gerada (problema de CORS do Storage) — agora usa uma miniatura própria, sem esse problema',
                 'Cores do catálogo ajustadas pro vermelho da marca Friganso; logo real da empresa usada no cabeçalho (com fallback pro ícone do app se não carregar)',
@@ -3884,7 +3887,7 @@
         const LOGO_GANSO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><g transform="translate(-10 3) scale(1.9)" fill="#FB4B3A"><path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z"/><path d="M89,19 L97,17 L91,24 Z"/></g></svg>`;
         const FRIGANSO_RED = '#FB4B3A'; // mesma cor do logo/marca usada no resto do app
         const FRIGANSO_LOGO_URL = 'https://friganso.com.br/assets/logo-quadrada-RgRpEdHY.webp';
-        const gerarCatalogoImagem = async (produtosSelecionados, thumbsMap) => {
+        const gerarCatalogoImagem = async (produtosSelecionados, thumbsMap, contatos) => {
             const COLS = 2, CELL_W = 560, CELL_H = 250, PAD = 44, HEADER_H = 200, FOOTER_H = 110, FOTO = 170;
             const rows = Math.ceil(produtosSelecionados.length / COLS);
             const cardW = COLS * CELL_W + 40;
@@ -3970,7 +3973,8 @@
             const footerY = H - FOOTER_H;
             ctx.fillStyle = FRIGANSO_RED; ctx.fillRect(0, footerY, W, FOOTER_H);
             ctx.fillStyle = '#fff'; ctx.font = 'bold 18px system-ui, sans-serif'; ctx.textAlign = 'left';
-            ctx.fillText('🌐 www.friganso.com.br   📷 @frigansoalimentos   📘 friganso   📞 (21) 2757-5710', PAD, footerY + FOOTER_H / 2 + 6);
+            const linhaContatos = (contatos && contatos.length ? contatos : []).map(c => `${c.icone} ${c.texto}`).join('   ');
+            ctx.fillText(linhaContatos, PAD, footerY + FOOTER_H / 2 + 6);
             const amanha = new Date(Date.now() + 86400000);
             ctx.textAlign = 'right'; ctx.font = 'bold 16px system-ui, sans-serif';
             ctx.fillText('Válido para ' + amanha.toLocaleDateString('pt-BR'), W - PAD, footerY + FOOTER_H / 2 + 6);
@@ -3980,7 +3984,10 @@
         };
 
         // 🍽️ Cardápio: cada produto pode ter uma foto, compartilhada com todo mundo que usa o sistema.
-        const CardapioScreen = ({ products, produtoFotos, showMessage }) => {
+        const CardapioScreen = ({ products, produtoFotos, showMessage, catalogoContatos, salvarCatalogoContatos }) => {
+            const [editandoRodape, setEditandoRodape] = useState(false);
+            const [rodapeRascunho, setRodapeRascunho] = useState(catalogoContatos || []);
+            useEffect(() => { if (!editandoRodape) setRodapeRascunho(catalogoContatos || []); }, [catalogoContatos, editandoRodape]);
             const [busca, setBusca] = useState('');
             const [enviando, setEnviando] = useState({}); // { [code]: true } enquanto sobe a foto
             const [crop, setCrop] = useState(null); // { code, file } enquanto o modal de recorte está aberto
@@ -4011,10 +4018,21 @@
                             .catch(() => [String(p.code), null])
                     ));
                     const thumbsMap = Object.fromEntries(pares);
-                    const canvas = await gerarCatalogoImagem(lista, thumbsMap);
+                    const canvas = await gerarCatalogoImagem(lista, thumbsMap, catalogoContatos);
                     canvas.toBlob(blob => { if (blob) setPosterUrl(URL.createObjectURL(blob)); }, 'image/png');
                 } catch (e) { showMessage('Erro ao gerar o catálogo.', 'error'); }
                 finally { setGerando(false); }
+            };
+
+            // ⚙️ Editor do rodapé (mudar/excluir/adicionar linhas de contato) — salva compartilhado na nuvem.
+            const mudarLinhaRodape = (i, campo, valor) => setRodapeRascunho(prev => prev.map((c, idx) => idx === i ? { ...c, [campo]: valor } : c));
+            const removerLinhaRodape = (i) => setRodapeRascunho(prev => prev.filter((_, idx) => idx !== i));
+            const addLinhaRodape = () => setRodapeRascunho(prev => [...prev, { icone: '📌', texto: '' }]);
+            const salvarRodape = async () => {
+                const limpo = rodapeRascunho.map(c => ({ icone: (c.icone || '').trim() || '📌', texto: (c.texto || '').trim() })).filter(c => c.texto);
+                await salvarCatalogoContatos(limpo);
+                setEditandoRodape(false);
+                showMessage('Rodapé atualizado!', 'success');
             };
 
             // Só ESCOLHE o arquivo aqui — quem faz o recorte (arrastar/zoom, estilo WhatsApp) é o CropFotoModal.
@@ -4048,6 +4066,29 @@
             return (
                 <div className="animate-in fade-in space-y-6">
                     {crop && <CropFotoModal file={crop.file} onCancel={() => setCrop(null)} onConfirm={confirmarCrop} />}
+                    {editandoRodape && (
+                        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-5 flex flex-col max-h-[85vh]">
+                                <h3 className="font-bold text-slate-800 mb-1">⚙️ Rodapé do Catálogo</h3>
+                                <p className="text-xs text-slate-400 mb-3">Aparece em todo catálogo gerado, pra qualquer conta. Muda, apaga ou adiciona linhas.</p>
+                                <div className="space-y-2 overflow-y-auto flex-1">
+                                    {rodapeRascunho.map((c, i) => (
+                                        <div key={i} className="flex items-center gap-2">
+                                            <input type="text" value={c.icone} onChange={e => mudarLinhaRodape(i, 'icone', e.target.value)} maxLength={2} className="w-12 text-center px-2 py-2 border border-slate-200 rounded-lg outline-none focus:border-rose-500" />
+                                            <input type="text" value={c.texto} onChange={e => mudarLinhaRodape(i, 'texto', e.target.value)} placeholder="Ex: www.friganso.com.br" className="flex-1 px-3 py-2 border border-slate-200 rounded-lg outline-none focus:border-rose-500 text-sm" />
+                                            <button onClick={() => removerLinhaRodape(i)} className="h-9 w-9 flex-shrink-0 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-red-100 text-slate-400 hover:text-red-600"><div className="h-4 w-4"><IconX/></div></button>
+                                        </div>
+                                    ))}
+                                    {rodapeRascunho.length === 0 && <p className="text-xs text-slate-400 text-center py-3">Nenhuma linha — adicione pelo menos uma.</p>}
+                                </div>
+                                <button onClick={addLinhaRodape} className="mt-2 text-sm font-bold text-rose-700 hover:text-rose-800 text-left">+ Adicionar linha</button>
+                                <div className="flex gap-3 w-full mt-4">
+                                    <button onClick={() => setEditandoRodape(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Cancelar</button>
+                                    <button onClick={salvarRodape} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl transition-colors">Salvar</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     {posterUrl && (
                         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
                             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-5 flex flex-col items-center max-h-[90vh]">
@@ -4070,9 +4111,12 @@
                         <p className="text-slate-500 text-sm mb-4">{modoCatalogo ? 'Toque nos produtos que quer colocar no catálogo de ofertas.' : 'Foto de cada produto — qualquer conta pode subir ou trocar, e todo mundo vê.'}</p>
                         <input type="text" placeholder="Buscar por código ou nome..." value={busca} onChange={e => setBusca(e.target.value)} className="w-full p-4 rounded-xl border border-slate-200 outline-none focus:border-rose-500 font-bold bg-slate-50" />
                         {modoCatalogo && (
-                            <div className="mt-3 flex items-center justify-between bg-rose-50 border border-rose-200 rounded-xl p-3">
+                            <div className="mt-3 flex items-center justify-between bg-rose-50 border border-rose-200 rounded-xl p-3 gap-2">
                                 <span className="text-sm font-bold text-rose-800">{selecionados.size} produto(s) selecionado(s)</span>
-                                <button onClick={gerarCatalogo} disabled={selecionados.size === 0 || gerando} className="bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors">{gerando ? 'Gerando...' : '🖼️ Gerar Catálogo'}</button>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => setEditandoRodape(true)} className="bg-white border border-rose-200 hover:bg-rose-100 text-rose-700 px-3 py-2 rounded-lg font-bold text-xs transition-colors">⚙️ Editar rodapé</button>
+                                    <button onClick={gerarCatalogo} disabled={selecionados.size === 0 || gerando} className="bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors">{gerando ? 'Gerando...' : '🖼️ Gerar Catálogo'}</button>
+                                </div>
                             </div>
                         )}
                     </header>
@@ -5893,6 +5937,27 @@
                 return () => unsub();
             }, []);
 
+            // 📋 Rodapé de contato do Gerador de Catálogo — editável (mudar/excluir/adicionar linhas),
+            // compartilhado na nuvem, com um padrão inicial caso ninguém tenha configurado ainda.
+            const CATALOGO_CONTATOS_PADRAO = [
+                { icone: '🌐', texto: 'www.friganso.com.br' },
+                { icone: '📷', texto: '@frigansoalimentos' },
+                { icone: '📘', texto: 'friganso' },
+                { icone: '📞', texto: '(21) 2757-5710' },
+            ];
+            const [catalogoContatos, setCatalogoContatosState] = useState(CATALOGO_CONTATOS_PADRAO);
+            useEffect(() => {
+                const unsub = db.collection('system_data').doc('catalogo_config').onSnapshot(d => {
+                    const c = d && d.exists && d.data() && d.data().contatos;
+                    setCatalogoContatosState(Array.isArray(c) && c.length ? c : CATALOGO_CONTATOS_PADRAO);
+                }, () => {});
+                return () => unsub();
+            }, []);
+            const salvarCatalogoContatos = async (contatos) => {
+                try { await db.collection('system_data').doc('catalogo_config').set({ contatos }, { merge: true }); }
+                catch (e) { showMessage('Erro ao salvar o rodapé.', 'error'); }
+            };
+
             // 🧾 O histórico de compras NÃO carrega mais no boot (era pesado).
             // Agora é carregado só dentro da tela "Fazer Pedido", quando você abre ela.
             
@@ -5965,7 +6030,7 @@
                     case 'changelog': return <AtualizacoesScreen />;
                     case 'profile': return <ProfileAdminScreen user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} valorMaximo={valorMaximo} setValorMaximoProduto={setValorMaximoProduto} />;
-                    case 'cardapio': return <CardapioScreen products={products} produtoFotos={produtoFotos} showMessage={showMessage} />;
+                    case 'cardapio': return <CardapioScreen products={products} produtoFotos={produtoFotos} showMessage={showMessage} catalogoContatos={catalogoContatos} salvarCatalogoContatos={salvarCatalogoContatos} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
                     case 'historico': return <HistoricoScreen user={user} showMessage={showMessage} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
