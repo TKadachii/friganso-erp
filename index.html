@@ -337,7 +337,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 121;
+        const APP_BUILD_VERSION = 122;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3619,6 +3619,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.0.0', data: '07/07/2026', areas: ['site'], itens: [
+                'Cardápio: novo "🖼️ Montar Catálogo" — escolhe produtos com foto, gera automaticamente uma imagem de "Ofertas do Dia" pronta pra baixar e postar, com rodapé/validade automáticos',
+            ]},
             { versao: '1.9.1', data: '07/07/2026', areas: ['site'], itens: [
                 'Cardápio: upload de foto agora abre um recorte interativo (arrastar pra posicionar + zoom), igual foto de perfil do WhatsApp, em vez de subir a imagem direto',
             ]},
@@ -3817,17 +3820,159 @@
             );
         };
 
+        // 🖼️ Gerador de Catálogo — monta uma imagem tipo panfleto de "Ofertas do Dia" com os produtos
+        // escolhidos (foto do Cardápio + nome + preço), pronta pra baixar e postar. Tudo automático:
+        // rodapé/logo fixos, validade calculada pro dia seguinte (preço muda todo dia).
+        const roundRectPath = (ctx, x, y, w, h, r) => {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.arcTo(x + w, y, x + w, y + h, r);
+            ctx.arcTo(x + w, y + h, x, y + h, r);
+            ctx.arcTo(x, y + h, x, y, r);
+            ctx.arcTo(x, y, x + w, y, r);
+            ctx.closePath();
+        };
+        const carregarImagemCanvas = (src, cors) => new Promise((resolve, reject) => {
+            const img = new Image();
+            if (cors) img.crossOrigin = 'anonymous';
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = src;
+        });
+        // Quebra texto em várias linhas dentro de maxWidth; devolve o Y depois da última linha.
+        const quebrarTexto = (ctx, texto, x, y, maxWidth, lineHeight, maxLinhas) => {
+            const palavras = texto.split(' ');
+            let linha = '', linhas = 0;
+            for (let i = 0; i < palavras.length; i++) {
+                const teste = linha ? linha + ' ' + palavras[i] : palavras[i];
+                if (ctx.measureText(teste).width > maxWidth && linha) {
+                    ctx.fillText(linha, x, y);
+                    linha = palavras[i]; y += lineHeight; linhas++;
+                    if (maxLinhas && linhas >= maxLinhas - 1) { linha += (i < palavras.length - 1 ? '…' : ''); break; }
+                } else linha = teste;
+            }
+            ctx.fillText(linha, x, y);
+            return y + lineHeight;
+        };
+        const LOGO_GANSO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><g transform="translate(-10 3) scale(1.9)" fill="#FB4B3A"><path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z"/><path d="M89,19 L97,17 L91,24 Z"/></g></svg>`;
+        const gerarCatalogoImagem = async (produtosSelecionados, produtoFotos) => {
+            const COLS = 2, CELL_W = 560, CELL_H = 250, PAD = 44, HEADER_H = 200, FOOTER_H = 110, FOTO = 170;
+            const rows = Math.ceil(produtosSelecionados.length / COLS);
+            const cardW = COLS * CELL_W + 40;
+            const W = cardW + PAD * 2;
+            const cardH = rows * CELL_H + 40;
+            const H = HEADER_H + cardH + FOOTER_H + 70;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            const ctx = canvas.getContext('2d');
+
+            // fundo gradiente quente (clima "oferta")
+            const bgGrad = ctx.createLinearGradient(0, 0, W, H);
+            bgGrad.addColorStop(0, '#f6dcae'); bgGrad.addColorStop(1, '#e2a85e');
+            ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
+
+            // cabeçalho: selo "OFERTAS DO DIA"
+            ctx.fillStyle = '#B91C1C';
+            roundRectPath(ctx, PAD - 10, 34, 380, 74, 18); ctx.fill();
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 34px system-ui, sans-serif'; ctx.textAlign = 'left';
+            ctx.fillText('🔥 OFERTAS DO DIA', PAD + 12, 82);
+
+            // logo + nome (canto direito)
+            try {
+                const logo = await carregarImagemCanvas('data:image/svg+xml;base64,' + btoa(LOGO_GANSO_SVG));
+                ctx.drawImage(logo, W - PAD - 78, 24, 78, 78);
+            } catch (e) {}
+            ctx.fillStyle = '#7f1d1d'; ctx.font = 'bold 30px system-ui, sans-serif'; ctx.textAlign = 'right';
+            ctx.fillText('FRIGANSO', W - PAD, 122);
+            ctx.textAlign = 'left';
+
+            // cartão branco com os produtos
+            const cardX = PAD, cardY = HEADER_H;
+            roundRectPath(ctx, cardX, cardY, cardW, cardH, 26);
+            ctx.fillStyle = '#ffffff'; ctx.fill();
+
+            for (let i = 0; i < produtosSelecionados.length; i++) {
+                const p = produtosSelecionados[i];
+                const col = i % COLS, row = Math.floor(i / COLS);
+                const x = cardX + 20 + col * CELL_W, y = cardY + 20 + row * CELL_H;
+                const fotoUrl = produtoFotos && produtoFotos[String(p.code)];
+                roundRectPath(ctx, x, y, FOTO, FOTO, 14);
+                ctx.fillStyle = '#f1f5f9'; ctx.fill();
+                if (fotoUrl) {
+                    try {
+                        const img = await carregarImagemCanvas(fotoUrl, true);
+                        ctx.save(); roundRectPath(ctx, x, y, FOTO, FOTO, 14); ctx.clip();
+                        // cobre o quadrado mantendo proporção (igual object-fit: cover)
+                        const s = Math.max(FOTO / img.width, FOTO / img.height);
+                        const dw = img.width * s, dh = img.height * s;
+                        ctx.drawImage(img, x + (FOTO - dw) / 2, y + (FOTO - dh) / 2, dw, dh);
+                        ctx.restore();
+                    } catch (e) { /* mantém o placeholder cinza */ }
+                } else {
+                    ctx.fillStyle = '#94a3b8'; ctx.font = '46px system-ui, sans-serif'; ctx.textAlign = 'center';
+                    ctx.fillText('🍖', x + FOTO / 2, y + FOTO / 2 + 16); ctx.textAlign = 'left';
+                }
+                const tx = x + FOTO + 22, tw = CELL_W - FOTO - 40;
+                ctx.fillStyle = '#0f172a'; ctx.font = 'bold 21px system-ui, sans-serif';
+                const yDepoisNome = quebrarTexto(ctx, (p.name || '').toUpperCase(), tx, y + 34, tw, 26, 3);
+                const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
+                ctx.fillStyle = '#B91C1C'; ctx.font = 'bold 25px system-ui, sans-serif';
+                ctx.fillText(formatPrice(unitFinalPrice) + '/kg', tx, Math.min(yDepoisNome + 10, y + FOTO - 6));
+
+                // linha pontilhada separando as linhas de produtos (não desenha depois da última linha)
+                if (col === COLS - 1 && row < rows - 1) {
+                    ctx.setLineDash([7, 7]); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.moveTo(cardX + 20, y + CELL_H - 12); ctx.lineTo(cardX + cardW - 20, y + CELL_H - 12); ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
+
+            // avisinho — preço muda todo dia
+            ctx.fillStyle = '#78350f'; ctx.font = '15px system-ui, sans-serif';
+            quebrarTexto(ctx, '*Preços sujeitos a alteração diária. Confirme com seu vendedor antes de fechar o pedido.', cardX, cardY + cardH + 30, cardW, 20, 2);
+
+            // rodapé fixo (contato) + validade (dia seguinte, já que o preço muda todo dia)
+            const footerY = H - FOOTER_H;
+            ctx.fillStyle = '#B91C1C'; ctx.fillRect(0, footerY, W, FOOTER_H);
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 18px system-ui, sans-serif'; ctx.textAlign = 'left';
+            ctx.fillText('🌐 www.friganso.com.br   📷 @frigansoalimentos   📘 friganso   📞 (21) 2757-5710', PAD, footerY + FOOTER_H / 2 + 6);
+            const amanha = new Date(Date.now() + 86400000);
+            ctx.textAlign = 'right'; ctx.font = 'bold 16px system-ui, sans-serif';
+            ctx.fillText('Válido para ' + amanha.toLocaleDateString('pt-BR'), W - PAD, footerY + FOOTER_H / 2 + 6);
+            ctx.textAlign = 'left';
+
+            return canvas;
+        };
+
         // 🍽️ Cardápio: cada produto pode ter uma foto, compartilhada com todo mundo que usa o sistema.
         const CardapioScreen = ({ products, produtoFotos, showMessage }) => {
             const [busca, setBusca] = useState('');
             const [enviando, setEnviando] = useState({}); // { [code]: true } enquanto sobe a foto
             const [crop, setCrop] = useState(null); // { code, file } enquanto o modal de recorte está aberto
+            // 🖼️ Modo "montar catálogo": toca no card pra marcar/desmarcar em vez de trocar a foto.
+            const [modoCatalogo, setModoCatalogo] = useState(false);
+            const [selecionados, setSelecionados] = useState(new Set());
+            const [gerando, setGerando] = useState(false);
+            const [posterUrl, setPosterUrl] = useState(null);
             const resultados = useMemo(() => {
                 const q = busca.trim();
                 const ativos = (products || []).filter(p => p.ativo !== false);
                 if (!q) return ativos.slice(0, 60);
                 return ativos.filter(p => matchProduto(p, q)).slice(0, 60);
             }, [products, busca]);
+
+            const toggleSelecionado = (code) => setSelecionados(prev => { const n = new Set(prev); n.has(code) ? n.delete(code) : n.add(code); return n; });
+            const gerarCatalogo = async () => {
+                const lista = products.filter(p => selecionados.has(String(p.code)));
+                if (!lista.length) { showMessage('Escolha pelo menos 1 produto.', 'error'); return; }
+                setGerando(true);
+                try {
+                    const canvas = await gerarCatalogoImagem(lista, produtoFotos);
+                    canvas.toBlob(blob => { if (blob) setPosterUrl(URL.createObjectURL(blob)); }, 'image/png');
+                } catch (e) { showMessage('Erro ao gerar o catálogo.', 'error'); }
+                finally { setGerando(false); }
+            };
 
             // Só ESCOLHE o arquivo aqui — quem faz o recorte (arrastar/zoom, estilo WhatsApp) é o CropFotoModal.
             const escolherFoto = (code) => {
@@ -3860,10 +4005,33 @@
             return (
                 <div className="animate-in fade-in space-y-6">
                     {crop && <CropFotoModal file={crop.file} onCancel={() => setCrop(null)} onConfirm={confirmarCrop} />}
+                    {posterUrl && (
+                        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-5 flex flex-col items-center max-h-[90vh]">
+                                <h3 className="font-bold text-slate-800 mb-3">Catálogo pronto! 🎉</h3>
+                                <img src={posterUrl} alt="Catálogo gerado" className="rounded-xl border border-slate-200 max-h-[65vh] object-contain" />
+                                <div className="flex gap-3 w-full mt-4">
+                                    <button onClick={() => setPosterUrl(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
+                                    <a href={posterUrl} download={`friganso-ofertas-${diaStrGlobal(new Date())}.png`} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl transition-colors text-center">⬇️ Baixar</a>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
-                        <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2 mb-1"><span>🍽️</span> Cardápio</h1>
-                        <p className="text-slate-500 text-sm mb-4">Foto de cada produto — qualquer conta pode subir ou trocar, e todo mundo vê.</p>
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                            <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2"><span>🍽️</span> Cardápio</h1>
+                            <button onClick={() => { setModoCatalogo(v => !v); setSelecionados(new Set()); }} className={`px-4 py-2 rounded-xl font-bold text-sm transition-colors ${modoCatalogo ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+                                {modoCatalogo ? '✕ Cancelar seleção' : '🖼️ Montar Catálogo'}
+                            </button>
+                        </div>
+                        <p className="text-slate-500 text-sm mb-4">{modoCatalogo ? 'Toque nos produtos que quer colocar no catálogo de ofertas.' : 'Foto de cada produto — qualquer conta pode subir ou trocar, e todo mundo vê.'}</p>
                         <input type="text" placeholder="Buscar por código ou nome..." value={busca} onChange={e => setBusca(e.target.value)} className="w-full p-4 rounded-xl border border-slate-200 outline-none focus:border-rose-500 font-bold bg-slate-50" />
+                        {modoCatalogo && (
+                            <div className="mt-3 flex items-center justify-between bg-rose-50 border border-rose-200 rounded-xl p-3">
+                                <span className="text-sm font-bold text-rose-800">{selecionados.size} produto(s) selecionado(s)</span>
+                                <button onClick={gerarCatalogo} disabled={selecionados.size === 0 || gerando} className="bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors">{gerando ? 'Gerando...' : '🖼️ Gerar Catálogo'}</button>
+                            </div>
+                        )}
                     </header>
                     {products.length === 0 ? (
                         <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-400">Carregue a Tabela do Dia primeiro pra ver os produtos aqui.</div>
@@ -3872,18 +4040,23 @@
                             {resultados.map(p => {
                                 const foto = produtoFotos && produtoFotos[String(p.code)];
                                 const subindo = !!enviando[String(p.code)];
+                                const marcado = selecionados.has(String(p.code));
                                 return (
-                                    <div key={p.code} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-                                        <button onClick={() => escolherFoto(p.code)} disabled={subindo} className="relative aspect-square bg-slate-100 flex items-center justify-center overflow-hidden group">
+                                    <div key={p.code} className={`bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col ${marcado ? 'border-rose-500 ring-2 ring-rose-200' : 'border-slate-200'}`}>
+                                        <button onClick={() => modoCatalogo ? toggleSelecionado(String(p.code)) : escolherFoto(p.code)} disabled={subindo} className="relative aspect-square bg-slate-100 flex items-center justify-center overflow-hidden group">
                                             {foto ? <img src={foto} alt={p.name} className="w-full h-full object-cover" /> : <span className="text-3xl text-slate-300">🍖</span>}
-                                            <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/40 transition-colors flex items-center justify-center">
-                                                <span className="opacity-0 group-hover:opacity-100 text-white text-xs font-bold transition-opacity">{subindo ? 'Enviando...' : (foto ? '📷 Trocar foto' : '📷 Adicionar foto')}</span>
-                                            </div>
+                                            {modoCatalogo ? (
+                                                <div className={`absolute top-2 right-2 h-6 w-6 rounded-full border-2 flex items-center justify-center text-xs font-bold ${marcado ? 'bg-rose-600 border-rose-600 text-white' : 'bg-white/80 border-slate-300 text-transparent'}`}>✓</div>
+                                            ) : (
+                                                <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/40 transition-colors flex items-center justify-center">
+                                                    <span className="opacity-0 group-hover:opacity-100 text-white text-xs font-bold transition-opacity">{subindo ? 'Enviando...' : (foto ? '📷 Trocar foto' : '📷 Adicionar foto')}</span>
+                                                </div>
+                                            )}
                                         </button>
                                         <div className="p-3 flex-1 flex flex-col">
                                             <span className="text-[10px] font-mono font-bold text-slate-400">{p.code}</span>
                                             <p className="text-xs font-bold text-slate-700 leading-tight flex-1">{p.name}</p>
-                                            {foto && <button onClick={() => apagarFoto(p.code)} disabled={subindo} className="text-[10px] text-red-500 hover:text-red-700 font-bold mt-1 text-left">🗑️ remover foto</button>}
+                                            {!modoCatalogo && foto && <button onClick={() => apagarFoto(p.code)} disabled={subindo} className="text-[10px] text-red-500 hover:text-red-700 font-bold mt-1 text-left">🗑️ remover foto</button>}
                                         </div>
                                     </div>
                                 );
