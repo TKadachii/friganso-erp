@@ -337,7 +337,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 122;
+        const APP_BUILD_VERSION = 123;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3619,6 +3619,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.0.1', data: '08/07/2026', areas: ['site'], itens: [
+                'Gerador de Catálogo: corrigido bug onde a foto do produto não aparecia na imagem gerada (problema de CORS do Storage) — agora usa uma miniatura própria, sem esse problema',
+                'Cores do catálogo ajustadas pro vermelho da marca Friganso; logo real da empresa usada no cabeçalho (com fallback pro ícone do app se não carregar)',
+            ]},
             { versao: '2.0.0', data: '07/07/2026', areas: ['site'], itens: [
                 'Cardápio: novo "🖼️ Montar Catálogo" — escolhe produtos com foto, gera automaticamente uma imagem de "Ofertas do Dia" pronta pra baixar e postar, com rodapé/validade automáticos',
             ]},
@@ -3725,18 +3729,41 @@
             </div>
         );
 
-        // 📤 Sobe um blob (já cortado/comprimido pelo CropFotoModal) pro Firebase Storage e salva a URL
-        // no Firestore — compartilhado, qualquer conta pode trocar a foto e todo mundo vê na hora.
+        // 🖼️ Miniatura em base64 (data URL) a partir de um Blob — usada SÓ pro Gerador de Catálogo, porque
+        // desenhar a foto do Storage direto num <canvas> exige CORS configurado no bucket (o que o Firebase
+        // não vem com por padrão), e sem isso a imagem simplesmente não aparecia no catálogo gerado. Um
+        // data URL nunca tem problema de CORS, então essa miniatura contorna isso sem mexer em infra.
+        const gerarThumbBase64 = (blob, maxDim = 160, qualidade = 0.55) => new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => {
+                URL.revokeObjectURL(url);
+                const s = Math.min(1, maxDim / Math.max(img.width, img.height));
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(img.width * s); canvas.height = Math.round(img.height * s);
+                canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve(canvas.toDataURL('image/jpeg', qualidade));
+            };
+            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('falha ao gerar miniatura')); };
+            img.src = url;
+        });
+        // 📤 Sobe um blob (já cortado/comprimido pelo CropFotoModal) pro Firebase Storage (foto grande, pra
+        // exibir normal) e salva também uma miniatura base64 num doc por produto (só pro catálogo).
         const subirFotoBlob = async (code, blob) => {
             const ref = storage.ref().child('produto-fotos/' + code + '.jpg');
             await ref.put(blob, { contentType: 'image/jpeg' });
             const url = await ref.getDownloadURL();
             await db.collection('system_data').doc('produto_fotos').set({ fotos: { [code]: url } }, { merge: true });
+            try {
+                const thumb = await gerarThumbBase64(blob);
+                await db.collection('produto_fotos_thumbs').doc(String(code)).set({ thumb });
+            } catch (e) { /* catálogo só mostra placeholder se isso falhar — a foto normal continua ok */ }
             return url;
         };
         const removerFotoProduto = async (code) => {
             try { await storage.ref().child('produto-fotos/' + code + '.jpg').delete(); } catch (e) {}
             await db.collection('system_data').doc('produto_fotos').update({ ['fotos.' + code]: firebase.firestore.FieldValue.delete() }).catch(() => {});
+            await db.collection('produto_fotos_thumbs').doc(String(code)).delete().catch(() => {});
         };
 
         // ✂️ Recorte de foto estilo WhatsApp/Instagram: arrasta pra posicionar, controle deslizante pra
@@ -3855,7 +3882,9 @@
             return y + lineHeight;
         };
         const LOGO_GANSO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><g transform="translate(-10 3) scale(1.9)" fill="#FB4B3A"><path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z"/><path d="M89,19 L97,17 L91,24 Z"/></g></svg>`;
-        const gerarCatalogoImagem = async (produtosSelecionados, produtoFotos) => {
+        const FRIGANSO_RED = '#FB4B3A'; // mesma cor do logo/marca usada no resto do app
+        const FRIGANSO_LOGO_URL = 'https://friganso.com.br/assets/logo-quadrada-RgRpEdHY.webp';
+        const gerarCatalogoImagem = async (produtosSelecionados, thumbsMap) => {
             const COLS = 2, CELL_W = 560, CELL_H = 250, PAD = 44, HEADER_H = 200, FOOTER_H = 110, FOTO = 170;
             const rows = Math.ceil(produtosSelecionados.length / COLS);
             const cardW = COLS * CELL_W + 40;
@@ -3867,22 +3896,27 @@
             canvas.width = W; canvas.height = H;
             const ctx = canvas.getContext('2d');
 
-            // fundo gradiente quente (clima "oferta")
+            // fundo — tema Friganso (vermelho/rosa da marca, clareando pro branco)
             const bgGrad = ctx.createLinearGradient(0, 0, W, H);
-            bgGrad.addColorStop(0, '#f6dcae'); bgGrad.addColorStop(1, '#e2a85e');
+            bgGrad.addColorStop(0, '#fde4e0'); bgGrad.addColorStop(1, '#f7b8ae');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
 
             // cabeçalho: selo "OFERTAS DO DIA"
-            ctx.fillStyle = '#B91C1C';
+            ctx.fillStyle = FRIGANSO_RED;
             roundRectPath(ctx, PAD - 10, 34, 380, 74, 18); ctx.fill();
             ctx.fillStyle = '#fff'; ctx.font = 'bold 34px system-ui, sans-serif'; ctx.textAlign = 'left';
             ctx.fillText('🔥 OFERTAS DO DIA', PAD + 12, 82);
 
-            // logo + nome (canto direito)
+            // logo real da Friganso (canto direito) — se não carregar (ex.: CORS do site deles), usa o ícone do app
             try {
-                const logo = await carregarImagemCanvas('data:image/svg+xml;base64,' + btoa(LOGO_GANSO_SVG));
+                const logo = await carregarImagemCanvas(FRIGANSO_LOGO_URL, true);
                 ctx.drawImage(logo, W - PAD - 78, 24, 78, 78);
-            } catch (e) {}
+            } catch (e) {
+                try {
+                    const logo = await carregarImagemCanvas('data:image/svg+xml;base64,' + btoa(LOGO_GANSO_SVG));
+                    ctx.drawImage(logo, W - PAD - 78, 24, 78, 78);
+                } catch (e2) {}
+            }
             ctx.fillStyle = '#7f1d1d'; ctx.font = 'bold 30px system-ui, sans-serif'; ctx.textAlign = 'right';
             ctx.fillText('FRIGANSO', W - PAD, 122);
             ctx.textAlign = 'left';
@@ -3896,12 +3930,12 @@
                 const p = produtosSelecionados[i];
                 const col = i % COLS, row = Math.floor(i / COLS);
                 const x = cardX + 20 + col * CELL_W, y = cardY + 20 + row * CELL_H;
-                const fotoUrl = produtoFotos && produtoFotos[String(p.code)];
+                const thumb = thumbsMap && thumbsMap[String(p.code)];
                 roundRectPath(ctx, x, y, FOTO, FOTO, 14);
                 ctx.fillStyle = '#f1f5f9'; ctx.fill();
-                if (fotoUrl) {
+                if (thumb) {
                     try {
-                        const img = await carregarImagemCanvas(fotoUrl, true);
+                        const img = await carregarImagemCanvas(thumb); // data URL — nunca dá problema de CORS
                         ctx.save(); roundRectPath(ctx, x, y, FOTO, FOTO, 14); ctx.clip();
                         // cobre o quadrado mantendo proporção (igual object-fit: cover)
                         const s = Math.max(FOTO / img.width, FOTO / img.height);
@@ -3917,7 +3951,7 @@
                 ctx.fillStyle = '#0f172a'; ctx.font = 'bold 21px system-ui, sans-serif';
                 const yDepoisNome = quebrarTexto(ctx, (p.name || '').toUpperCase(), tx, y + 34, tw, 26, 3);
                 const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
-                ctx.fillStyle = '#B91C1C'; ctx.font = 'bold 25px system-ui, sans-serif';
+                ctx.fillStyle = FRIGANSO_RED; ctx.font = 'bold 25px system-ui, sans-serif';
                 ctx.fillText(formatPrice(unitFinalPrice) + '/kg', tx, Math.min(yDepoisNome + 10, y + FOTO - 6));
 
                 // linha pontilhada separando as linhas de produtos (não desenha depois da última linha)
@@ -3934,7 +3968,7 @@
 
             // rodapé fixo (contato) + validade (dia seguinte, já que o preço muda todo dia)
             const footerY = H - FOOTER_H;
-            ctx.fillStyle = '#B91C1C'; ctx.fillRect(0, footerY, W, FOOTER_H);
+            ctx.fillStyle = FRIGANSO_RED; ctx.fillRect(0, footerY, W, FOOTER_H);
             ctx.fillStyle = '#fff'; ctx.font = 'bold 18px system-ui, sans-serif'; ctx.textAlign = 'left';
             ctx.fillText('🌐 www.friganso.com.br   📷 @frigansoalimentos   📘 friganso   📞 (21) 2757-5710', PAD, footerY + FOOTER_H / 2 + 6);
             const amanha = new Date(Date.now() + 86400000);
@@ -3968,7 +4002,16 @@
                 if (!lista.length) { showMessage('Escolha pelo menos 1 produto.', 'error'); return; }
                 setGerando(true);
                 try {
-                    const canvas = await gerarCatalogoImagem(lista, produtoFotos);
+                    // busca a miniatura de cada produto selecionado (só quem tem foto) — evita o problema
+                    // de CORS que a URL grande do Storage dá quando desenhada direto no canvas.
+                    const comFoto = lista.filter(p => produtoFotos && produtoFotos[String(p.code)]);
+                    const pares = await Promise.all(comFoto.map(p =>
+                        db.collection('produto_fotos_thumbs').doc(String(p.code)).get()
+                            .then(d => [String(p.code), d.exists ? d.data().thumb : null])
+                            .catch(() => [String(p.code), null])
+                    ));
+                    const thumbsMap = Object.fromEntries(pares);
+                    const canvas = await gerarCatalogoImagem(lista, thumbsMap);
                     canvas.toBlob(blob => { if (blob) setPosterUrl(URL.createObjectURL(blob)); }, 'image/png');
                 } catch (e) { showMessage('Erro ao gerar o catálogo.', 'error'); }
                 finally { setGerando(false); }
