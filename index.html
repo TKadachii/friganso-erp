@@ -337,7 +337,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 124;
+        const APP_BUILD_VERSION = 125;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3619,6 +3619,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.2.0', data: '08/07/2026', areas: ['site'], itens: [
+                'Gerador de Catálogo reformulado pro formato Status do WhatsApp: imagem sempre 9:16 (1080x1920, Full HD celular)',
+                'Novos presets de quantidade (4, 8, 16, 32 itens por imagem) — passou do limite? gera várias páginas automaticamente, com navegação e download em lote no preview',
+            ]},
             { versao: '2.1.0', data: '08/07/2026', areas: ['site'], itens: [
                 'Gerador de Catálogo: rodapé de contato agora é editável ("⚙️ Editar rodapé") — muda, apaga ou adiciona linhas, salvo compartilhado pra todas as contas',
             ]},
@@ -3887,13 +3891,23 @@
         const LOGO_GANSO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><g transform="translate(-10 3) scale(1.9)" fill="#FB4B3A"><path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z"/><path d="M89,19 L97,17 L91,24 Z"/></g></svg>`;
         const FRIGANSO_RED = '#FB4B3A'; // mesma cor do logo/marca usada no resto do app
         const FRIGANSO_LOGO_URL = 'https://friganso.com.br/assets/logo-quadrada-RgRpEdHY.webp';
-        const gerarCatalogoImagem = async (produtosSelecionados, thumbsMap, contatos) => {
-            const COLS = 2, CELL_W = 560, CELL_H = 250, PAD = 44, HEADER_H = 200, FOOTER_H = 110, FOTO = 170;
-            const rows = Math.ceil(produtosSelecionados.length / COLS);
-            const cardW = COLS * CELL_W + 40;
-            const W = cardW + PAD * 2;
-            const cardH = rows * CELL_H + 40;
-            const H = HEADER_H + cardH + FOOTER_H + 70;
+        // 📱 Presets de quantidade — pensado pra Status do WhatsApp: imagem sempre 9:16 (Full HD celular,
+        // 1080x1920), então quanto mais itens no preset, menor cada célula da grade fica.
+        const CATALOGO_PRESETS = [
+            { id: 4, label: '4 itens', cols: 2, rows: 2 },
+            { id: 8, label: '8 itens', cols: 2, rows: 4 },
+            { id: 16, label: '16 itens', cols: 4, rows: 4 },
+            { id: 32, label: '32 itens', cols: 4, rows: 8 },
+        ];
+        // Gera UMA página (imagem 1080x1920). Se produtosSelecionados tiver mais itens que o preset
+        // comporta, quem chama (gerarCatalogo no CardapioScreen) já divide em várias páginas antes.
+        const gerarCatalogoImagem = async (produtosPagina, thumbsMap, contatos, preset, paginaInfo) => {
+            const W = 1080, H = 1920, PAD = 32;
+            const HEADER_H = 170, FOOTER_H = 110, DISCLAIMER_H = 46;
+            const { cols, rows } = preset;
+            const gridX = PAD, gridY = HEADER_H;
+            const gridW = W - PAD * 2, gridH = H - HEADER_H - FOOTER_H - DISCLAIMER_H;
+            const cellW = gridW / cols, cellH = gridH / rows;
 
             const canvas = document.createElement('canvas');
             canvas.width = W; canvas.height = H;
@@ -3904,81 +3918,83 @@
             bgGrad.addColorStop(0, '#fde4e0'); bgGrad.addColorStop(1, '#f7b8ae');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
 
-            // cabeçalho: selo "OFERTAS DO DIA"
+            // cabeçalho: selo "OFERTAS DO DIA" + validade (dia seguinte, já que o preço muda todo dia)
             ctx.fillStyle = FRIGANSO_RED;
-            roundRectPath(ctx, PAD - 10, 34, 380, 74, 18); ctx.fill();
-            ctx.fillStyle = '#fff'; ctx.font = 'bold 34px system-ui, sans-serif'; ctx.textAlign = 'left';
-            ctx.fillText('🔥 OFERTAS DO DIA', PAD + 12, 82);
+            roundRectPath(ctx, PAD - 8, 22, 300, 58, 16); ctx.fill();
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 26px system-ui, sans-serif'; ctx.textAlign = 'left';
+            ctx.fillText('🔥 OFERTAS DO DIA', PAD + 10, 60);
+            const amanha = new Date(Date.now() + 86400000);
+            ctx.fillStyle = '#7f1d1d'; ctx.font = 'bold 16px system-ui, sans-serif';
+            let linhaInfo = 'Válido para ' + amanha.toLocaleDateString('pt-BR');
+            if (paginaInfo && paginaInfo.total > 1) linhaInfo += `   ·   página ${paginaInfo.atual}/${paginaInfo.total}`;
+            ctx.fillText(linhaInfo, PAD, 108);
 
             // logo real da Friganso (canto direito) — se não carregar (ex.: CORS do site deles), usa o ícone do app
             try {
                 const logo = await carregarImagemCanvas(FRIGANSO_LOGO_URL, true);
-                ctx.drawImage(logo, W - PAD - 78, 24, 78, 78);
+                ctx.drawImage(logo, W - PAD - 62, 20, 62, 62);
             } catch (e) {
                 try {
                     const logo = await carregarImagemCanvas('data:image/svg+xml;base64,' + btoa(LOGO_GANSO_SVG));
-                    ctx.drawImage(logo, W - PAD - 78, 24, 78, 78);
+                    ctx.drawImage(logo, W - PAD - 62, 20, 62, 62);
                 } catch (e2) {}
             }
-            ctx.fillStyle = '#7f1d1d'; ctx.font = 'bold 30px system-ui, sans-serif'; ctx.textAlign = 'right';
-            ctx.fillText('FRIGANSO', W - PAD, 122);
+            ctx.fillStyle = '#7f1d1d'; ctx.font = 'bold 20px system-ui, sans-serif'; ctx.textAlign = 'right';
+            ctx.fillText('FRIGANSO', W - PAD, 106);
             ctx.textAlign = 'left';
 
-            // cartão branco com os produtos
-            const cardX = PAD, cardY = HEADER_H;
-            roundRectPath(ctx, cardX, cardY, cardW, cardH, 26);
+            // cartão branco atrás da grade de produtos
+            roundRectPath(ctx, gridX - 14, gridY - 14, gridW + 28, gridH + 28, 22);
             ctx.fillStyle = '#ffffff'; ctx.fill();
 
-            for (let i = 0; i < produtosSelecionados.length; i++) {
-                const p = produtosSelecionados[i];
-                const col = i % COLS, row = Math.floor(i / COLS);
-                const x = cardX + 20 + col * CELL_W, y = cardY + 20 + row * CELL_H;
+            const fotoSize = Math.max(30, Math.min(cellW - 14, cellH * 0.6));
+            const fontNome = Math.max(10, Math.min(16, cellW / 15));
+            const fontPreco = Math.max(11, Math.min(18, cellW / 13));
+            for (let i = 0; i < produtosPagina.length && i < cols * rows; i++) {
+                const p = produtosPagina[i];
+                const col = i % cols, row = Math.floor(i / cols);
+                const cx = gridX + col * cellW, cy = gridY + row * cellH;
+                const fx = cx + (cellW - fotoSize) / 2, fy = cy + 8;
                 const thumb = thumbsMap && thumbsMap[String(p.code)];
-                roundRectPath(ctx, x, y, FOTO, FOTO, 14);
+                roundRectPath(ctx, fx, fy, fotoSize, fotoSize, 10);
                 ctx.fillStyle = '#f1f5f9'; ctx.fill();
                 if (thumb) {
                     try {
                         const img = await carregarImagemCanvas(thumb); // data URL — nunca dá problema de CORS
-                        ctx.save(); roundRectPath(ctx, x, y, FOTO, FOTO, 14); ctx.clip();
-                        // cobre o quadrado mantendo proporção (igual object-fit: cover)
-                        const s = Math.max(FOTO / img.width, FOTO / img.height);
+                        ctx.save(); roundRectPath(ctx, fx, fy, fotoSize, fotoSize, 10); ctx.clip();
+                        const s = Math.max(fotoSize / img.width, fotoSize / img.height);
                         const dw = img.width * s, dh = img.height * s;
-                        ctx.drawImage(img, x + (FOTO - dw) / 2, y + (FOTO - dh) / 2, dw, dh);
+                        ctx.drawImage(img, fx + (fotoSize - dw) / 2, fy + (fotoSize - dh) / 2, dw, dh);
                         ctx.restore();
                     } catch (e) { /* mantém o placeholder cinza */ }
                 } else {
-                    ctx.fillStyle = '#94a3b8'; ctx.font = '46px system-ui, sans-serif'; ctx.textAlign = 'center';
-                    ctx.fillText('🍖', x + FOTO / 2, y + FOTO / 2 + 16); ctx.textAlign = 'left';
+                    ctx.fillStyle = '#94a3b8'; ctx.font = `${Math.round(fotoSize * 0.32)}px system-ui, sans-serif`; ctx.textAlign = 'center';
+                    ctx.fillText('🍖', fx + fotoSize / 2, fy + fotoSize / 2 + fotoSize * 0.11); ctx.textAlign = 'left';
                 }
-                const tx = x + FOTO + 22, tw = CELL_W - FOTO - 40;
-                ctx.fillStyle = '#0f172a'; ctx.font = 'bold 21px system-ui, sans-serif';
-                const yDepoisNome = quebrarTexto(ctx, (p.name || '').toUpperCase(), tx, y + 34, tw, 26, 3);
+                // nome (1 linha, corta com "…" se não couber — célula pequena demais pra quebrar linha nos presets maiores)
+                ctx.textAlign = 'center';
+                let nome = (p.name || '').toUpperCase();
+                ctx.font = `bold ${fontNome}px system-ui, sans-serif`;
+                while (ctx.measureText(nome).width > cellW - 6 && nome.length > 3) nome = nome.slice(0, -2) + '…';
+                const nomeY = fy + fotoSize + fontNome + 4;
+                ctx.fillStyle = '#0f172a'; ctx.fillText(nome, cx + cellW / 2, nomeY);
                 const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
-                ctx.fillStyle = FRIGANSO_RED; ctx.font = 'bold 25px system-ui, sans-serif';
-                ctx.fillText(formatPrice(unitFinalPrice) + '/kg', tx, Math.min(yDepoisNome + 10, y + FOTO - 6));
-
-                // linha pontilhada separando as linhas de produtos (não desenha depois da última linha)
-                if (col === COLS - 1 && row < rows - 1) {
-                    ctx.setLineDash([7, 7]); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2;
-                    ctx.beginPath(); ctx.moveTo(cardX + 20, y + CELL_H - 12); ctx.lineTo(cardX + cardW - 20, y + CELL_H - 12); ctx.stroke();
-                    ctx.setLineDash([]);
-                }
+                ctx.fillStyle = FRIGANSO_RED; ctx.font = `bold ${fontPreco}px system-ui, sans-serif`;
+                ctx.fillText(formatPrice(unitFinalPrice) + '/kg', cx + cellW / 2, nomeY + fontPreco + 2);
+                ctx.textAlign = 'left';
             }
 
             // avisinho — preço muda todo dia
-            ctx.fillStyle = '#78350f'; ctx.font = '15px system-ui, sans-serif';
-            quebrarTexto(ctx, '*Preços sujeitos a alteração diária. Confirme com seu vendedor antes de fechar o pedido.', cardX, cardY + cardH + 30, cardW, 20, 2);
+            ctx.fillStyle = '#78350f'; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('*Preços sujeitos a alteração diária. Confirme com seu vendedor.', W / 2, gridY + gridH + 28);
+            ctx.textAlign = 'left';
 
-            // rodapé fixo (contato) + validade (dia seguinte, já que o preço muda todo dia)
+            // rodapé fixo (contato)
             const footerY = H - FOOTER_H;
             ctx.fillStyle = FRIGANSO_RED; ctx.fillRect(0, footerY, W, FOOTER_H);
-            ctx.fillStyle = '#fff'; ctx.font = 'bold 18px system-ui, sans-serif'; ctx.textAlign = 'left';
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 15px system-ui, sans-serif'; ctx.textAlign = 'left';
             const linhaContatos = (contatos && contatos.length ? contatos : []).map(c => `${c.icone} ${c.texto}`).join('   ');
-            ctx.fillText(linhaContatos, PAD, footerY + FOOTER_H / 2 + 6);
-            const amanha = new Date(Date.now() + 86400000);
-            ctx.textAlign = 'right'; ctx.font = 'bold 16px system-ui, sans-serif';
-            ctx.fillText('Válido para ' + amanha.toLocaleDateString('pt-BR'), W - PAD, footerY + FOOTER_H / 2 + 6);
-            ctx.textAlign = 'left';
+            quebrarTexto(ctx, linhaContatos, PAD, footerY + 32, W - PAD * 2, 22, 3);
 
             return canvas;
         };
@@ -3995,7 +4011,9 @@
             const [modoCatalogo, setModoCatalogo] = useState(false);
             const [selecionados, setSelecionados] = useState(new Set());
             const [gerando, setGerando] = useState(false);
-            const [posterUrl, setPosterUrl] = useState(null);
+            const [posterUrls, setPosterUrls] = useState(null); // array de URLs, uma por página
+            const [paginaAtual, setPaginaAtual] = useState(0);
+            const [presetId, setPresetId] = useState(8);
             const resultados = useMemo(() => {
                 const q = busca.trim();
                 const ativos = (products || []).filter(p => p.ativo !== false);
@@ -4009,6 +4027,8 @@
                 if (!lista.length) { showMessage('Escolha pelo menos 1 produto.', 'error'); return; }
                 setGerando(true);
                 try {
+                    const preset = CATALOGO_PRESETS.find(p => p.id === presetId) || CATALOGO_PRESETS[1];
+                    const porPagina = preset.cols * preset.rows;
                     // busca a miniatura de cada produto selecionado (só quem tem foto) — evita o problema
                     // de CORS que a URL grande do Storage dá quando desenhada direto no canvas.
                     const comFoto = lista.filter(p => produtoFotos && produtoFotos[String(p.code)]);
@@ -4018,8 +4038,17 @@
                             .catch(() => [String(p.code), null])
                     ));
                     const thumbsMap = Object.fromEntries(pares);
-                    const canvas = await gerarCatalogoImagem(lista, thumbsMap, catalogoContatos);
-                    canvas.toBlob(blob => { if (blob) setPosterUrl(URL.createObjectURL(blob)); }, 'image/png');
+                    // 🧩 se passar da capacidade do preset, divide em várias páginas (imagens separadas)
+                    const totalPaginas = Math.ceil(lista.length / porPagina);
+                    const urls = [];
+                    for (let pg = 0; pg < totalPaginas; pg++) {
+                        const fatia = lista.slice(pg * porPagina, (pg + 1) * porPagina);
+                        const canvas = await gerarCatalogoImagem(fatia, thumbsMap, catalogoContatos, preset, { atual: pg + 1, total: totalPaginas });
+                        const url = await new Promise(res => canvas.toBlob(b => res(b ? URL.createObjectURL(b) : null), 'image/png'));
+                        if (url) urls.push(url);
+                    }
+                    if (!urls.length) { showMessage('Erro ao gerar o catálogo.', 'error'); return; }
+                    setPosterUrls(urls); setPaginaAtual(0);
                 } catch (e) { showMessage('Erro ao gerar o catálogo.', 'error'); }
                 finally { setGerando(false); }
             };
@@ -4089,15 +4118,28 @@
                             </div>
                         </div>
                     )}
-                    {posterUrl && (
+                    {posterUrls && posterUrls.length > 0 && (
                         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
-                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-5 flex flex-col items-center max-h-[90vh]">
-                                <h3 className="font-bold text-slate-800 mb-3">Catálogo pronto! 🎉</h3>
-                                <img src={posterUrl} alt="Catálogo gerado" className="rounded-xl border border-slate-200 max-h-[65vh] object-contain" />
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-5 flex flex-col items-center max-h-[92vh]">
+                                <h3 className="font-bold text-slate-800 mb-1">Catálogo pronto! 🎉</h3>
+                                {posterUrls.length > 1 && <p className="text-xs text-slate-400 mb-2">Página {paginaAtual + 1} de {posterUrls.length}</p>}
+                                <img src={posterUrls[paginaAtual]} alt={`Catálogo página ${paginaAtual + 1}`} className="rounded-xl border border-slate-200 max-h-[62vh] object-contain" />
+                                {posterUrls.length > 1 && (
+                                    <div className="flex items-center gap-3 mt-3">
+                                        <button onClick={() => setPaginaAtual(p => Math.max(0, p - 1))} disabled={paginaAtual === 0} className="h-9 w-9 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-40 font-bold">‹</button>
+                                        <div className="flex gap-1.5">
+                                            {posterUrls.map((_, i) => <button key={i} onClick={() => setPaginaAtual(i)} className={`h-2.5 w-2.5 rounded-full ${i === paginaAtual ? 'bg-rose-700' : 'bg-slate-200'}`} />)}
+                                        </div>
+                                        <button onClick={() => setPaginaAtual(p => Math.min(posterUrls.length - 1, p + 1))} disabled={paginaAtual === posterUrls.length - 1} className="h-9 w-9 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-40 font-bold">›</button>
+                                    </div>
+                                )}
                                 <div className="flex gap-3 w-full mt-4">
-                                    <button onClick={() => setPosterUrl(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
-                                    <a href={posterUrl} download={`friganso-ofertas-${diaStrGlobal(new Date())}.png`} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl transition-colors text-center">⬇️ Baixar</a>
+                                    <button onClick={() => setPosterUrls(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
+                                    <a href={posterUrls[paginaAtual]} download={`friganso-ofertas-${diaStrGlobal(new Date())}-${paginaAtual + 1}.png`} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl transition-colors text-center">⬇️ Baixar {posterUrls.length > 1 ? 'esta' : ''}</a>
                                 </div>
+                                {posterUrls.length > 1 && (
+                                    <button onClick={() => posterUrls.forEach((u, i) => { const a = document.createElement('a'); a.href = u; a.download = `friganso-ofertas-${diaStrGlobal(new Date())}-${i + 1}.png`; a.click(); })} className="w-full mt-2 text-xs font-bold text-rose-700 hover:text-rose-800">⬇️ Baixar todas as {posterUrls.length} páginas</button>
+                                )}
                             </div>
                         </div>
                     )}
@@ -4111,12 +4153,21 @@
                         <p className="text-slate-500 text-sm mb-4">{modoCatalogo ? 'Toque nos produtos que quer colocar no catálogo de ofertas.' : 'Foto de cada produto — qualquer conta pode subir ou trocar, e todo mundo vê.'}</p>
                         <input type="text" placeholder="Buscar por código ou nome..." value={busca} onChange={e => setBusca(e.target.value)} className="w-full p-4 rounded-xl border border-slate-200 outline-none focus:border-rose-500 font-bold bg-slate-50" />
                         {modoCatalogo && (
-                            <div className="mt-3 flex items-center justify-between bg-rose-50 border border-rose-200 rounded-xl p-3 gap-2">
-                                <span className="text-sm font-bold text-rose-800">{selecionados.size} produto(s) selecionado(s)</span>
-                                <div className="flex items-center gap-2">
+                            <div className="mt-3 bg-rose-50 border border-rose-200 rounded-xl p-3 space-y-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-sm font-bold text-rose-800">{selecionados.size} produto(s) selecionado(s)</span>
                                     <button onClick={() => setEditandoRodape(true)} className="bg-white border border-rose-200 hover:bg-rose-100 text-rose-700 px-3 py-2 rounded-lg font-bold text-xs transition-colors">⚙️ Editar rodapé</button>
-                                    <button onClick={gerarCatalogo} disabled={selecionados.size === 0 || gerando} className="bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors">{gerando ? 'Gerando...' : '🖼️ Gerar Catálogo'}</button>
                                 </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-xs font-bold text-rose-700">Itens por imagem:</span>
+                                    {CATALOGO_PRESETS.map(pr => (
+                                        <button key={pr.id} onClick={() => setPresetId(pr.id)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${presetId === pr.id ? 'bg-rose-700 text-white' : 'bg-white border border-rose-200 text-rose-700 hover:bg-rose-100'}`}>{pr.label}</button>
+                                    ))}
+                                </div>
+                                {selecionados.size > (CATALOGO_PRESETS.find(p => p.id === presetId) || {}).cols * (CATALOGO_PRESETS.find(p => p.id === presetId) || {}).rows && (
+                                    <p className="text-[11px] text-amber-700">Passou do preset — vai gerar {Math.ceil(selecionados.size / presetId)} imagens (páginas) automaticamente.</p>
+                                )}
+                                <button onClick={gerarCatalogo} disabled={selecionados.size === 0 || gerando} className="w-full bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg font-bold text-sm transition-colors">{gerando ? 'Gerando...' : '🖼️ Gerar Catálogo'}</button>
                             </div>
                         )}
                     </header>
