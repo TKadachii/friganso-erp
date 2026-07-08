@@ -337,7 +337,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 126;
+        const APP_BUILD_VERSION = 127;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -794,6 +794,27 @@
         };
 
         const ProfileAdminScreen = ({ user, showMessage, setActiveRoute }) => {
+            // 📇 Portfólio do vendedor — dados extras (cargo/tempo de casa/especialidades/whatsapp) pra
+            // gerar o cartão de apresentação (imagem 9:16 pra mandar pro cliente).
+            const [portfolioDados, setPortfolioDados] = useState({ cargo: user.cargo || 'Vendedor Friganso', desde: user.desde || '', especialidades: user.especialidades || '', whatsapp: user.whatsapp || '' });
+            const [salvandoPortfolio, setSalvandoPortfolio] = useState(false);
+            const [gerandoCartao, setGerandoCartao] = useState(false);
+            const [cartaoUrl, setCartaoUrl] = useState(null);
+            const salvarPortfolio = async () => {
+                if (!user.id) { showMessage('Não consegui identificar sua conta. Saia e entre de novo.', 'error'); return; }
+                setSalvandoPortfolio(true);
+                try {
+                    await db.collection('users').doc(user.id).update(portfolioDados);
+                    showMessage('Dados do portfólio salvos!', 'success');
+                } catch (e) { showMessage('Erro ao salvar.', 'error'); } finally { setSalvandoPortfolio(false); }
+            };
+            const gerarCartao = async () => {
+                setGerandoCartao(true);
+                try {
+                    const canvas = await gerarPortfolioImagem(user, portfolioDados);
+                    canvas.toBlob(blob => { if (blob) setCartaoUrl(URL.createObjectURL(blob)); }, 'image/png');
+                } catch (e) { showMessage('Erro ao gerar o cartão.', 'error'); } finally { setGerandoCartao(false); }
+            };
             const [usersList, setUsersList] = useState([]);
             const [loading, setLoading] = useState(false);
             const [installPrompt, setInstallPrompt] = useState(window.__pwaInstallPrompt || null);
@@ -861,6 +882,18 @@
 
             return (
                 <div className="animate-in fade-in space-y-6">
+                    {cartaoUrl && (
+                        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-5 flex flex-col items-center max-h-[92vh]">
+                                <h3 className="font-bold text-slate-800 mb-3">Cartão pronto! 🎉</h3>
+                                <img src={cartaoUrl} alt="Cartão de apresentação" className="rounded-xl border border-slate-200 max-h-[65vh] object-contain" />
+                                <div className="flex gap-3 w-full mt-4">
+                                    <button onClick={() => setCartaoUrl(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
+                                    <a href={cartaoUrl} download={`friganso-cartao-${user.code}.png`} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl transition-colors text-center">⬇️ Baixar</a>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-8">
                         <div className="flex items-center gap-6 mb-6">
                             <div className="h-24 w-24 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold text-3xl shadow-inner border border-rose-200 overflow-hidden">
@@ -873,6 +906,39 @@
                                     Cargo: {user.role} | ID: {user.code}
                                 </span>
                             </div>
+                        </div>
+                    </div>
+
+                    {/* Card do Portfólio (cartão de apresentação) */}
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <div className="flex items-center gap-3 mb-4">
+                            <span className="text-2xl">📇</span>
+                            <div>
+                                <h3 className="text-base font-bold text-slate-800">Meu Portfólio</h3>
+                                <p className="text-sm text-slate-500">Preenche seus dados e gera um cartão de apresentação pra mandar pro cliente.</p>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label className="text-xs font-bold text-slate-500">Cargo/Título</label>
+                                <input type="text" value={portfolioDados.cargo} onChange={e => setPortfolioDados(d => ({ ...d, cargo: e.target.value }))} placeholder="Vendedor Friganso" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500">Trabalha na Friganso desde</label>
+                                <input type="date" value={portfolioDados.desde} onChange={e => setPortfolioDados(d => ({ ...d, desde: e.target.value }))} className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500">WhatsApp de contato</label>
+                                <input type="text" value={portfolioDados.whatsapp} onChange={e => setPortfolioDados(d => ({ ...d, whatsapp: e.target.value }))} placeholder="(21) 99999-9999" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500">Especialidades (separe por vírgula)</label>
+                                <input type="text" value={portfolioDados.especialidades} onChange={e => setPortfolioDados(d => ({ ...d, especialidades: e.target.value }))} placeholder="Açougue, Frios, Peixaria" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                            </div>
+                        </div>
+                        <div className="flex gap-2 mt-4">
+                            <button onClick={salvarPortfolio} disabled={salvandoPortfolio} className="flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold py-2.5 rounded-xl text-sm transition-colors">{salvandoPortfolio ? 'Salvando...' : 'Salvar dados'}</button>
+                            <button onClick={gerarCartao} disabled={gerandoCartao} className="flex-1 bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">{gerandoCartao ? 'Gerando...' : '📇 Gerar Cartão'}</button>
                         </div>
                     </div>
 
@@ -3637,6 +3703,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.3.0', data: '08/07/2026', areas: ['site'], itens: [
+                'Novo "📇 Meu Portfólio" (na tela de Perfil): preenche cargo, tempo de casa, especialidades e WhatsApp, e gera um cartão de apresentação (imagem 9:16) pra mandar pro cliente se apresentar',
+            ]},
             { versao: '2.2.1', data: '08/07/2026', areas: ['site'], itens: [
                 'Resumo manual: corrigido bug onde o preço do item sempre saía com desconto de 3%, mesmo escolhendo Cartão ou Prazo Parcelado (que não têm desconto) — agora respeita a condição de pagamento selecionada',
             ]},
@@ -4016,6 +4085,104 @@
             ctx.fillStyle = '#fff'; ctx.font = 'bold 15px system-ui, sans-serif'; ctx.textAlign = 'left';
             const linhaContatos = (contatos && contatos.length ? contatos : []).map(c => `${c.icone} ${c.texto}`).join('   ');
             quebrarTexto(ctx, linhaContatos, PAD, footerY + 32, W - PAD * 2, 22, 3);
+
+            return canvas;
+        };
+
+        // 📇 Cartão/portfólio do vendedor — imagem 9:16 (mesmo formato do Catálogo) pra mandar pro
+        // cliente se apresentar: foto, nome, cargo, tempo de casa e especialidades.
+        const gerarPortfolioImagem = async (user, dados) => {
+            const W = 1080, H = 1920, PAD = 60;
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            const ctx = canvas.getContext('2d');
+
+            // fundo — vermelho da marca, mais forte que o do Catálogo (cara de "cartão de visita")
+            const bgGrad = ctx.createLinearGradient(0, 0, W, H);
+            bgGrad.addColorStop(0, '#C81E1E'); bgGrad.addColorStop(1, '#7f1d1d');
+            ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
+
+            // logo no topo
+            try {
+                const logo = await carregarImagemCanvas(FRIGANSO_LOGO_URL, true);
+                ctx.drawImage(logo, W / 2 - 44, 70, 88, 88);
+            } catch (e) {
+                try { const logo = await carregarImagemCanvas('data:image/svg+xml;base64,' + btoa(LOGO_GANSO_SVG)); ctx.drawImage(logo, W / 2 - 44, 70, 88, 88); } catch (e2) {}
+            }
+            ctx.fillStyle = '#fecaca'; ctx.font = 'bold 22px system-ui, sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('FRIGANSO', W / 2, 200);
+
+            // foto de perfil (redonda)
+            const fotoR = 190, fotoCx = W / 2, fotoCy = 460;
+            ctx.save();
+            ctx.beginPath(); ctx.arc(fotoCx, fotoCy, fotoR, 0, Math.PI * 2); ctx.closePath();
+            ctx.fillStyle = '#fff'; ctx.fill();
+            ctx.clip();
+            if (user.avatar) {
+                try {
+                    const img = await carregarImagemCanvas(user.avatar, true);
+                    const s = Math.max((fotoR * 2) / img.width, (fotoR * 2) / img.height);
+                    const dw = img.width * s, dh = img.height * s;
+                    ctx.drawImage(img, fotoCx - dw / 2, fotoCy - dh / 2, dw, dh);
+                } catch (e) {
+                    ctx.fillStyle = '#fecaca'; ctx.font = 'bold 140px system-ui, sans-serif'; ctx.textAlign = 'center';
+                    ctx.fillText((user.name || '?').charAt(0).toUpperCase(), fotoCx, fotoCy + 48);
+                }
+            } else {
+                ctx.fillStyle = '#fecaca'; ctx.font = 'bold 140px system-ui, sans-serif'; ctx.textAlign = 'center';
+                ctx.fillText((user.name || '?').charAt(0).toUpperCase(), fotoCx, fotoCy + 48);
+            }
+            ctx.restore();
+            ctx.lineWidth = 6; ctx.strokeStyle = '#ffffff';
+            ctx.beginPath(); ctx.arc(fotoCx, fotoCy, fotoR, 0, Math.PI * 2); ctx.stroke();
+
+            // nome + cargo
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#ffffff'; ctx.font = 'bold 52px system-ui, sans-serif';
+            ctx.fillText(user.name || '', W / 2, 750);
+            ctx.fillStyle = FRIGANSO_RED;
+            roundRectPath(ctx, W / 2 - 190, 780, 380, 56, 28); ctx.fillStyle = '#fff'; ctx.fill();
+            ctx.fillStyle = '#7f1d1d'; ctx.font = 'bold 24px system-ui, sans-serif';
+            ctx.fillText((dados.cargo || 'Vendedor Friganso').toUpperCase(), W / 2, 817);
+
+            // tempo de casa (calculado a partir de "desde")
+            let y = 900;
+            if (dados.desde) {
+                const anos = Math.max(0, Math.floor((Date.now() - new Date(dados.desde + 'T00:00:00').getTime()) / (365.25 * 86400000)));
+                ctx.fillStyle = '#fecaca'; ctx.font = '26px system-ui, sans-serif';
+                ctx.fillText(anos >= 1 ? `Há ${anos} ano${anos > 1 ? 's' : ''} atendendo você` : 'Novo(a) na equipe Friganso', W / 2, y);
+                y += 60;
+            }
+
+            // especialidades (pills)
+            const tags = (dados.especialidades || '').split(',').map(t => t.trim()).filter(Boolean);
+            if (tags.length) {
+                ctx.font = 'bold 22px system-ui, sans-serif';
+                const espacamento = 16;
+                const larguras = tags.map(t => ctx.measureText(t).width + 40);
+                const totalW = larguras.reduce((a, b) => a + b, 0) + espacamento * (tags.length - 1);
+                let tx = W / 2 - totalW / 2;
+                tags.forEach((t, i) => {
+                    const w = larguras[i];
+                    roundRectPath(ctx, tx, y, w, 46, 23);
+                    ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fill();
+                    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+                    ctx.fillText(t, tx + w / 2, y + 31);
+                    tx += w + espacamento;
+                });
+                y += 90;
+            }
+            ctx.textAlign = 'left';
+
+            // rodapé: contato pessoal do vendedor
+            const footerY = H - 200;
+            roundRectPath(ctx, PAD, footerY, W - PAD * 2, 130, 20);
+            ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 28px system-ui, sans-serif'; ctx.textAlign = 'center';
+            if (dados.whatsapp) ctx.fillText('📱 ' + dados.whatsapp, W / 2, footerY + 55);
+            ctx.font = '20px system-ui, sans-serif'; ctx.fillStyle = '#fecaca';
+            ctx.fillText('Fale comigo pra fazer seu pedido!', W / 2, footerY + 95);
+            ctx.textAlign = 'left';
 
             return canvas;
         };
