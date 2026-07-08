@@ -337,7 +337,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 120;
+        const APP_BUILD_VERSION = 121;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3619,6 +3619,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '1.9.1', data: '07/07/2026', areas: ['site'], itens: [
+                'Cardápio: upload de foto agora abre um recorte interativo (arrastar pra posicionar + zoom), igual foto de perfil do WhatsApp, em vez de subir a imagem direto',
+            ]},
             { versao: '1.9.0', data: '07/07/2026', areas: ['site'], itens: [
                 'Nova aba "🍽️ Cardápio": foto de cada produto, compartilhada entre todas as contas — qualquer conta pode subir ou trocar. Imagem é comprimida automaticamente antes de subir, pra não pesar.',
             ]},
@@ -3719,30 +3722,9 @@
             </div>
         );
 
-        // 🖼️ Comprime a imagem no navegador (Canvas: redimensiona + reencoda JPEG) ANTES de subir pro
-        // Storage — como todo mundo com conta pode subir foto de produto, sem isso um monte de foto de
-        // celular (várias MB cada) ia pesar muito rápido. Redimensiona pro maior lado ficar em 900px.
-        const comprimirImagem = (file, maxDim = 900, qualidade = 0.72) => new Promise((resolve, reject) => {
-            const img = new Image();
-            const url = URL.createObjectURL(file);
-            img.onload = () => {
-                URL.revokeObjectURL(url);
-                let { width, height } = img;
-                if (width > height && width > maxDim) { height = Math.round(height * maxDim / width); width = maxDim; }
-                else if (height >= width && height > maxDim) { width = Math.round(width * maxDim / height); height = maxDim; }
-                const canvas = document.createElement('canvas');
-                canvas.width = width; canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, width, height);
-                canvas.toBlob(blob => { blob ? resolve(blob) : reject(new Error('falha ao comprimir imagem')); }, 'image/jpeg', qualidade);
-            };
-            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('não consegui abrir a imagem')); };
-            img.src = url;
-        });
-        // 📤 Sobe a foto (comprimida) pro Firebase Storage e salva a URL no Firestore — compartilhado,
-        // qualquer conta pode trocar a foto de um produto e todo mundo vê a mudança na hora.
-        const enviarFotoProduto = async (code, file) => {
-            const blob = await comprimirImagem(file);
+        // 📤 Sobe um blob (já cortado/comprimido pelo CropFotoModal) pro Firebase Storage e salva a URL
+        // no Firestore — compartilhado, qualquer conta pode trocar a foto e todo mundo vê na hora.
+        const subirFotoBlob = async (code, blob) => {
             const ref = storage.ref().child('produto-fotos/' + code + '.jpg');
             await ref.put(blob, { contentType: 'image/jpeg' });
             const url = await ref.getDownloadURL();
@@ -3754,10 +3736,92 @@
             await db.collection('system_data').doc('produto_fotos').update({ ['fotos.' + code]: firebase.firestore.FieldValue.delete() }).catch(() => {});
         };
 
+        // ✂️ Recorte de foto estilo WhatsApp/Instagram: arrasta pra posicionar, controle deslizante pra
+        // dar zoom, sempre corta um quadrado. Sai já como Blob JPEG comprimido (640x640), pronto pra subir.
+        const CropFotoModal = ({ file, onCancel, onConfirm }) => {
+            const V = 300; // tamanho do viewport quadrado (px)
+            const [zoom, setZoom] = useState(1);
+            const [offset, setOffset] = useState({ x: 0, y: 0 });
+            const [imgEl, setImgEl] = useState(null);
+            const [baseScale, setBaseScale] = useState(1);
+            const [enviando, setEnviando] = useState(false);
+            const dragRef = useRef(null);
+
+            useEffect(() => {
+                const url = URL.createObjectURL(file);
+                const img = new Image();
+                img.onload = () => {
+                    const bs = V / Math.min(img.naturalWidth, img.naturalHeight);
+                    const dw = img.naturalWidth * bs, dh = img.naturalHeight * bs;
+                    setBaseScale(bs);
+                    setOffset({ x: (V - dw) / 2, y: (V - dh) / 2 });
+                    setImgEl(img);
+                };
+                img.src = url;
+                return () => URL.revokeObjectURL(url);
+            }, [file]);
+
+            const displayScale = baseScale * zoom;
+            const dispW = imgEl ? imgEl.naturalWidth * displayScale : 0;
+            const dispH = imgEl ? imgEl.naturalHeight * displayScale : 0;
+            const clamp = (o, dw, dh) => ({ x: Math.min(0, Math.max(V - dw, o.x)), y: Math.min(0, Math.max(V - dh, o.y)) });
+
+            useEffect(() => { if (imgEl) setOffset(o => clamp(o, dispW, dispH)); }, [zoom, imgEl]);
+
+            const onDown = (e) => { const p = e.touches ? e.touches[0] : e; dragRef.current = { sx: p.clientX, sy: p.clientY, ox: offset.x, oy: offset.y }; };
+            const onMove = (e) => {
+                if (!dragRef.current) return;
+                const p = e.touches ? e.touches[0] : e;
+                const dx = p.clientX - dragRef.current.sx, dy = p.clientY - dragRef.current.sy;
+                setOffset(clamp({ x: dragRef.current.ox + dx, y: dragRef.current.oy + dy }, dispW, dispH));
+            };
+            const onUp = () => { dragRef.current = null; };
+
+            const confirmar = () => {
+                setEnviando(true);
+                const OUT = 640;
+                const canvas = document.createElement('canvas');
+                canvas.width = OUT; canvas.height = OUT;
+                const ctx = canvas.getContext('2d');
+                const cropX = -offset.x / displayScale, cropY = -offset.y / displayScale, cropSize = V / displayScale;
+                ctx.drawImage(imgEl, cropX, cropY, cropSize, cropSize, 0, 0, OUT, OUT);
+                canvas.toBlob(blob => { if (blob) onConfirm(blob); else setEnviando(false); }, 'image/jpeg', 0.82);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-5 flex flex-col items-center">
+                        <h3 className="font-bold text-slate-800 mb-3">Ajustar foto</h3>
+                        <div
+                            className="relative rounded-2xl overflow-hidden bg-slate-200 touch-none select-none"
+                            style={{ width: V, height: V, cursor: 'grab' }}
+                            onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
+                            onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
+                        >
+                            {imgEl && (
+                                <img src={imgEl.src} draggable={false} alt="" className="absolute top-0 left-0 pointer-events-none max-w-none"
+                                    style={{ width: dispW, height: dispH, transform: `translate(${offset.x}px, ${offset.y}px)` }} />
+                            )}
+                        </div>
+                        <div className="w-full flex items-center gap-2 mt-4">
+                            <span className="text-xs text-slate-400">🔍</span>
+                            <input type="range" min="1" max="3" step="0.01" value={zoom} onChange={e => setZoom(parseFloat(e.target.value))} className="flex-1" />
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-1">Arraste a foto pra posicionar, use o controle pra dar zoom.</p>
+                        <div className="flex gap-3 w-full mt-4">
+                            <button onClick={onCancel} disabled={enviando} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Cancelar</button>
+                            <button onClick={confirmar} disabled={!imgEl || enviando} className="flex-1 bg-rose-700 hover:bg-rose-800 disabled:opacity-60 text-white font-bold py-3 rounded-xl transition-colors">{enviando ? 'Enviando...' : 'Usar foto'}</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         // 🍽️ Cardápio: cada produto pode ter uma foto, compartilhada com todo mundo que usa o sistema.
         const CardapioScreen = ({ products, produtoFotos, showMessage }) => {
             const [busca, setBusca] = useState('');
             const [enviando, setEnviando] = useState({}); // { [code]: true } enquanto sobe a foto
+            const [crop, setCrop] = useState(null); // { code, file } enquanto o modal de recorte está aberto
             const resultados = useMemo(() => {
                 const q = busca.trim();
                 const ativos = (products || []).filter(p => p.ativo !== false);
@@ -3765,20 +3829,25 @@
                 return ativos.filter(p => matchProduto(p, q)).slice(0, 60);
             }, [products, busca]);
 
+            // Só ESCOLHE o arquivo aqui — quem faz o recorte (arrastar/zoom, estilo WhatsApp) é o CropFotoModal.
             const escolherFoto = (code) => {
                 const input = document.createElement('input');
                 input.type = 'file'; input.accept = 'image/*';
-                input.onchange = async () => {
+                input.onchange = () => {
                     const file = input.files && input.files[0];
-                    if (!file) return;
-                    setEnviando(prev => ({ ...prev, [code]: true }));
-                    try {
-                        await enviarFotoProduto(code, file);
-                        showMessage('Foto atualizada! Todo mundo já vê. 📸', 'success');
-                    } catch (e) { showMessage('Erro ao enviar a foto.', 'error'); }
-                    finally { setEnviando(prev => { const n = { ...prev }; delete n[code]; return n; }); }
+                    if (file) setCrop({ code, file });
                 };
                 input.click();
+            };
+            const confirmarCrop = async (blob) => {
+                const code = crop.code;
+                setCrop(null);
+                setEnviando(prev => ({ ...prev, [code]: true }));
+                try {
+                    await subirFotoBlob(code, blob);
+                    showMessage('Foto atualizada! Todo mundo já vê. 📸', 'success');
+                } catch (e) { showMessage('Erro ao enviar a foto.', 'error'); }
+                finally { setEnviando(prev => { const n = { ...prev }; delete n[code]; return n; }); }
             };
             const apagarFoto = async (code) => {
                 if (!window.confirm('Remover a foto desse produto?')) return;
@@ -3790,6 +3859,7 @@
 
             return (
                 <div className="animate-in fade-in space-y-6">
+                    {crop && <CropFotoModal file={crop.file} onCancel={() => setCrop(null)} onConfirm={confirmarCrop} />}
                     <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
                         <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2 mb-1"><span>🍽️</span> Cardápio</h1>
                         <p className="text-slate-500 text-sm mb-4">Foto de cada produto — qualquer conta pode subir ou trocar, e todo mundo vê.</p>
