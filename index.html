@@ -337,7 +337,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 125;
+        const APP_BUILD_VERSION = 126;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -2135,11 +2135,20 @@
             }, [products, mpBusca]);
             // 🔁 Mesma regra do Fazer Pedido: clicar de novo soma 1 na qty; a lista de resultados continua
             // aberta (não limpa a busca) pra selecionar mais itens em sequência sem redigitar.
-            const addMpItem = (p) => {
+            // 💳 Preço padrão do item conforme a condição de pagamento escolhida no manual: Cartão usa o
+            // preço de cartão (sem desconto), Prazo Parcelado usa o teto (à vista, SEM desconto — nada de
+            // -3%), e tudo o mais (à vista / a prazo simples) pode ter até 3% de desconto, igual sempre.
+            const precoParaCondicaoMp = (p, condicao) => {
+                if (condicao === 'Prazo Parcelado') return Number(p.originalPrice) || 0;
+                if (condicao === 'Cartao Credito') return p.precoCartao != null ? Number(p.precoCartao) : (Number(p.originalPrice) || 0);
                 const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
+                return unitFinalPrice || 0;
+            };
+            const addMpItem = (p) => {
+                const preco = precoParaCondicaoMp(p, mpCondicao);
                 setMpItens(prev => {
                     const idx = prev.findIndex(i => i.code === p.code);
-                    if (idx === -1) return [...prev, { code: String(p.code), name: p.name, qty: 1, valor: unitFinalPrice || 0 }];
+                    if (idx === -1) return [...prev, { code: String(p.code), name: p.name, qty: 1, valor: preco }];
                     const novo = [...prev];
                     novo[idx] = { ...novo[idx], qty: (Number(novo[idx].qty) || 0) + 1 };
                     return novo;
@@ -2147,6 +2156,15 @@
             };
             const removerMpItem = (code) => setMpItens(prev => prev.filter(i => i.code !== code));
             const mudarMpItem = (code, campo, valor) => setMpItens(prev => prev.map(i => i.code === code ? { ...i, [campo]: valor } : i));
+            // Muda a condição depois de já ter itens? Recalcula o preço padrão de todos (não mexe se você
+            // já editou o valor na mão DEPOIS dessa troca — só quando a condição em si muda).
+            useEffect(() => {
+                setMpItens(prev => prev.map(it => {
+                    const p = products.find(pp => String(pp.code) === it.code);
+                    return p ? { ...it, valor: precoParaCondicaoMp(p, mpCondicao) } : it;
+                }));
+                // eslint-disable-next-line
+            }, [mpCondicao]);
             const limparMp = () => { setMpAtivo(false); setMpClienteId(''); setMpSpamov(''); setMpCondicao(''); setMpParceladoDias([]); setMpBusca(''); setMpItens([]); };
             const montarResumoManual = () => {
                 if (!mpClienteId.trim()) { showMessage('Informe o ID do cliente.', 'error'); return; }
@@ -3619,6 +3637,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.2.1', data: '08/07/2026', areas: ['site'], itens: [
+                'Resumo manual: corrigido bug onde o preço do item sempre saía com desconto de 3%, mesmo escolhendo Cartão ou Prazo Parcelado (que não têm desconto) — agora respeita a condição de pagamento selecionada',
+            ]},
             { versao: '2.2.0', data: '08/07/2026', areas: ['site'], itens: [
                 'Gerador de Catálogo reformulado pro formato Status do WhatsApp: imagem sempre 9:16 (1080x1920, Full HD celular)',
                 'Novos presets de quantidade (4, 8, 16, 32 itens por imagem) — passou do limite? gera várias páginas automaticamente, com navegação e download em lote no preview',
