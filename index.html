@@ -341,7 +341,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 130;
+        const APP_BUILD_VERSION = 131;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -4006,6 +4006,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.4.2', data: '09/07/2026', areas: ['site'], itens: [
+                'Corrige o nome do menu "Cadastros em Processo" quebrando em duas linhas no menu lateral',
+            ]},
             { versao: '2.4.1', data: '09/07/2026', areas: ['site'], itens: [
                 'Mensagem de abertura do Portfólio reescrita no estilo SPIN Selling: puxa uma pergunta sobre a situação do cliente em vez de já despejar o catálogo',
                 'Cadastros em Processo: novo campo "dor do cliente" — quando preenchido, a mensagem de cobrar documentos cita essa dor real em vez de uma oferta genérica',
@@ -6681,7 +6684,7 @@
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-2 ml-2">Gestão Principal</p>
                             <NavButton route="dashboard" icon={IconDashboard} label="Painel (Dashboard)" />
                             <NavButton route="clients" icon={IconUsers} label="CRM & Rotas" />
-                            <NavButton route="cadastrosProcesso" icon={IconFileText} label="📋 Cadastros em Processo" />
+                            <NavButton route="cadastrosProcesso" icon={IconFileText} label="Em Cadastramento" />
                             <NavButton route="radar" icon={IconDashboard} label="Radar de Clientes" />
                             <NavButton route="profile" icon={IconSettings} label="Meu Perfil / Admin" />
                             
