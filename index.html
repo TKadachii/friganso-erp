@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 134;
+        const APP_BUILD_VERSION = 135;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3064,6 +3064,9 @@
             butcher: { label: 'Açougue', emoji: '🥩' },
             supermarket: { label: 'Mercado', emoji: '🛒' },
             convenience: { label: 'Conveniência', emoji: '🏪' },
+            bakery: { label: 'Padaria', emoji: '🥐' },
+            grocery: { label: 'Mercadinho', emoji: '🧺' },
+            greengrocer: { label: 'Hortifruti', emoji: '🥬' },
         };
         const distanciaKm = (lat1, lon1, lat2, lon2) => {
             const R = 6371;
@@ -3150,7 +3153,7 @@
                     setMinhaPos({ lat: latitude, lng: longitude });
                     try {
                         const raioM = raioKm * 1000;
-                        const filtros = ['amenity=restaurant', 'amenity=fast_food', 'shop=butcher', 'shop=supermarket', 'shop=convenience'];
+                        const filtros = ['amenity=restaurant', 'amenity=fast_food', 'shop=butcher', 'shop=supermarket', 'shop=convenience', 'shop=bakery', 'shop=grocery', 'shop=greengrocer'];
                         const query = `[out:json][timeout:25];(${filtros.map(f => { const [k, v] = f.split('='); return `node["${k}"="${v}"](around:${raioM},${latitude},${longitude});`; }).join('')});out body;`;
                         // 🔁 A instância principal da Overpass às vezes bloqueia/rejeita algumas redes — tenta
                         // um espelho alternativo antes de desistir.
@@ -3233,7 +3236,7 @@
                 <div className="animate-in fade-in space-y-6">
                     <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
                         <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2"><div className="h-6 w-6"><IconMapPin /></div> Perto de Mim</h1>
-                        <p className="text-slate-500 text-sm mt-1 mb-4">Descubra mercados, restaurantes e açougues perto de você que ainda não são clientes.</p>
+                        <p className="text-slate-500 text-sm mt-1 mb-4">Descubra mercados, mercadinhos, padarias, restaurantes e açougues perto de você que ainda não são clientes.</p>
                         <div className="flex flex-wrap items-center gap-2 mb-3">
                             <span className="text-xs font-bold text-slate-500">Raio de busca:</span>
                             {[1, 3, 5, 10].map(r => (
@@ -4314,6 +4317,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.5.3', data: '09/07/2026', areas: ['site'], itens: [
+                'Perto de Mim: busca agora inclui também padarias, mercadinhos e hortifrutis (antes só pegava mercado grande, restaurante, lanchonete, açougue e loja de conveniência)',
+            ]},
             { versao: '2.5.2', data: '09/07/2026', areas: ['site'], itens: [
                 'Perto de Mim: cada estabelecimento ganhou um checkbox "Já visitei este local" — marca a data e lembra entre buscas, pra você saber quem já passou por lá',
             ]},
