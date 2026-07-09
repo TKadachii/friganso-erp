@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 136;
+        const APP_BUILD_VERSION = 137;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3031,14 +3031,21 @@
             const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digitos}`);
             if (!resp.ok) throw new Error(resp.status === 404 ? 'CNPJ não encontrado.' : 'Falha na consulta (status ' + resp.status + ').');
             const d = await resp.json();
-            const enderecoPartes = [
-                [d.descricao_tipo_de_logradouro, d.logradouro].filter(Boolean).join(' '),
-                d.numero, d.complemento, d.bairro, d.municipio, d.uf, d.cep,
-            ].filter(Boolean);
+            const logradouroCompleto = [d.descricao_tipo_de_logradouro, d.logradouro].filter(Boolean).join(' ');
+            const enderecoPartes = [logradouroCompleto, d.numero, d.complemento, d.bairro, d.municipio, d.uf, d.cep].filter(Boolean);
             return {
                 razaoSocial: d.razao_social || '',
                 nomeFantasia: d.nome_fantasia || '',
                 endereco: enderecoPartes.join(', '),
+                // 📋 Campos separados (não só o endereço concatenado) — pra poder copiar um por um
+                // direto pros campos individuais do formulário oficial de cadastro (CEP, Rua, Número...).
+                cep: d.cep || '',
+                logradouro: logradouroCompleto,
+                numero: d.numero || '',
+                complemento: d.complemento || '',
+                bairro: d.bairro || '',
+                municipio: d.municipio || '',
+                uf: d.uf || '',
                 situacaoCadastral: d.descricao_situacao_cadastral || '',
                 naturezaJuridica: d.natureza_juridica || '',
                 telefone: d.ddd_telefone_1 ? d.ddd_telefone_1.replace(/^(\d{2})(\d)/, '($1) $2') : '',
@@ -3076,6 +3083,24 @@
                 : CADASTRO_FECHOS[Math.floor(Math.random() * CADASTRO_FECHOS.length)];
             const lista = faltando.map(i => `• ${i}`).join('\n');
             return `${abertura}\n\nPra eu finalizar seu cadastro na Friganso, ainda preciso de mais esses detalhes:\n\n${lista}\n\n${fecho}`;
+        };
+        // 📋 Monta a lista de campos, na mesma ordem do formulário oficial de "Requisição de análise de
+        // crédito e cadastro", só com o que o app já sabe — pra copiar e colar em vez de digitar de novo.
+        // Não inclui uploads de foto/documento (isso o formulário não deixa preencher por link mesmo).
+        const camposFormularioCadastro = (lead, user) => {
+            const campos = [
+                { label: 'Código de Vendedor/Representante', valor: user.code },
+                { label: 'Razão Social', valor: lead.nome },
+                { label: 'CNPJ', valor: lead.cnpj },
+                { label: 'CEP', valor: lead.cepCnpj },
+                { label: 'Rua/Avenida/Travessa', valor: lead.logradouroCnpj },
+                { label: 'Número do estabelecimento', valor: lead.numeroCnpj },
+                { label: 'Complemento', valor: lead.complementoCnpj },
+                { label: 'Bairro', valor: lead.bairroCnpj },
+                { label: 'Cidade', valor: lead.municipioCnpj },
+                { label: 'Telefone 1', valor: lead.contato },
+            ];
+            return campos.filter(c => c.valor);
         };
 
         // 🧭 Perto de Mim — usa a localização do navegador + OpenStreetMap (Overpass API, gratuita e
@@ -3393,12 +3418,13 @@
             const [loading, setLoading] = useState(true);
             const [showForm, setShowForm] = useState(false);
             const [editingId, setEditingId] = useState(null);
-            const [form, setForm] = useState({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '', cnpj: '', enderecoCnpj: '', situacaoCadastralCnpj: '', naturezaJuridicaCnpj: '' });
+            const [form, setForm] = useState({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '', cnpj: '', enderecoCnpj: '', situacaoCadastralCnpj: '', naturezaJuridicaCnpj: '', cepCnpj: '', logradouroCnpj: '', numeroCnpj: '', complementoCnpj: '', bairroCnpj: '', municipioCnpj: '' });
             const [salvando, setSalvando] = useState(false);
             const [mensagemLead, setMensagemLead] = useState(null);
             const [mensagemTexto, setMensagemTexto] = useState('');
             const [roteiroLead, setRoteiroLead] = useState(null);
             const [buscandoCnpj, setBuscandoCnpj] = useState(false);
+            const [formularioLead, setFormularioLead] = useState(null);
 
             useEffect(() => {
                 if (!user.id) return;
@@ -3413,12 +3439,12 @@
 
             const abrirNovo = () => {
                 setEditingId(null);
-                setForm({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '', cnpj: '', enderecoCnpj: '', situacaoCadastralCnpj: '', naturezaJuridicaCnpj: '' });
+                setForm({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '', cnpj: '', enderecoCnpj: '', situacaoCadastralCnpj: '', naturezaJuridicaCnpj: '', cepCnpj: '', logradouroCnpj: '', numeroCnpj: '', complementoCnpj: '', bairroCnpj: '', municipioCnpj: '' });
                 setShowForm(true);
             };
             const abrirEditar = (lead) => {
                 setEditingId(lead.id);
-                setForm({ nome: lead.nome || '', contato: lead.contato || '', tipoCadastro: lead.tipoCadastro || 'cpf', itensRecebidos: lead.itensRecebidos || [], observacoes: lead.observacoes || '', dorPrincipal: lead.dorPrincipal || '', cnpj: lead.cnpj || '', enderecoCnpj: lead.enderecoCnpj || '', situacaoCadastralCnpj: lead.situacaoCadastralCnpj || '', naturezaJuridicaCnpj: lead.naturezaJuridicaCnpj || '' });
+                setForm({ nome: lead.nome || '', contato: lead.contato || '', tipoCadastro: lead.tipoCadastro || 'cpf', itensRecebidos: lead.itensRecebidos || [], observacoes: lead.observacoes || '', dorPrincipal: lead.dorPrincipal || '', cnpj: lead.cnpj || '', enderecoCnpj: lead.enderecoCnpj || '', situacaoCadastralCnpj: lead.situacaoCadastralCnpj || '', naturezaJuridicaCnpj: lead.naturezaJuridicaCnpj || '', cepCnpj: lead.cepCnpj || '', logradouroCnpj: lead.logradouroCnpj || '', numeroCnpj: lead.numeroCnpj || '', complementoCnpj: lead.complementoCnpj || '', bairroCnpj: lead.bairroCnpj || '', municipioCnpj: lead.municipioCnpj || '' });
                 setShowForm(true);
             };
             const buscarDadosCnpj = async () => {
@@ -3432,6 +3458,12 @@
                         situacaoCadastralCnpj: dados.situacaoCadastral,
                         naturezaJuridicaCnpj: dados.naturezaJuridica,
                         contato: f.contato || dados.telefone,
+                        cepCnpj: dados.cep,
+                        logradouroCnpj: dados.logradouro,
+                        numeroCnpj: dados.numero,
+                        complementoCnpj: dados.complemento,
+                        bairroCnpj: dados.bairro,
+                        municipioCnpj: dados.municipio,
                     }));
                     if (dados.situacaoCadastral && dados.situacaoCadastral !== 'ATIVA') {
                         showMessage(`Atenção: situação cadastral desse CNPJ é "${dados.situacaoCadastral}" (não ativa)!`, 'error');
@@ -3511,6 +3543,9 @@
                                         {lead.dorPrincipal && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 mt-2">⚠️ Dor: {lead.dorPrincipal}</p>}
                                         {lead.observacoes && <p className="text-xs text-slate-500 mt-2 line-clamp-2">{lead.observacoes}</p>}
                                         <button onClick={() => setRoteiroLead(lead)} className="w-full mt-3 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-bold py-2 rounded-lg text-xs transition-colors">🎯 Roteiro de conversa (SPIN)</button>
+                                        {camposFormularioCadastro(lead, user).length > 0 && (
+                                            <button onClick={() => setFormularioLead(lead)} className="w-full mt-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 font-bold py-2 rounded-lg text-xs transition-colors">📋 Copiar pro formulário de cadastro</button>
+                                        )}
                                         <div className="flex gap-2 mt-2">
                                             <button onClick={() => abrirEditar(lead)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-xs transition-colors">✏️ Editar</button>
                                             <button onClick={() => abrirMensagem(lead)} className="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold py-2 rounded-lg text-xs transition-colors">💬 Mensagem</button>
@@ -3623,6 +3658,27 @@
                                     ))}
                                 </div>
                                 <button onClick={() => setRoteiroLead(null)} className="w-full mt-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {formularioLead && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 max-h-[92vh] overflow-y-auto">
+                                <h3 className="font-bold text-slate-800 text-lg mb-1">📋 Dados de {formularioLead.nome}</h3>
+                                <p className="text-xs text-slate-500 mb-4">Toca em cada linha pra copiar e colar no campo correspondente do formulário de cadastro. Fotos e documentos ainda precisam ser anexados manualmente lá.</p>
+                                <div className="space-y-1.5">
+                                    {camposFormularioCadastro(formularioLead, user).map(c => (
+                                        <button key={c.label} onClick={() => { navigator.clipboard.writeText(c.valor); showMessage(`"${c.label}" copiado!`, 'success'); }} className="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 transition-colors flex items-center justify-between gap-2">
+                                            <span className="min-w-0">
+                                                <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide">{c.label}</span>
+                                                <span className="block text-sm text-slate-800 truncate">{c.valor}</span>
+                                            </span>
+                                            <span className="text-sm shrink-0">📋</span>
+                                        </button>
+                                    ))}
+                                </div>
+                                <button onClick={() => setFormularioLead(null)} className="w-full mt-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
                             </div>
                         </div>
                     )}
@@ -4376,6 +4432,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.6.1', data: '09/07/2026', areas: ['site'], itens: [
+                'Cadastros em Processo: novo botão "📋 Copiar pro formulário de cadastro" — mostra os dados do cliente (razão social, CNPJ, endereço, telefone) campo por campo, cada um com botão de copiar, pra colar direto no formulário oficial de análise de crédito',
+            ]},
             { versao: '2.6.0', data: '09/07/2026', areas: ['site'], itens: [
                 'Cadastros em Processo: pra tipo CNPJ ou CNPJ MEI, agora dá pra digitar o número do CNPJ e clicar em "🔍 Buscar" — o app preenche sozinho a razão social e o endereço (consulta pública à Receita Federal) e avisa se o CNPJ não estiver ATIVO',
             ]},
