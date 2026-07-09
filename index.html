@@ -341,7 +341,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 129;
+        const APP_BUILD_VERSION = 130;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -804,6 +804,7 @@
             const [salvandoPortfolio, setSalvandoPortfolio] = useState(false);
             const [gerandoCartao, setGerandoCartao] = useState(false);
             const [cartaoUrl, setCartaoUrl] = useState(null);
+            const [mensagemIntroTexto, setMensagemIntroTexto] = useState('');
             const salvarPortfolio = async () => {
                 if (!user.id) { showMessage('Não consegui identificar sua conta. Saia e entre de novo.', 'error'); return; }
                 setSalvandoPortfolio(true);
@@ -817,16 +818,19 @@
                 try {
                     const canvas = await gerarPortfolioImagem(user, portfolioDados);
                     canvas.toBlob(blob => { if (blob) setCartaoUrl(URL.createObjectURL(blob)); }, 'image/png');
+                    setMensagemIntroTexto(gerarMensagemIntroPortfolio());
                 } catch (e) { showMessage('Erro ao gerar o cartão.', 'error'); } finally { setGerandoCartao(false); }
             };
-            // 💬 Mensagem pra mandar junto com o cartão — puxa conversa com um cliente novo
+            // 💬 Mensagem pra mandar junto com o cartão — puxa conversa com um cliente novo em vez de
+            // já despejar catálogo/preço (técnica SPIN Selling: abrir com pergunta de Situação, não com
+            // características). Guarda variedade em arrays pra não mandar sempre o texto idêntico.
             const gerarMensagemIntroPortfolio = () => {
-                const nome = (user.name || '').split(' ')[0];
+                const nome = (user.name || '').split(' ')[0] || '';
                 const cargo = portfolioDados.cargo || 'Vendedor Friganso';
-                let msg = `Oi! Me chamo ${nome}, sou ${cargo} na Friganso 🥩`;
-                if (portfolioDados.especialidades) msg += `\nTrabalho principalmente com: ${portfolioDados.especialidades}.`;
-                msg += `\n\nFico à disposição pra te apresentar nosso catálogo e as melhores condições pro seu negócio. Segue meu cartão aqui embaixo 👇`;
-                return msg;
+                const abertura = SPIN_ABERTURAS_INTRO[Math.floor(Math.random() * SPIN_ABERTURAS_INTRO.length)]
+                    .replace('{nome}', nome).replace('{cargo}', cargo);
+                const pergunta = SPIN_PERGUNTAS_SITUACAO[Math.floor(Math.random() * SPIN_PERGUNTAS_SITUACAO.length)];
+                return `${abertura}\n\n${pergunta}`;
             };
             const [usersList, setUsersList] = useState([]);
             const [loading, setLoading] = useState(false);
@@ -904,7 +908,14 @@
                                     <button onClick={() => setCartaoUrl(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
                                     <a href={cartaoUrl} download={`friganso-cartao-${user.code}.png`} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl transition-colors text-center">⬇️ Baixar</a>
                                 </div>
-                                <button onClick={() => { navigator.clipboard.writeText(gerarMensagemIntroPortfolio()); showMessage('Mensagem copiada! Cola no Zap antes de mandar o cartão.', 'success'); }} className="w-full mt-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-sm transition-colors">💬 Copiar mensagem de apresentação</button>
+                                <p className="text-xs text-slate-400 mt-4 mb-1 self-start">💬 Manda essa mensagem antes do cartão — puxa conversa em vez de já empurrar catálogo:</p>
+                                <div className="bg-[#e1ffc7] p-3 rounded-2xl border border-[#d3f4b8] w-full">
+                                    <pre className="font-mono text-xs whitespace-pre-wrap text-slate-800">{mensagemIntroTexto}</pre>
+                                </div>
+                                <div className="flex gap-2 w-full mt-2">
+                                    <button onClick={() => setMensagemIntroTexto(gerarMensagemIntroPortfolio())} className="flex-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-sm transition-colors">🔄 Gerar outra</button>
+                                    <button onClick={() => { navigator.clipboard.writeText(mensagemIntroTexto); showMessage('Mensagem copiada!', 'success'); }} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">📋 Copiar</button>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -2971,6 +2982,38 @@
             );
         };
 
+        // 🎯 SPIN Selling — em vez de despejar catálogo/preço de cara, a abordagem certa é puxar o
+        // cliente a falar do problema dele primeiro (Situação → Problema → Implicação → Necessidade).
+        // Usado tanto na mensagem de abertura do Portfólio quanto no Roteiro de cada lead em Cadastros.
+        const SPIN_ABERTURAS_INTRO = [
+            'Oi! Me chamo {nome}, sou {cargo} aqui na Friganso 🥩 Posso te fazer uma pergunta rápida?',
+            'Oi, tudo bem? Me chamo {nome}, trabalho na Friganso como {cargo}. Posso roubar 1 minutinho seu?',
+            'Opa! Sou {nome}, da Friganso 🥩 Rapidinho:',
+        ];
+        const SPIN_PERGUNTAS_SITUACAO = [
+            'Hoje vocês compram direto de distribuidor ou já tem um fornecedor fixo de carnes e congelados?',
+            'Como funciona hoje a compra de carnes/congelados aí no seu estabelecimento?',
+            'Vocês já trabalham com algum distribuidor fixo, ou compram avulso conforme a necessidade?',
+        ];
+        const ROTEIRO_SPIN = [
+            { fase: 'Situação', emoji: '🔎', cor: 'bg-sky-50 border-sky-200 text-sky-700', perguntas: [
+                'Hoje vocês compram direto de distribuidor ou já tem um fornecedor fixo de carnes/congelados?',
+                'Como funciona hoje a compra — é semanal, quinzenal?',
+            ]},
+            { fase: 'Problema', emoji: '⚠️', cor: 'bg-amber-50 border-amber-200 text-amber-700', perguntas: [
+                'Já aconteceu de faltar algum corte ou produto no meio da semana?',
+                'O preço que você compra hoje varia muito de fornecedor pra fornecedor?',
+            ]},
+            { fase: 'Implicação', emoji: '📉', cor: 'bg-orange-50 border-orange-200 text-orange-700', perguntas: [
+                'Quando falta um produto, vocês tiram prato do cardápio ou compram mais caro na correria?',
+                'Isso acaba pesando no seu custo no fim do mês?',
+            ]},
+            { fase: 'Necessidade', emoji: '✅', cor: 'bg-emerald-50 border-emerald-200 text-emerald-700', perguntas: [
+                'Se você tivesse entrega certa e preço travado, ajudaria a planejar melhor sua compra?',
+                'Faz sentido eu te mandar nosso catálogo com as condições pra gente conversar melhor?',
+            ]},
+        ];
+
         // 📋 Cadastros em Processo — lista pessoal do vendedor com os clientes que ele está tentando
         // cadastrar, o que já recebeu de cada um e uma mensagem simpática pronta pra cutucar o resto.
         const CADASTRO_TIPOS = {
@@ -2984,6 +3027,7 @@
             'Oi, {nome}, tudo certo por aí?',
             'E aí, {nome}! Beleza?',
         ];
+        // Fechos genéricos — usados só quando o lead não tem uma "dor" anotada (ver campo dorPrincipal).
         const CADASTRO_FECHOS = [
             'Assim que fechamos o cadastro já te mostro nossas ofertas da semana e libero sua primeira entrega rapidinho! 🚚🔥',
             'Fechando esses detalhes, já libero acesso às nossas promoções e você já começa a economizar nas compras! 💰',
@@ -3001,7 +3045,11 @@
             if (faltando.length === 0) {
                 return `${abertura}\n\nSó pra confirmar: já está tudo certinho com seus documentos por aqui! Assim que eu finalizar aqui do meu lado já te aviso. 😉`;
             }
-            const fecho = CADASTRO_FECHOS[Math.floor(Math.random() * CADASTRO_FECHOS.length)];
+            // 🎯 Se o vendedor anotou a dor real do cliente, o fecho cita ela em vez de uma oferta genérica
+            // (técnica SPIN: liga o pedido de documento à necessidade que o próprio cliente já admitiu).
+            const fecho = lead.dorPrincipal
+                ? `Assim que finalizarmos, já resolvemos de vez aquilo que você me falou sobre ${lead.dorPrincipal} — combinado? 😉`
+                : CADASTRO_FECHOS[Math.floor(Math.random() * CADASTRO_FECHOS.length)];
             const lista = faltando.map(i => `• ${i}`).join('\n');
             return `${abertura}\n\nPra eu finalizar seu cadastro na Friganso, ainda preciso de mais esses detalhes:\n\n${lista}\n\n${fecho}`;
         };
@@ -3011,10 +3059,11 @@
             const [loading, setLoading] = useState(true);
             const [showForm, setShowForm] = useState(false);
             const [editingId, setEditingId] = useState(null);
-            const [form, setForm] = useState({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '' });
+            const [form, setForm] = useState({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '' });
             const [salvando, setSalvando] = useState(false);
             const [mensagemLead, setMensagemLead] = useState(null);
             const [mensagemTexto, setMensagemTexto] = useState('');
+            const [roteiroLead, setRoteiroLead] = useState(null);
 
             useEffect(() => {
                 if (!user.id) return;
@@ -3029,12 +3078,12 @@
 
             const abrirNovo = () => {
                 setEditingId(null);
-                setForm({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '' });
+                setForm({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '' });
                 setShowForm(true);
             };
             const abrirEditar = (lead) => {
                 setEditingId(lead.id);
-                setForm({ nome: lead.nome || '', contato: lead.contato || '', tipoCadastro: lead.tipoCadastro || 'cpf', itensRecebidos: lead.itensRecebidos || [], observacoes: lead.observacoes || '' });
+                setForm({ nome: lead.nome || '', contato: lead.contato || '', tipoCadastro: lead.tipoCadastro || 'cpf', itensRecebidos: lead.itensRecebidos || [], observacoes: lead.observacoes || '', dorPrincipal: lead.dorPrincipal || '' });
                 setShowForm(true);
             };
             const toggleItem = (item) => {
@@ -3063,19 +3112,20 @@
 
             return (
                 <div className="animate-in fade-in space-y-6">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div>
-                            <h2 className="text-2xl font-black text-slate-800">📋 Cadastros em Processo</h2>
-                            <p className="text-sm text-slate-500">Sua lista pessoal de clientes que você está tentando cadastrar.</p>
+                    <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
+                            <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2"><div className="h-6 w-6"><IconFileText /></div> Cadastros em Processo</h1>
+                            <button onClick={abrirNovo} className="bg-rose-700 hover:bg-rose-800 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-colors shrink-0 flex items-center gap-1.5"><div className="h-4 w-4"><IconPlus /></div> Novo cadastro</button>
                         </div>
-                        <button onClick={abrirNovo} className="bg-rose-700 hover:bg-rose-800 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-colors shrink-0">+ Novo cadastro</button>
-                    </div>
+                        <p className="text-slate-500 text-sm">Sua lista pessoal de clientes que você está tentando cadastrar — só você vê.</p>
+                    </header>
 
                     {loading ? (
-                        <p className="text-slate-400 text-sm">Carregando...</p>
+                        <div className="flex justify-center py-12"><div className="h-6 w-6 text-rose-600"><IconLoader2 /></div></div>
                     ) : leads.length === 0 ? (
-                        <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-400">
-                            Nenhum cadastro em processo ainda. Clique em "+ Novo cadastro" pra começar a acompanhar.
+                        <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-400">
+                            <p className="text-lg font-bold">Nenhum cadastro em processo ainda.</p>
+                            <p className="text-sm mt-1">Toque em <b>"Novo cadastro"</b> pra começar a acompanhar um cliente. 📋</p>
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -3103,8 +3153,10 @@
                                                 <div className={`h-full ${completo ? 'bg-emerald-500' : 'bg-rose-600'}`} style={{ width: pct + '%' }} />
                                             </div>
                                         </div>
+                                        {lead.dorPrincipal && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 mt-2">⚠️ Dor: {lead.dorPrincipal}</p>}
                                         {lead.observacoes && <p className="text-xs text-slate-500 mt-2 line-clamp-2">{lead.observacoes}</p>}
-                                        <div className="flex gap-2 mt-3">
+                                        <button onClick={() => setRoteiroLead(lead)} className="w-full mt-3 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-bold py-2 rounded-lg text-xs transition-colors">🎯 Roteiro de conversa (SPIN)</button>
+                                        <div className="flex gap-2 mt-2">
                                             <button onClick={() => abrirEditar(lead)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-xs transition-colors">✏️ Editar</button>
                                             <button onClick={() => abrirMensagem(lead)} className="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold py-2 rounded-lg text-xs transition-colors">💬 Mensagem</button>
                                             <button onClick={() => excluirLead(lead.id)} className="bg-slate-100 hover:bg-red-100 text-slate-500 hover:text-red-600 font-bold py-2 px-3 rounded-lg text-xs transition-colors">🗑️</button>
@@ -3121,21 +3173,21 @@
                                 <h3 className="font-bold text-slate-800 text-lg mb-4">{editingId ? 'Editar cadastro' : 'Novo cadastro'}</h3>
                                 <div className="space-y-3">
                                     <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase">Nome do cliente</label>
+                                        <label className="text-xs font-bold text-slate-500">Nome do cliente</label>
                                         <input type="text" value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder="Nome do cliente ou do negócio" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
                                     </div>
                                     <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase">Contato (WhatsApp)</label>
+                                        <label className="text-xs font-bold text-slate-500">Contato (WhatsApp)</label>
                                         <input type="text" value={form.contato} onChange={e => setForm(f => ({ ...f, contato: e.target.value }))} placeholder="(21) 99999-9999" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
                                     </div>
                                     <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase">Tipo de cadastro</label>
+                                        <label className="text-xs font-bold text-slate-500">Tipo de cadastro</label>
                                         <select value={form.tipoCadastro} onChange={e => setForm(f => ({ ...f, tipoCadastro: e.target.value, itensRecebidos: [] }))} className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm">
                                             {Object.entries(CADASTRO_TIPOS).map(([key, t]) => <option key={key} value={key}>{t.label}</option>)}
                                         </select>
                                     </div>
                                     <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase">O que já recebi</label>
+                                        <label className="text-xs font-bold text-slate-500">O que já recebi</label>
                                         <div className="mt-1 space-y-1.5">
                                             {CADASTRO_TIPOS[form.tipoCadastro].itens.map(item => (
                                                 <label key={item} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm cursor-pointer">
@@ -3146,7 +3198,12 @@
                                         </div>
                                     </div>
                                     <div>
-                                        <label className="text-xs font-bold text-slate-500 uppercase">Observações</label>
+                                        <label className="text-xs font-bold text-slate-500">Qual a principal dor/necessidade desse cliente?</label>
+                                        <input type="text" value={form.dorPrincipal} onChange={e => setForm(f => ({ ...f, dorPrincipal: e.target.value }))} placeholder="Ex: falta produto no meio da semana, preço melhor, entrega mais rápida..." className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                                        <p className="text-[11px] text-slate-400 mt-1">Preenchendo isso, a mensagem de cobrança de documentos cita essa dor em vez de uma oferta genérica.</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500">Observações</label>
                                         <textarea value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} rows={2} placeholder="Ex: só fala depois das 18h, esperando o contador mandar o CNPJ..." className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm resize-none" />
                                     </div>
                                 </div>
@@ -3171,6 +3228,31 @@
                                     <button onClick={() => { navigator.clipboard.writeText(mensagemTexto); showMessage('Mensagem copiada!', 'success'); }} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">📋 Copiar</button>
                                 </div>
                                 <button onClick={() => setMensagemLead(null)} className="w-full mt-2 text-slate-400 hover:text-slate-600 text-sm font-medium py-1">Fechar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {roteiroLead && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 max-h-[92vh] overflow-y-auto">
+                                <h3 className="font-bold text-slate-800 text-lg mb-1">🎯 Roteiro pra {roteiroLead.nome}</h3>
+                                <p className="text-xs text-slate-500 mb-4">Manda uma pergunta de cada vez, na ordem — deixa o cliente falar do problema dele antes de oferecer o catálogo.</p>
+                                <div className="space-y-3">
+                                    {ROTEIRO_SPIN.map(fase => (
+                                        <div key={fase.fase} className={`rounded-2xl border p-3 ${fase.cor}`}>
+                                            <p className="font-bold text-xs uppercase tracking-wide mb-2">{fase.emoji} {fase.fase}</p>
+                                            <div className="space-y-1.5">
+                                                {fase.perguntas.map((p, i) => (
+                                                    <button key={i} onClick={() => { navigator.clipboard.writeText(p); showMessage('Pergunta copiada!', 'success'); }} className="w-full text-left bg-white/70 hover:bg-white border border-black/5 rounded-xl px-3 py-2 text-sm text-slate-700 transition-colors flex items-center justify-between gap-2">
+                                                        <span>{p}</span>
+                                                        <span className="text-xs shrink-0">📋</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button onClick={() => setRoteiroLead(null)} className="w-full mt-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
                             </div>
                         </div>
                     )}
@@ -3924,6 +4006,12 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.4.1', data: '09/07/2026', areas: ['site'], itens: [
+                'Mensagem de abertura do Portfólio reescrita no estilo SPIN Selling: puxa uma pergunta sobre a situação do cliente em vez de já despejar o catálogo',
+                'Cadastros em Processo: novo campo "dor do cliente" — quando preenchido, a mensagem de cobrar documentos cita essa dor real em vez de uma oferta genérica',
+                'Cadastros em Processo: cada cliente agora tem um "🎯 Roteiro de conversa (SPIN)" com perguntas prontas pra copiar (Situação → Problema → Implicação → Necessidade)',
+                'Ajustes visuais: cabeçalho de Cadastros em Processo e labels dos formulários alinhados ao padrão visual do resto do app',
+            ]},
             { versao: '2.4.0', data: '08/07/2026', areas: ['site'], itens: [
                 'Novo "📋 Cadastros em Processo" (CRM & Rotas): sua lista pessoal de clientes em cadastramento, com checklist do que já recebeu (CPF, CNPJ ou CNPJ MEI) e um gerador de mensagem simpática pra dar aquele empurrãozinho',
                 'Meu Portfólio: botão pra copiar uma mensagem de apresentação pronta, pra mandar junto com o cartão quando for puxar conversa com um cliente novo',
