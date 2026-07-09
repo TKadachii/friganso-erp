@@ -305,6 +305,7 @@
         const IconGoogle = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="currentColor"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>;
         const IconBook = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>;
         const IconChevron = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>;
+        const IconMapPin = () => <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>;
 
         const normalizeForSearch = (str) => {
             if (!str) return '';
@@ -341,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 131;
+        const APP_BUILD_VERSION = 132;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3054,6 +3055,181 @@
             return `${abertura}\n\nPra eu finalizar seu cadastro na Friganso, ainda preciso de mais esses detalhes:\n\n${lista}\n\n${fecho}`;
         };
 
+        // 🧭 Perto de Mim — usa a localização do navegador + OpenStreetMap (Overpass API, gratuita e
+        // sem chave) pra sugerir mercados/restaurantes/açougues perto do vendedor que ainda não são
+        // clientes, com um botão pra já mandar direto pros Cadastros em Processo.
+        const OSM_CATEGORIAS = {
+            restaurant: { label: 'Restaurante', emoji: '🍽️' },
+            fast_food: { label: 'Lanchonete', emoji: '🍔' },
+            butcher: { label: 'Açougue', emoji: '🥩' },
+            supermarket: { label: 'Mercado', emoji: '🛒' },
+            convenience: { label: 'Conveniência', emoji: '🏪' },
+        };
+        const distanciaKm = (lat1, lon1, lat2, lon2) => {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        };
+        const normalizarNomeEstab = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, '').trim();
+        const pareceClienteExistente = (nomeOsm, clients) => {
+            const n = normalizarNomeEstab(nomeOsm);
+            if (!n || !clients || !clients.length) return false;
+            return clients.some(c => { const cn = normalizarNomeEstab(c.name); return cn && cn.length > 2 && (n.includes(cn) || cn.includes(n)); });
+        };
+
+        const ProspeccaoScreen = ({ user, clients, showMessage }) => {
+            const [buscando, setBuscando] = useState(false);
+            const [resultados, setResultados] = useState(null); // null = ainda não buscou
+            const [erro, setErro] = useState(null);
+            const [raioKm, setRaioKm] = useState(3);
+            const [filtroCategoria, setFiltroCategoria] = useState('todos');
+            const [adicionando, setAdicionando] = useState({});
+            const [adicionados, setAdicionados] = useState({});
+
+            const buscarPerto = () => {
+                if (!navigator.geolocation) { setErro('Seu navegador não suporta localização.'); return; }
+                setBuscando(true); setErro(null); setResultados(null);
+                navigator.geolocation.getCurrentPosition(async (pos) => {
+                    const { latitude, longitude } = pos.coords;
+                    try {
+                        const raioM = raioKm * 1000;
+                        const filtros = ['amenity=restaurant', 'amenity=fast_food', 'shop=butcher', 'shop=supermarket', 'shop=convenience'];
+                        const query = `[out:json][timeout:25];(${filtros.map(f => { const [k, v] = f.split('='); return `node["${k}"="${v}"](around:${raioM},${latitude},${longitude});`; }).join('')});out body;`;
+                        // 🔁 A instância principal da Overpass às vezes bloqueia/rejeita algumas redes — tenta
+                        // um espelho alternativo antes de desistir.
+                        const espelhos = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+                        let data = null, ultimoErro = null;
+                        for (const url of espelhos) {
+                            try {
+                                const resp = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query) });
+                                if (!resp.ok) throw new Error('status ' + resp.status);
+                                data = await resp.json();
+                                break;
+                            } catch (e) { ultimoErro = e; }
+                        }
+                        if (!data) throw ultimoErro || new Error('falha nos dois espelhos');
+                        const lugares = (data.elements || [])
+                            .filter(el => el.tags && el.tags.name && el.lat && el.lon)
+                            .map(el => {
+                                const categoria = el.tags.amenity === 'restaurant' ? 'restaurant' : el.tags.amenity === 'fast_food' ? 'fast_food' : (el.tags.shop || 'outro');
+                                const enderecoPartes = [el.tags['addr:street'], el.tags['addr:housenumber'], el.tags['addr:suburb'] || el.tags['addr:city']].filter(Boolean);
+                                return {
+                                    id: el.id,
+                                    nome: el.tags.name,
+                                    categoria,
+                                    endereco: enderecoPartes.join(', ') || null,
+                                    lat: el.lat, lng: el.lon,
+                                    distKm: distanciaKm(latitude, longitude, el.lat, el.lon),
+                                    jaCliente: pareceClienteExistente(el.tags.name, clients),
+                                };
+                            })
+                            .sort((a, b) => a.distKm - b.distKm);
+                        setResultados(lugares);
+                    } catch (e) { setErro('Não consegui buscar agora. Verifica sua internet e tenta de novo.'); }
+                    finally { setBuscando(false); }
+                }, () => { setErro('Não consegui acessar sua localização — verifica se você liberou a permissão pro navegador.'); setBuscando(false); }, { enableHighAccuracy: true, timeout: 10000 });
+            };
+
+            const adicionarComoLead = async (lugar) => {
+                if (!user.id) { showMessage('Não consegui identificar sua conta.', 'error'); return; }
+                setAdicionando(a => ({ ...a, [lugar.id]: true }));
+                try {
+                    await db.collection('cadastros_processo').add({
+                        nome: lugar.nome,
+                        contato: '',
+                        tipoCadastro: 'cpf',
+                        itensRecebidos: [],
+                        dorPrincipal: '',
+                        observacoes: `Encontrado via "Perto de Mim"${lugar.endereco ? ' — ' + lugar.endereco : ''}.`,
+                        vendedorId: user.id,
+                        criadoEm: Date.now(),
+                        atualizadoEm: Date.now(),
+                    });
+                    setAdicionados(a => ({ ...a, [lugar.id]: true }));
+                    showMessage('Adicionado aos Cadastros em Processo!', 'success');
+                } catch (e) { showMessage('Erro ao adicionar.', 'error'); } finally { setAdicionando(a => ({ ...a, [lugar.id]: false })); }
+            };
+
+            const resultadosFiltrados = (resultados || []).filter(r => filtroCategoria === 'todos' || r.categoria === filtroCategoria);
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2"><div className="h-6 w-6"><IconMapPin /></div> Perto de Mim</h1>
+                        <p className="text-slate-500 text-sm mt-1 mb-4">Descubra mercados, restaurantes e açougues perto de você que ainda não são clientes.</p>
+                        <div className="flex flex-wrap items-center gap-2 mb-3">
+                            <span className="text-xs font-bold text-slate-500">Raio de busca:</span>
+                            {[1, 3, 5, 10].map(r => (
+                                <button key={r} onClick={() => setRaioKm(r)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${raioKm === r ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{r} km</button>
+                            ))}
+                        </div>
+                        <button onClick={buscarPerto} disabled={buscando} className="w-full sm:w-auto bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold py-3 px-6 rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
+                            {buscando ? <><div className="h-4 w-4"><IconLoader2 /></div> Buscando...</> : <>📍 Buscar perto de mim</>}
+                        </button>
+                    </header>
+
+                    {erro && <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-semibold">⚠️ {erro}</div>}
+
+                    {resultados && resultados.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                            <button onClick={() => setFiltroCategoria('todos')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroCategoria === 'todos' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>Todos ({resultados.length})</button>
+                            {Object.entries(OSM_CATEGORIAS).map(([key, c]) => {
+                                const qtd = resultados.filter(r => r.categoria === key).length;
+                                if (qtd === 0) return null;
+                                return <button key={key} onClick={() => setFiltroCategoria(key)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${filtroCategoria === key ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>{c.emoji} {c.label} ({qtd})</button>;
+                            })}
+                        </div>
+                    )}
+
+                    {resultados === null && !buscando && !erro && (
+                        <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-400">
+                            <p className="text-lg font-bold">Toque em "Buscar perto de mim" pra começar.</p>
+                            <p className="text-sm mt-1">Vamos pedir permissão de localização ao navegador. 📍</p>
+                        </div>
+                    )}
+
+                    {resultados && resultados.length === 0 && (
+                        <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-400">
+                            <p className="text-lg font-bold">Nenhum estabelecimento encontrado nesse raio.</p>
+                            <p className="text-sm mt-1">Tenta aumentar o raio de busca. 🔍</p>
+                        </div>
+                    )}
+
+                    {resultadosFiltrados.length > 0 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {resultadosFiltrados.map(lugar => {
+                                const cat = OSM_CATEGORIAS[lugar.categoria] || { label: lugar.categoria, emoji: '📍' };
+                                const jaAdicionado = adicionados[lugar.id];
+                                return (
+                                    <div key={lugar.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200">
+                                        <div className="flex justify-between items-start gap-2">
+                                            <div className="min-w-0">
+                                                <p className="font-bold text-slate-800 truncate">{lugar.nome}</p>
+                                                <p className="text-xs text-slate-500 truncate">{lugar.endereco || 'Endereço não informado'}</p>
+                                            </div>
+                                            <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0">{cat.emoji} {cat.label}</span>
+                                        </div>
+                                        <p className="text-xs text-slate-400 mt-2">📏 {lugar.distKm < 1 ? Math.round(lugar.distKm * 1000) + ' m' : lugar.distKm.toFixed(1) + ' km'} de você</p>
+                                        {lugar.jaCliente && <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 mt-2">✅ Parece que já é cliente</p>}
+                                        <div className="flex gap-2 mt-3">
+                                            <a href={`https://www.google.com/maps/search/?api=1&query=${lugar.lat},${lugar.lng}`} target="_blank" rel="noopener noreferrer" className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-xs transition-colors text-center">🗺️ Ver no Maps</a>
+                                            {!lugar.jaCliente && (
+                                                <button onClick={() => adicionarComoLead(lugar)} disabled={adicionando[lugar.id] || jaAdicionado} className="flex-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 font-bold py-2 rounded-lg text-xs transition-colors">
+                                                    {jaAdicionado ? '✅ Adicionado' : adicionando[lugar.id] ? 'Add...' : '➕ Add em Cadastros'}
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         const CadastrosProcessoScreen = ({ user, showMessage }) => {
             const [leads, setLeads] = useState([]);
             const [loading, setLoading] = useState(true);
@@ -4006,6 +4182,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.5.0', data: '09/07/2026', areas: ['site'], itens: [
+                'Novo "📍 Perto de Mim": usa sua localização pra sugerir mercados, restaurantes e açougues perto de você que ainda não são clientes (dados do OpenStreetMap, sem custo)',
+                'Cada sugestão mostra distância, endereço e um botão pra abrir no Google Maps ou já adicionar direto nos Cadastros em Processo',
+            ]},
             { versao: '2.4.2', data: '09/07/2026', areas: ['site'], itens: [
                 'Corrige o nome do menu "Cadastros em Processo" quebrando em duas linhas no menu lateral',
             ]},
@@ -6579,6 +6759,7 @@
                     case 'dashboard': return <DashboardScreen user={user} clients={clients} products={products} />;
                     case 'clients': return <ClientsScreen products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'cadastrosProcesso': return <CadastrosProcessoScreen user={user} showMessage={showMessage} />;
+                    case 'prospeccao': return <ProspeccaoScreen user={user} clients={clients} showMessage={showMessage} />;
                     case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
                     case 'credits': return <CreditsScreen />;
@@ -6685,6 +6866,7 @@
                             <NavButton route="dashboard" icon={IconDashboard} label="Painel (Dashboard)" />
                             <NavButton route="clients" icon={IconUsers} label="CRM & Rotas" />
                             <NavButton route="cadastrosProcesso" icon={IconFileText} label="Em Cadastramento" />
+                            <NavButton route="prospeccao" icon={IconMapPin} label="Perto de Mim" />
                             <NavButton route="radar" icon={IconDashboard} label="Radar de Clientes" />
                             <NavButton route="profile" icon={IconSettings} label="Meu Perfil / Admin" />
                             
