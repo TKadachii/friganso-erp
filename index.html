@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 140;
+        const APP_BUILD_VERSION = 141;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3103,6 +3103,16 @@
             return campos.filter(c => c.valor);
         };
 
+        // 🏠 O endereço desse comprovante vem tudo junto num texto só, tipo:
+        // "RUA VEREADOR JUAREZ MALHEIROS CHALOUB, 371 Costa do Sol - MACAÉ RJ 27.923-240"
+        // Padrão: Rua, Número Bairro - Cidade UF CEP. Se não bater o padrão, devolve tudo vazio
+        // (quem chama já sabe mostrar o texto original inteiro nesse caso).
+        const separarEnderecoSefaz = (endereco) => {
+            const m = (endereco || '').match(/^(.+?),\s*(\d+)\s+(.+?)\s*-\s*(.+?)\s+([A-Z]{2})\s+([\d.\-]+)$/);
+            if (!m) return { rua: '', numero: '', bairro: '', cidade: '', uf: '', cep: '' };
+            return { rua: m[1].trim(), numero: m[2].trim(), bairro: m[3].trim(), cidade: m[4].trim(), uf: m[5].trim(), cep: m[6].trim() };
+        };
+
         // 📄 Lê o PDF de "Comprovante de Inscrição e Situação Cadastral" (Sintegra/SEFAZ estadual) e tenta
         // achar a Inscrição Estadual e a situação — não tem API pública gratuita pra isso (é por estado),
         // então a saída é ler o PDF que o próprio vendedor já baixa do site da Fazenda.
@@ -3153,6 +3163,7 @@
                 }
                 return '';
             };
+            const enderecoIE = acharValorPorColuna('Endere[çc]o do estabelecimento');
             return {
                 cnpj: acharValorPorColuna('CNPJ\\/CPF'),
                 inscricaoEstadual: acharValorPorColuna('Inscri[çc][ãa]o Estadual'),
@@ -3161,7 +3172,8 @@
                 razaoSocialIE: acharValorPorColuna('Nome empresarial'),
                 nomeFantasiaIE: acharValorPorColuna('T[íi]tulo do estabelecimento'),
                 naturezaJuridicaIE: acharValorPorColuna('Natureza Jur[íi]dica'),
-                enderecoIE: acharValorPorColuna('Endere[çc]o do estabelecimento'),
+                enderecoIE,
+                ...separarEnderecoSefaz(enderecoIE),
                 textoCompleto: linhas.map(l => l.text).join('\n'),
             };
         };
@@ -3271,7 +3283,16 @@
                                         ['CNPJ', dadosIE.cnpj],
                                         ['Inscrição Estadual', dadosIE.inscricaoEstadual],
                                         ['Natureza Jurídica', dadosIE.naturezaJuridicaIE],
-                                        ['Endereço', dadosIE.enderecoIE],
+                                        // Endereço separado em campos (CEP, Rua, Número...) quando dá pra quebrar o
+                                        // texto do PDF nesse padrão; senão cai no texto inteiro como fallback.
+                                        ...(dadosIE.rua ? [
+                                            ['CEP', dadosIE.cep],
+                                            ['Rua/Avenida/Travessa', dadosIE.rua],
+                                            ['Número', dadosIE.numero],
+                                            ['Bairro', dadosIE.bairro],
+                                            ['Cidade', dadosIE.cidade],
+                                            ['UF', dadosIE.uf],
+                                        ] : [['Endereço', dadosIE.enderecoIE]]),
                                     ].filter(([, v]) => v).map(([label, valor]) => (
                                         <button key={label} onClick={() => copiar(label, valor)} className="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 transition-colors flex items-center justify-between gap-2">
                                             <span className="min-w-0">
@@ -4625,6 +4646,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.7.3', data: '09/07/2026', areas: ['site'], itens: [
+                'Leitor de PDF da Inscrição Estadual: endereço agora vem separado por campo (CEP, Rua, Número, Bairro, Cidade, UF) igual já era na Consulta CNPJ pela Receita Federal, em vez de tudo numa linha só',
+            ]},
             { versao: '2.7.2', data: '09/07/2026', areas: ['site'], itens: [
                 'Leitor de PDF da Inscrição Estadual agora também extrai razão social, nome fantasia, CNPJ, natureza jurídica e endereço — cada um em linha separada com botão de copiar, igual já era pra Inscrição Estadual',
                 'Corrigido bug onde um campo em branco no PDF (ex: nome fantasia vazio) fazia a leitura pegar o valor errado de outro campo por engano',
