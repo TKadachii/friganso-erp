@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 139;
+        const APP_BUILD_VERSION = 140;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3135,12 +3135,17 @@
                 });
             }
             // Acha o rótulo, pega a posição X dele, e busca na linha de baixo o item cujo X é mais
-            // próximo — é assim que colunas de tabela se alinham nesse tipo de comprovante.
+            // próximo — é assim que colunas de tabela se alinham nesse tipo de comprovante. Quando o
+            // campo não tem valor (célula em branco), o PDF simplesmente não gera nenhum item pra ela,
+            // então "a linha de baixo" acaba sendo o próximo RÓTULO em vez de um valor — por isso
+            // rejeita a "linha de baixo" se ela também bater com algum outro rótulo conhecido.
+            const TODOS_OS_ROTULOS_SEFAZ = /CNPJ\/CPF|Inscri[çc][ãa]o Estadual|Data da concess[ãa]o|Nome empresarial|T[íi]tulo do estabelecimento|Natureza Jur[íi]dica|Tipo de unidade principal|Regime de apura[çc][ãa]o|Endere[çc]o do estabelecimento|Situa[çc][ãa]o cadastral|Data da situa[çc][ãa]o cadastral|Atividades econ[ôo]micas/i;
             const acharValorPorColuna = (rotulo) => {
                 const re = new RegExp(rotulo, 'i');
                 for (let i = 0; i < linhas.length; i++) {
                     const itemRotulo = linhas[i].items.find(it => re.test(it.str));
                     if (!itemRotulo || !linhas[i + 1]) continue;
+                    if (TODOS_OS_ROTULOS_SEFAZ.test(linhas[i + 1].text)) continue;
                     const candidatos = linhas[i + 1].items;
                     if (!candidatos.length) continue;
                     const maisProximo = candidatos.reduce((melhor, it) => Math.abs(it.x - itemRotulo.x) < Math.abs(melhor.x - itemRotulo.x) ? it : melhor);
@@ -3149,9 +3154,14 @@
                 return '';
             };
             return {
+                cnpj: acharValorPorColuna('CNPJ\\/CPF'),
                 inscricaoEstadual: acharValorPorColuna('Inscri[çc][ãa]o Estadual'),
                 situacaoCadastralIE: acharValorPorColuna('Situa[çc][ãa]o cadastral'),
                 dataSituacaoIE: acharValorPorColuna('Data da situa[çc][ãa]o cadastral'),
+                razaoSocialIE: acharValorPorColuna('Nome empresarial'),
+                nomeFantasiaIE: acharValorPorColuna('T[íi]tulo do estabelecimento'),
+                naturezaJuridicaIE: acharValorPorColuna('Natureza Jur[íi]dica'),
+                enderecoIE: acharValorPorColuna('Endere[çc]o do estabelecimento'),
                 textoCompleto: linhas.map(l => l.text).join('\n'),
             };
         };
@@ -3247,20 +3257,31 @@
 
                         {erroIE && <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs mt-3">⚠️ {erroIE}</p>}
 
-                        {dadosIE && dadosIE.inscricaoEstadual && (
+                        {dadosIE && (dadosIE.inscricaoEstadual || dadosIE.razaoSocialIE || dadosIE.enderecoIE) && (
                             <div className="mt-3">
                                 {dadosIE.situacaoCadastralIE && (
                                     <div className={`rounded-xl px-4 py-3 mb-2 text-sm ${/ativ/i.test(dadosIE.situacaoCadastralIE) ? 'bg-emerald-50 border border-emerald-200 text-emerald-700 font-semibold' : 'bg-red-50 border border-red-200 text-red-700 font-bold'}`}>
                                         {/ativ/i.test(dadosIE.situacaoCadastralIE) ? '✅' : '⚠️'} Situação da Inscrição Estadual: {dadosIE.situacaoCadastralIE}{dadosIE.dataSituacaoIE && ` (desde ${dadosIE.dataSituacaoIE})`}
                                     </div>
                                 )}
-                                <button onClick={() => copiar('Inscrição Estadual', dadosIE.inscricaoEstadual)} className="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 transition-colors flex items-center justify-between gap-2">
-                                    <span className="min-w-0">
-                                        <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide">Inscrição Estadual</span>
-                                        <span className="block text-sm text-slate-800 truncate">{dadosIE.inscricaoEstadual}</span>
-                                    </span>
-                                    <span className="text-sm shrink-0">📋</span>
-                                </button>
+                                <div className="space-y-1.5">
+                                    {[
+                                        ['Razão Social', dadosIE.razaoSocialIE],
+                                        ['Nome Fantasia', dadosIE.nomeFantasiaIE],
+                                        ['CNPJ', dadosIE.cnpj],
+                                        ['Inscrição Estadual', dadosIE.inscricaoEstadual],
+                                        ['Natureza Jurídica', dadosIE.naturezaJuridicaIE],
+                                        ['Endereço', dadosIE.enderecoIE],
+                                    ].filter(([, v]) => v).map(([label, valor]) => (
+                                        <button key={label} onClick={() => copiar(label, valor)} className="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 transition-colors flex items-center justify-between gap-2">
+                                            <span className="min-w-0">
+                                                <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide">{label}</span>
+                                                <span className="block text-sm text-slate-800 truncate">{valor}</span>
+                                            </span>
+                                            <span className="text-sm shrink-0">📋</span>
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         )}
 
@@ -4604,6 +4625,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.7.2', data: '09/07/2026', areas: ['site'], itens: [
+                'Leitor de PDF da Inscrição Estadual agora também extrai razão social, nome fantasia, CNPJ, natureza jurídica e endereço — cada um em linha separada com botão de copiar, igual já era pra Inscrição Estadual',
+                'Corrigido bug onde um campo em branco no PDF (ex: nome fantasia vazio) fazia a leitura pegar o valor errado de outro campo por engano',
+            ]},
             { versao: '2.7.1', data: '09/07/2026', areas: ['site'], itens: [
                 'Consulta CNPJ: endereço agora aparece separado por campo (CEP, Rua, Número, Complemento, Bairro, Cidade, UF) em vez de tudo junto numa linha só',
                 'Consulta CNPJ ganhou leitor de PDF: sobe o "Comprovante de Inscrição e Situação Cadastral" (Sintegra/SEFAZ) que você já baixa do site da Fazenda, e o app lê e mostra a Inscrição Estadual e a situação — não existe consulta pública gratuita disso por API (é por estado), então essa é a forma de trazer esse dado pro app',
