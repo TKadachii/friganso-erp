@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 137;
+        const APP_BUILD_VERSION = 138;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3103,6 +3103,65 @@
             return campos.filter(c => c.valor);
         };
 
+        // 🔍 Consulta CNPJ avulsa — igual a busca de dentro do Cadastro em Processo, mas sem precisar
+        // criar um cliente antes. Útil só pra conferir um CNPJ rapidinho.
+        const ConsultaCnpjScreen = ({ showMessage }) => {
+            const [cnpj, setCnpj] = useState('');
+            const [buscando, setBuscando] = useState(false);
+            const [resultado, setResultado] = useState(null);
+            const [erro, setErro] = useState(null);
+
+            const buscar = async () => {
+                setBuscando(true); setErro(null); setResultado(null);
+                try {
+                    const dados = await buscarCnpjNaReceita(cnpj);
+                    setResultado(dados);
+                } catch (e) { setErro(e.message || 'Erro ao consultar o CNPJ.'); } finally { setBuscando(false); }
+            };
+            const copiar = (label, valor) => { navigator.clipboard.writeText(valor); showMessage(`"${label}" copiado!`, 'success'); };
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2"><div className="h-6 w-6"><IconSearch /></div> Consulta CNPJ</h1>
+                        <p className="text-slate-500 text-sm mt-1 mb-4">Digita o CNPJ e o app busca razão social, endereço e situação cadastral na Receita Federal — de graça, sem precisar criar um cadastro.</p>
+                        <div className="flex gap-2">
+                            <input type="text" value={cnpj} onChange={e => setCnpj(formatarCNPJ(e.target.value))} onKeyDown={e => e.key === 'Enter' && cnpj.replace(/\D/g, '').length === 14 && buscar()} placeholder="00.000.000/0000-00" className="flex-1 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                            <button onClick={buscar} disabled={buscando || cnpj.replace(/\D/g, '').length !== 14} className="bg-rose-700 hover:bg-rose-800 disabled:opacity-40 text-white font-bold px-6 rounded-xl text-sm transition-colors shrink-0">{buscando ? '...' : '🔍 Buscar'}</button>
+                        </div>
+                    </header>
+
+                    {erro && <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-semibold">⚠️ {erro}</div>}
+
+                    {resultado && (
+                        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                            <div className={`rounded-xl px-4 py-3 mb-4 text-sm ${resultado.situacaoCadastral === 'ATIVA' ? 'bg-emerald-50 border border-emerald-200 text-emerald-700 font-semibold' : 'bg-red-50 border border-red-200 text-red-700 font-bold'}`}>
+                                {resultado.situacaoCadastral === 'ATIVA' ? '✅' : '⚠️'} Situação cadastral: {resultado.situacaoCadastral || 'não informada'}
+                            </div>
+                            <div className="space-y-1.5">
+                                {[
+                                    ['Razão Social', resultado.razaoSocial],
+                                    ['Nome Fantasia', resultado.nomeFantasia],
+                                    ['Natureza Jurídica', resultado.naturezaJuridica],
+                                    ['Endereço', resultado.endereco],
+                                    ['Telefone', resultado.telefone],
+                                    ['Email', resultado.email],
+                                ].filter(([, v]) => v).map(([label, valor]) => (
+                                    <button key={label} onClick={() => copiar(label, valor)} className="w-full text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 transition-colors flex items-center justify-between gap-2">
+                                        <span className="min-w-0">
+                                            <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wide">{label}</span>
+                                            <span className="block text-sm text-slate-800 truncate">{valor}</span>
+                                        </span>
+                                        <span className="text-sm shrink-0">📋</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         // 🧭 Perto de Mim — usa a localização do navegador + OpenStreetMap (Overpass API, gratuita e
         // sem chave) pra sugerir mercados/restaurantes/açougues perto do vendedor que ainda não são
         // clientes, com um botão pra já mandar direto pros Cadastros em Processo.
@@ -4432,6 +4491,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.7.0', data: '09/07/2026', areas: ['site'], itens: [
+                'Nova aba "🔍 Consulta CNPJ": digita o número e o app busca razão social, endereço, situação cadastral e mais na Receita Federal — sem precisar criar um cadastro antes, só pra conferir rapidinho',
+            ]},
             { versao: '2.6.1', data: '09/07/2026', areas: ['site'], itens: [
                 'Cadastros em Processo: novo botão "📋 Copiar pro formulário de cadastro" — mostra os dados do cliente (razão social, CNPJ, endereço, telefone) campo por campo, cada um com botão de copiar, pra colar direto no formulário oficial de análise de crédito',
             ]},
@@ -7024,6 +7086,7 @@
                     case 'dashboard': return <DashboardScreen user={user} clients={clients} products={products} />;
                     case 'clients': return <ClientsScreen products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'cadastrosProcesso': return <CadastrosProcessoScreen user={user} showMessage={showMessage} />;
+                    case 'consultaCnpj': return <ConsultaCnpjScreen showMessage={showMessage} />;
                     case 'prospeccao': return <ProspeccaoScreen user={user} clients={clients} showMessage={showMessage} />;
                     case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
@@ -7131,6 +7194,7 @@
                             <NavButton route="dashboard" icon={IconDashboard} label="Painel (Dashboard)" />
                             <NavButton route="clients" icon={IconUsers} label="CRM & Rotas" />
                             <NavButton route="cadastrosProcesso" icon={IconFileText} label="Em Cadastramento" />
+                            <NavButton route="consultaCnpj" icon={IconSearch} label="Consulta CNPJ" />
                             <NavButton route="prospeccao" icon={IconMapPin} label="Perto de Mim" />
                             <NavButton route="radar" icon={IconDashboard} label="Radar de Clientes" />
                             <NavButton route="profile" icon={IconSettings} label="Meu Perfil / Admin" />
