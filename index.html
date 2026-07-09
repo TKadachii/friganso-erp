@@ -243,6 +243,10 @@
             return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         };
 
+        // Logo oficial (gansos + "FRIGANSO") embutida como base64 — evita qualquer problema de
+        // CORS ao desenhar no canvas, e funciona offline (PWA) sem depender de rede.
+        const FRIGANSO_LOGO_DATA_URI = 'data:image/png;base64,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';
+
         const FrigansoLogo = ({ className }) => {
             // 🌸 Nos dias do tema sakura, a logo vira uma flor de cerejeira minimalista.
             if (typeof window !== 'undefined' && window.ehTemaSakura && window.ehTemaSakura()) {
@@ -337,7 +341,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 127;
+        const APP_BUILD_VERSION = 128;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3703,6 +3707,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.3.1', data: '08/07/2026', areas: ['site'], itens: [
+                'Catálogo e Meu Portfólio agora usam a logo oficial da Friganso (gansos + nome) embutida no app — carrega instantâneo e não depende mais de internet/CORS',
+            ]},
             { versao: '2.3.0', data: '08/07/2026', areas: ['site'], itens: [
                 'Novo "📇 Meu Portfólio" (na tela de Perfil): preenche cargo, tempo de casa, especialidades e WhatsApp, e gera um cartão de apresentação (imagem 9:16) pra mandar pro cliente se apresentar',
             ]},
@@ -3978,9 +3985,7 @@
             ctx.fillText(linha, x, y);
             return y + lineHeight;
         };
-        const LOGO_GANSO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><g transform="translate(-10 3) scale(1.9)" fill="#FB4B3A"><path d="M22,82 C19,68 27,57 41,53 C45,41 53,31 65,25 C75,20 85,18 91,20 C95,21 95,25 90,26 C81,28 73,32 67,38 C61,44 57,51 55,59 C66,57 78,53 89,46 C82,58 71,66 58,70 C47,73 32,75 26,83 C24,85 22,85 22,82 Z"/><path d="M89,19 L97,17 L91,24 Z"/></g></svg>`;
         const FRIGANSO_RED = '#FB4B3A'; // mesma cor do logo/marca usada no resto do app
-        const FRIGANSO_LOGO_URL = 'https://friganso.com.br/assets/logo-quadrada-RgRpEdHY.webp';
         // 📱 Presets de quantidade — pensado pra Status do WhatsApp: imagem sempre 9:16 (Full HD celular,
         // 1080x1920), então quanto mais itens no preset, menor cada célula da grade fica.
         const CATALOGO_PRESETS = [
@@ -4019,19 +4024,14 @@
             if (paginaInfo && paginaInfo.total > 1) linhaInfo += `   ·   página ${paginaInfo.atual}/${paginaInfo.total}`;
             ctx.fillText(linhaInfo, PAD, 108);
 
-            // logo real da Friganso (canto direito) — se não carregar (ex.: CORS do site deles), usa o ícone do app
-            try {
-                const logo = await carregarImagemCanvas(FRIGANSO_LOGO_URL, true);
-                ctx.drawImage(logo, W - PAD - 62, 20, 62, 62);
-            } catch (e) {
+            // logo oficial da Friganso (canto direito) — já vem com o nome escrito, então não precisa de texto ao lado
+            {
+                const logoH = 66, logoW = logoH * (112 / 98);
                 try {
-                    const logo = await carregarImagemCanvas('data:image/svg+xml;base64,' + btoa(LOGO_GANSO_SVG));
-                    ctx.drawImage(logo, W - PAD - 62, 20, 62, 62);
-                } catch (e2) {}
+                    const logo = await carregarImagemCanvas(FRIGANSO_LOGO_DATA_URI);
+                    ctx.drawImage(logo, W - PAD - logoW, 18, logoW, logoH);
+                } catch (e) {}
             }
-            ctx.fillStyle = '#7f1d1d'; ctx.font = 'bold 20px system-ui, sans-serif'; ctx.textAlign = 'right';
-            ctx.fillText('FRIGANSO', W - PAD, 106);
-            ctx.textAlign = 'left';
 
             // cartão branco atrás da grade de produtos
             roundRectPath(ctx, gridX - 14, gridY - 14, gridW + 28, gridH + 28, 22);
@@ -4102,15 +4102,18 @@
             bgGrad.addColorStop(0, '#C81E1E'); bgGrad.addColorStop(1, '#7f1d1d');
             ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
 
-            // logo no topo
-            try {
-                const logo = await carregarImagemCanvas(FRIGANSO_LOGO_URL, true);
-                ctx.drawImage(logo, W / 2 - 44, 70, 88, 88);
-            } catch (e) {
-                try { const logo = await carregarImagemCanvas('data:image/svg+xml;base64,' + btoa(LOGO_GANSO_SVG)); ctx.drawImage(logo, W / 2 - 44, 70, 88, 88); } catch (e2) {}
+            // logo oficial no topo — dentro de um selo branco pra manter contraste sobre o fundo vermelho
+            {
+                const logoH = 78, logoW = logoH * (112 / 98);
+                const seloW = logoW + 56, seloH = logoH + 40;
+                const seloX = W / 2 - seloW / 2, seloY = 60;
+                roundRectPath(ctx, seloX, seloY, seloW, seloH, 20);
+                ctx.fillStyle = '#ffffff'; ctx.fill();
+                try {
+                    const logo = await carregarImagemCanvas(FRIGANSO_LOGO_DATA_URI);
+                    ctx.drawImage(logo, W / 2 - logoW / 2, seloY + 20, logoW, logoH);
+                } catch (e) {}
             }
-            ctx.fillStyle = '#fecaca'; ctx.font = 'bold 22px system-ui, sans-serif'; ctx.textAlign = 'center';
-            ctx.fillText('FRIGANSO', W / 2, 200);
 
             // foto de perfil (redonda)
             const fotoR = 190, fotoCx = W / 2, fotoCy = 460;
