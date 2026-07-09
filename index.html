@@ -341,7 +341,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 128;
+        const APP_BUILD_VERSION = 129;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -819,6 +819,15 @@
                     canvas.toBlob(blob => { if (blob) setCartaoUrl(URL.createObjectURL(blob)); }, 'image/png');
                 } catch (e) { showMessage('Erro ao gerar o cartão.', 'error'); } finally { setGerandoCartao(false); }
             };
+            // 💬 Mensagem pra mandar junto com o cartão — puxa conversa com um cliente novo
+            const gerarMensagemIntroPortfolio = () => {
+                const nome = (user.name || '').split(' ')[0];
+                const cargo = portfolioDados.cargo || 'Vendedor Friganso';
+                let msg = `Oi! Me chamo ${nome}, sou ${cargo} na Friganso 🥩`;
+                if (portfolioDados.especialidades) msg += `\nTrabalho principalmente com: ${portfolioDados.especialidades}.`;
+                msg += `\n\nFico à disposição pra te apresentar nosso catálogo e as melhores condições pro seu negócio. Segue meu cartão aqui embaixo 👇`;
+                return msg;
+            };
             const [usersList, setUsersList] = useState([]);
             const [loading, setLoading] = useState(false);
             const [installPrompt, setInstallPrompt] = useState(window.__pwaInstallPrompt || null);
@@ -895,6 +904,7 @@
                                     <button onClick={() => setCartaoUrl(null)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Fechar</button>
                                     <a href={cartaoUrl} download={`friganso-cartao-${user.code}.png`} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl transition-colors text-center">⬇️ Baixar</a>
                                 </div>
+                                <button onClick={() => { navigator.clipboard.writeText(gerarMensagemIntroPortfolio()); showMessage('Mensagem copiada! Cola no Zap antes de mandar o cartão.', 'success'); }} className="w-full mt-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-sm transition-colors">💬 Copiar mensagem de apresentação</button>
                             </div>
                         </div>
                     )}
@@ -2961,6 +2971,213 @@
             );
         };
 
+        // 📋 Cadastros em Processo — lista pessoal do vendedor com os clientes que ele está tentando
+        // cadastrar, o que já recebeu de cada um e uma mensagem simpática pronta pra cutucar o resto.
+        const CADASTRO_TIPOS = {
+            cpf: { label: 'CPF', itens: ['Foto da identidade', 'CPF', 'Comprovante de residência', 'Email'] },
+            cnpj: { label: 'CNPJ', itens: ['Número do CNPJ', 'Email'] },
+            cnpj_mei: { label: 'CNPJ MEI', itens: ['Número do CNPJ', 'Email', 'Foto da identidade do titular', 'CPF do titular', 'Comprovante de residência (endereço do CNPJ)'] },
+        };
+        const CADASTRO_ABERTURAS = [
+            'Oi, {nome}! Tudo bem? 😊',
+            'Opa, {nome}! Passando aqui rapidinho.',
+            'Oi, {nome}, tudo certo por aí?',
+            'E aí, {nome}! Beleza?',
+        ];
+        const CADASTRO_FECHOS = [
+            'Assim que fechamos o cadastro já te mostro nossas ofertas da semana e libero sua primeira entrega rapidinho! 🚚🔥',
+            'Fechando esses detalhes, já libero acesso às nossas promoções e você já começa a economizar nas compras! 💰',
+            'Com o cadastro prontinho, já te passo as melhores condições e uma oferta especial de boas-vindas! 🎉',
+            'Resolvendo isso, te coloco na nossa lista de ofertas exclusivas — tem coisa boa chegando essa semana! 😉',
+        ];
+        const itensFaltantesCadastro = (lead) => {
+            const tipo = CADASTRO_TIPOS[lead.tipoCadastro] || CADASTRO_TIPOS.cpf;
+            return tipo.itens.filter(i => !(lead.itensRecebidos || []).includes(i));
+        };
+        const gerarMensagemCadastro = (lead) => {
+            const primeiroNome = (lead.nome || '').split(' ')[0] || 'tudo bem';
+            const abertura = CADASTRO_ABERTURAS[Math.floor(Math.random() * CADASTRO_ABERTURAS.length)].replace('{nome}', primeiroNome);
+            const faltando = itensFaltantesCadastro(lead);
+            if (faltando.length === 0) {
+                return `${abertura}\n\nSó pra confirmar: já está tudo certinho com seus documentos por aqui! Assim que eu finalizar aqui do meu lado já te aviso. 😉`;
+            }
+            const fecho = CADASTRO_FECHOS[Math.floor(Math.random() * CADASTRO_FECHOS.length)];
+            const lista = faltando.map(i => `• ${i}`).join('\n');
+            return `${abertura}\n\nPra eu finalizar seu cadastro na Friganso, ainda preciso de mais esses detalhes:\n\n${lista}\n\n${fecho}`;
+        };
+
+        const CadastrosProcessoScreen = ({ user, showMessage }) => {
+            const [leads, setLeads] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [showForm, setShowForm] = useState(false);
+            const [editingId, setEditingId] = useState(null);
+            const [form, setForm] = useState({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '' });
+            const [salvando, setSalvando] = useState(false);
+            const [mensagemLead, setMensagemLead] = useState(null);
+            const [mensagemTexto, setMensagemTexto] = useState('');
+
+            useEffect(() => {
+                if (!user.id) return;
+                const unsubscribe = db.collection('cadastros_processo').where('vendedorId', '==', user.id).onSnapshot(snap => {
+                    const lista = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    lista.sort((a, b) => (b.atualizadoEm || 0) - (a.atualizadoEm || 0));
+                    setLeads(lista);
+                    setLoading(false);
+                }, err => { console.error(err); setLoading(false); });
+                return () => unsubscribe();
+            }, [user.id]);
+
+            const abrirNovo = () => {
+                setEditingId(null);
+                setForm({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '' });
+                setShowForm(true);
+            };
+            const abrirEditar = (lead) => {
+                setEditingId(lead.id);
+                setForm({ nome: lead.nome || '', contato: lead.contato || '', tipoCadastro: lead.tipoCadastro || 'cpf', itensRecebidos: lead.itensRecebidos || [], observacoes: lead.observacoes || '' });
+                setShowForm(true);
+            };
+            const toggleItem = (item) => {
+                setForm(f => ({ ...f, itensRecebidos: f.itensRecebidos.includes(item) ? f.itensRecebidos.filter(i => i !== item) : [...f.itensRecebidos, item] }));
+            };
+            const salvarLead = async () => {
+                if (!form.nome.trim()) { showMessage('Coloca ao menos o nome do cliente.', 'error'); return; }
+                setSalvando(true);
+                try {
+                    const dados = { ...form, vendedorId: user.id, atualizadoEm: Date.now() };
+                    if (editingId) {
+                        await db.collection('cadastros_processo').doc(editingId).update(dados);
+                    } else {
+                        await db.collection('cadastros_processo').add({ ...dados, criadoEm: Date.now() });
+                    }
+                    showMessage('Salvo!', 'success');
+                    setShowForm(false);
+                } catch (e) { showMessage('Erro ao salvar.', 'error'); } finally { setSalvando(false); }
+            };
+            const excluirLead = async (id) => {
+                if (!window.confirm('Remover esse cadastro da lista?')) return;
+                try { await db.collection('cadastros_processo').doc(id).delete(); showMessage('Removido.', 'success'); }
+                catch (e) { showMessage('Erro ao remover.', 'error'); }
+            };
+            const abrirMensagem = (lead) => { setMensagemLead(lead); setMensagemTexto(gerarMensagemCadastro(lead)); };
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                            <h2 className="text-2xl font-black text-slate-800">📋 Cadastros em Processo</h2>
+                            <p className="text-sm text-slate-500">Sua lista pessoal de clientes que você está tentando cadastrar.</p>
+                        </div>
+                        <button onClick={abrirNovo} className="bg-rose-700 hover:bg-rose-800 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-colors shrink-0">+ Novo cadastro</button>
+                    </div>
+
+                    {loading ? (
+                        <p className="text-slate-400 text-sm">Carregando...</p>
+                    ) : leads.length === 0 ? (
+                        <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-400">
+                            Nenhum cadastro em processo ainda. Clique em "+ Novo cadastro" pra começar a acompanhar.
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {leads.map(lead => {
+                                const tipo = CADASTRO_TIPOS[lead.tipoCadastro] || CADASTRO_TIPOS.cpf;
+                                const total = tipo.itens.length;
+                                const recebidos = (lead.itensRecebidos || []).length;
+                                const completo = recebidos >= total;
+                                const pct = Math.round((recebidos / total) * 100);
+                                return (
+                                    <div key={lead.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200">
+                                        <div className="flex justify-between items-start gap-2">
+                                            <div className="min-w-0">
+                                                <p className="font-bold text-slate-800 truncate">{lead.nome}</p>
+                                                {lead.contato && <p className="text-xs text-slate-500 truncate">{lead.contato}</p>}
+                                            </div>
+                                            <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0">{tipo.label}</span>
+                                        </div>
+                                        <div className="mt-3">
+                                            <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                                <span>{recebidos}/{total} itens</span>
+                                                {completo && <span className="text-emerald-600 font-bold">✅ Completo!</span>}
+                                            </div>
+                                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                <div className={`h-full ${completo ? 'bg-emerald-500' : 'bg-rose-600'}`} style={{ width: pct + '%' }} />
+                                            </div>
+                                        </div>
+                                        {lead.observacoes && <p className="text-xs text-slate-500 mt-2 line-clamp-2">{lead.observacoes}</p>}
+                                        <div className="flex gap-2 mt-3">
+                                            <button onClick={() => abrirEditar(lead)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-xs transition-colors">✏️ Editar</button>
+                                            <button onClick={() => abrirMensagem(lead)} className="flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold py-2 rounded-lg text-xs transition-colors">💬 Mensagem</button>
+                                            <button onClick={() => excluirLead(lead.id)} className="bg-slate-100 hover:bg-red-100 text-slate-500 hover:text-red-600 font-bold py-2 px-3 rounded-lg text-xs transition-colors">🗑️</button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {showForm && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 max-h-[92vh] overflow-y-auto">
+                                <h3 className="font-bold text-slate-800 text-lg mb-4">{editingId ? 'Editar cadastro' : 'Novo cadastro'}</h3>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase">Nome do cliente</label>
+                                        <input type="text" value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder="Nome do cliente ou do negócio" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase">Contato (WhatsApp)</label>
+                                        <input type="text" value={form.contato} onChange={e => setForm(f => ({ ...f, contato: e.target.value }))} placeholder="(21) 99999-9999" className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase">Tipo de cadastro</label>
+                                        <select value={form.tipoCadastro} onChange={e => setForm(f => ({ ...f, tipoCadastro: e.target.value, itensRecebidos: [] }))} className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm">
+                                            {Object.entries(CADASTRO_TIPOS).map(([key, t]) => <option key={key} value={key}>{t.label}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase">O que já recebi</label>
+                                        <div className="mt-1 space-y-1.5">
+                                            {CADASTRO_TIPOS[form.tipoCadastro].itens.map(item => (
+                                                <label key={item} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm cursor-pointer">
+                                                    <input type="checkbox" checked={form.itensRecebidos.includes(item)} onChange={() => toggleItem(item)} className="w-4 h-4 accent-rose-600" />
+                                                    {item}
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase">Observações</label>
+                                        <textarea value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} rows={2} placeholder="Ex: só fala depois das 18h, esperando o contador mandar o CNPJ..." className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm resize-none" />
+                                    </div>
+                                </div>
+                                <div className="flex gap-3 mt-5">
+                                    <button onClick={() => setShowForm(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors">Cancelar</button>
+                                    <button onClick={salvarLead} disabled={salvando} className="flex-1 bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-colors">{salvando ? 'Salvando...' : 'Salvar'}</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {mensagemLead && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[999]">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6">
+                                <h3 className="font-bold text-slate-800 text-lg mb-1">💬 Mensagem pra {mensagemLead.nome}</h3>
+                                <p className="text-xs text-slate-500 mb-3">Uma cutucadinha simpática, sem parecer cobrança.</p>
+                                <div className="bg-[#e1ffc7] p-4 rounded-2xl border border-[#d3f4b8]">
+                                    <pre className="font-mono text-sm whitespace-pre-wrap text-slate-800">{mensagemTexto}</pre>
+                                </div>
+                                <div className="flex gap-3 mt-4">
+                                    <button onClick={() => setMensagemTexto(gerarMensagemCadastro(mensagemLead))} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-sm transition-colors">🔄 Gerar outra</button>
+                                    <button onClick={() => { navigator.clipboard.writeText(mensagemTexto); showMessage('Mensagem copiada!', 'success'); }} className="flex-1 bg-rose-700 hover:bg-rose-800 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">📋 Copiar</button>
+                                </div>
+                                <button onClick={() => setMensagemLead(null)} className="w-full mt-2 text-slate-400 hover:text-slate-600 text-sm font-medium py-1">Fechar</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         const LikertScale = ({ question, value, onChange }) => (
             <div className="mb-4 bg-white p-4 rounded-xl border border-slate-200 hover:border-rose-300 transition-colors shadow-sm"><p className="font-semibold text-slate-700 mb-3 text-sm">{question}</p><div className="flex items-center justify-between gap-2"><span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase">1 - Não</span><div className="flex gap-1.5 sm:gap-3">{[1, 2, 3, 4, 5].map(num => (<button key={num} type="button" onClick={() => onChange(num)} className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm transition-all border-2 ${value === num ? 'bg-rose-700 border-rose-700 text-white shadow-md transform scale-110' : 'bg-slate-50 border-slate-300 text-slate-500 hover:border-rose-400 hover:bg-rose-50'}`}>{num}</button>))}</div><span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase">5 - Sim</span></div></div>
         );
@@ -3707,6 +3924,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.4.0', data: '08/07/2026', areas: ['site'], itens: [
+                'Novo "📋 Cadastros em Processo" (CRM & Rotas): sua lista pessoal de clientes em cadastramento, com checklist do que já recebeu (CPF, CNPJ ou CNPJ MEI) e um gerador de mensagem simpática pra dar aquele empurrãozinho',
+                'Meu Portfólio: botão pra copiar uma mensagem de apresentação pronta, pra mandar junto com o cartão quando for puxar conversa com um cliente novo',
+            ]},
             { versao: '2.3.1', data: '08/07/2026', areas: ['site'], itens: [
                 'Catálogo e Meu Portfólio agora usam a logo oficial da Friganso (gansos + nome) embutida no app — carrega instantâneo e não depende mais de internet/CORS',
             ]},
@@ -6266,6 +6487,7 @@
                 switch(activeRoute) {
                     case 'dashboard': return <DashboardScreen user={user} clients={clients} products={products} />;
                     case 'clients': return <ClientsScreen products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
+                    case 'cadastrosProcesso': return <CadastrosProcessoScreen user={user} showMessage={showMessage} />;
                     case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
                     case 'credits': return <CreditsScreen />;
@@ -6371,6 +6593,7 @@
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-2 ml-2">Gestão Principal</p>
                             <NavButton route="dashboard" icon={IconDashboard} label="Painel (Dashboard)" />
                             <NavButton route="clients" icon={IconUsers} label="CRM & Rotas" />
+                            <NavButton route="cadastrosProcesso" icon={IconFileText} label="📋 Cadastros em Processo" />
                             <NavButton route="radar" icon={IconDashboard} label="Radar de Clientes" />
                             <NavButton route="profile" icon={IconSettings} label="Meu Perfil / Admin" />
                             
