@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 133;
+        const APP_BUILD_VERSION = 134;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3118,6 +3118,29 @@
             const [modoRota, setModoRota] = useState(false);
             const [selecionadosRota, setSelecionadosRota] = useState(new Set());
             const [rotaCalculada, setRotaCalculada] = useState(null);
+            const [visitados, setVisitados] = useState({}); // { osmId: timestamp } — persiste quem já foi visitado
+
+            // ✅ Carrega a lista de "já visitei" desse vendedor, pra lembrar entre buscas e sessões.
+            useEffect(() => {
+                if (!user.id) return;
+                const unsubscribe = db.collection('locais_visitados').where('vendedorId', '==', user.id).onSnapshot(snap => {
+                    const mapa = {};
+                    snap.docs.forEach(doc => { const d = doc.data(); mapa[d.osmId] = d.visitadoEm; });
+                    setVisitados(mapa);
+                }, err => console.error(err));
+                return () => unsubscribe();
+            }, [user.id]);
+
+            const toggleVisitado = async (lugar) => {
+                const docId = `${user.id}_${lugar.id}`;
+                try {
+                    if (visitados[lugar.id]) {
+                        await db.collection('locais_visitados').doc(docId).delete();
+                    } else {
+                        await db.collection('locais_visitados').doc(docId).set({ vendedorId: user.id, osmId: lugar.id, nome: lugar.nome, visitadoEm: Date.now() });
+                    }
+                } catch (e) { showMessage('Erro ao atualizar.', 'error'); }
+            };
 
             const buscarPerto = () => {
                 if (!navigator.geolocation) { setErro('Seu navegador não suporta localização.'); return; }
@@ -3257,7 +3280,7 @@
                                         <div key={p.id} className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
                                             <div className="h-7 w-7 rounded-full bg-rose-700 text-white flex items-center justify-center font-bold text-xs shrink-0">{i + 1}</div>
                                             <div className="min-w-0 flex-1">
-                                                <p className="font-bold text-slate-800 text-sm truncate">{cat.emoji} {p.nome}</p>
+                                                <p className="font-bold text-slate-800 text-sm truncate">{cat.emoji} {p.nome} {visitados[p.id] && '✅'}</p>
                                                 <p className="text-xs text-slate-500 truncate">{p.endereco || 'Endereço não informado'}</p>
                                             </div>
                                             <p className="text-xs text-slate-400 shrink-0">+{p.distDoAnterior < 1 ? Math.round(p.distDoAnterior * 1000) + ' m' : p.distDoAnterior.toFixed(1) + ' km'}</p>
@@ -3299,8 +3322,9 @@
                                 const cat = OSM_CATEGORIAS[lugar.categoria] || { label: lugar.categoria, emoji: '📍' };
                                 const jaAdicionado = adicionados[lugar.id];
                                 const selecionado = selecionadosRota.has(lugar.id);
+                                const visitado = !!visitados[lugar.id];
                                 return (
-                                    <div key={lugar.id} onClick={modoRota ? () => toggleSelecaoRota(lugar.id) : undefined} className={`bg-white rounded-2xl p-4 shadow-sm border relative ${modoRota ? 'cursor-pointer' : ''} ${selecionado ? 'border-sky-500 ring-2 ring-sky-200' : 'border-slate-200'}`}>
+                                    <div key={lugar.id} onClick={modoRota ? () => toggleSelecaoRota(lugar.id) : undefined} className={`bg-white rounded-2xl p-4 shadow-sm border relative ${modoRota ? 'cursor-pointer' : ''} ${visitado ? 'opacity-60' : ''} ${selecionado ? 'border-sky-500 ring-2 ring-sky-200' : 'border-slate-200'}`}>
                                         {modoRota && (
                                             <div className={`absolute top-3 right-3 h-6 w-6 rounded-full border-2 flex items-center justify-center text-xs font-bold ${selecionado ? 'bg-sky-600 border-sky-600 text-white' : 'bg-white border-slate-300 text-transparent'}`}>✓</div>
                                         )}
@@ -3314,14 +3338,20 @@
                                         <p className="text-xs text-slate-400 mt-2">📏 {lugar.distKm < 1 ? Math.round(lugar.distKm * 1000) + ' m' : lugar.distKm.toFixed(1) + ' km'} de você</p>
                                         {lugar.jaCliente && <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 mt-2">✅ Parece que já é cliente</p>}
                                         {!modoRota && (
-                                            <div className="flex gap-2 mt-3">
-                                                <a href={`https://www.google.com/maps/search/?api=1&query=${lugar.lat},${lugar.lng}`} target="_blank" rel="noopener noreferrer" className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-xs transition-colors text-center">🗺️ Ver no Maps</a>
-                                                {!lugar.jaCliente && (
-                                                    <button onClick={() => adicionarComoLead(lugar)} disabled={adicionando[lugar.id] || jaAdicionado} className="flex-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 font-bold py-2 rounded-lg text-xs transition-colors">
-                                                        {jaAdicionado ? '✅ Adicionado' : adicionando[lugar.id] ? 'Add...' : '➕ Add em Cadastros'}
-                                                    </button>
-                                                )}
-                                            </div>
+                                            <>
+                                                <label className="flex items-center gap-2 mt-3 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-600 cursor-pointer">
+                                                    <input type="checkbox" checked={visitado} onChange={() => toggleVisitado(lugar)} className="w-4 h-4 accent-emerald-600" />
+                                                    {visitado ? `✅ Visitado em ${new Date(visitados[lugar.id]).toLocaleDateString('pt-BR')}` : 'Já visitei este local'}
+                                                </label>
+                                                <div className="flex gap-2 mt-2">
+                                                    <a href={`https://www.google.com/maps/search/?api=1&query=${lugar.lat},${lugar.lng}`} target="_blank" rel="noopener noreferrer" className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-xs transition-colors text-center">🗺️ Ver no Maps</a>
+                                                    {!lugar.jaCliente && (
+                                                        <button onClick={() => adicionarComoLead(lugar)} disabled={adicionando[lugar.id] || jaAdicionado} className="flex-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 font-bold py-2 rounded-lg text-xs transition-colors">
+                                                            {jaAdicionado ? '✅ Adicionado' : adicionando[lugar.id] ? 'Add...' : '➕ Add em Cadastros'}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </>
                                         )}
                                     </div>
                                 );
@@ -4284,6 +4314,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.5.2', data: '09/07/2026', areas: ['site'], itens: [
+                'Perto de Mim: cada estabelecimento ganhou um checkbox "Já visitei este local" — marca a data e lembra entre buscas, pra você saber quem já passou por lá',
+            ]},
             { versao: '2.5.1', data: '09/07/2026', areas: ['site'], itens: [
                 'Perto de Mim ganhou "🗺️ Planejar Rota": selecione até 9 estabelecimentos encontrados e o app monta a ordem de visita mais eficiente (do mais perto pro mais longe, sequencialmente) e abre a rota completa no Google Maps',
             ]},
