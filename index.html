@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 132;
+        const APP_BUILD_VERSION = 133;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3078,6 +3078,33 @@
             if (!n || !clients || !clients.length) return false;
             return clients.some(c => { const cn = normalizarNomeEstab(c.name); return cn && cn.length > 2 && (n.includes(cn) || cn.includes(n)); });
         };
+        // 🗺️ Planejamento de rota — ordena os pontos escolhidos pelo "vizinho mais próximo": sempre pula
+        // pro ponto não visitado mais perto de onde está agora. Não é o trajeto matematicamente ótimo,
+        // mas é simples, rápido e dá uma rota bem razoável pra visitar poucos estabelecimentos.
+        const MAX_PARADAS_ROTA = 9; // limite prático do link de rota do Google Maps sem API paga
+        const calcularOrdemRota = (origem, pontos) => {
+            const restantes = [...pontos];
+            const ordem = [];
+            let atual = origem;
+            while (restantes.length) {
+                let idxMaisPerto = 0, menorDist = Infinity;
+                restantes.forEach((p, i) => {
+                    const d = distanciaKm(atual.lat, atual.lng, p.lat, p.lng);
+                    if (d < menorDist) { menorDist = d; idxMaisPerto = i; }
+                });
+                const [proximo] = restantes.splice(idxMaisPerto, 1);
+                ordem.push({ ...proximo, distDoAnterior: menorDist });
+                atual = { lat: proximo.lat, lng: proximo.lng };
+            }
+            return ordem;
+        };
+        const gerarLinkRotaMaps = (origem, ordem) => {
+            const ultimo = ordem[ordem.length - 1];
+            const meio = ordem.slice(0, -1);
+            let url = `https://www.google.com/maps/dir/?api=1&origin=${origem.lat},${origem.lng}&destination=${ultimo.lat},${ultimo.lng}&travelmode=driving`;
+            if (meio.length) url += `&waypoints=${encodeURIComponent(meio.map(p => `${p.lat},${p.lng}`).join('|'))}`;
+            return url;
+        };
 
         const ProspeccaoScreen = ({ user, clients, showMessage }) => {
             const [buscando, setBuscando] = useState(false);
@@ -3087,12 +3114,17 @@
             const [filtroCategoria, setFiltroCategoria] = useState('todos');
             const [adicionando, setAdicionando] = useState({});
             const [adicionados, setAdicionados] = useState({});
+            const [minhaPos, setMinhaPos] = useState(null);
+            const [modoRota, setModoRota] = useState(false);
+            const [selecionadosRota, setSelecionadosRota] = useState(new Set());
+            const [rotaCalculada, setRotaCalculada] = useState(null);
 
             const buscarPerto = () => {
                 if (!navigator.geolocation) { setErro('Seu navegador não suporta localização.'); return; }
-                setBuscando(true); setErro(null); setResultados(null);
+                setBuscando(true); setErro(null); setResultados(null); setRotaCalculada(null); setModoRota(false); setSelecionadosRota(new Set());
                 navigator.geolocation.getCurrentPosition(async (pos) => {
                     const { latitude, longitude } = pos.coords;
+                    setMinhaPos({ lat: latitude, lng: longitude });
                     try {
                         const raioM = raioKm * 1000;
                         const filtros = ['amenity=restaurant', 'amenity=fast_food', 'shop=butcher', 'shop=supermarket', 'shop=convenience'];
@@ -3152,6 +3184,26 @@
                 } catch (e) { showMessage('Erro ao adicionar.', 'error'); } finally { setAdicionando(a => ({ ...a, [lugar.id]: false })); }
             };
 
+            const toggleModoRota = () => {
+                setModoRota(v => !v);
+                setSelecionadosRota(new Set());
+                setRotaCalculada(null);
+            };
+            const toggleSelecaoRota = (id) => {
+                setSelecionadosRota(prev => {
+                    const novo = new Set(prev);
+                    if (novo.has(id)) novo.delete(id);
+                    else { if (novo.size >= MAX_PARADAS_ROTA) { showMessage(`Máximo de ${MAX_PARADAS_ROTA} paradas por rota.`, 'error'); return prev; } novo.add(id); }
+                    return novo;
+                });
+            };
+            const calcularRota = () => {
+                if (!minhaPos) { showMessage('Preciso saber sua localização primeiro.', 'error'); return; }
+                const pontos = (resultados || []).filter(r => selecionadosRota.has(r.id));
+                if (pontos.length < 2) { showMessage('Selecione pelo menos 2 estabelecimentos.', 'error'); return; }
+                setRotaCalculada(calcularOrdemRota(minhaPos, pontos));
+            };
+
             const resultadosFiltrados = (resultados || []).filter(r => filtroCategoria === 'todos' || r.categoria === filtroCategoria);
 
             return (
@@ -3165,12 +3217,56 @@
                                 <button key={r} onClick={() => setRaioKm(r)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${raioKm === r ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{r} km</button>
                             ))}
                         </div>
-                        <button onClick={buscarPerto} disabled={buscando} className="w-full sm:w-auto bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold py-3 px-6 rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
-                            {buscando ? <><div className="h-4 w-4"><IconLoader2 /></div> Buscando...</> : <>📍 Buscar perto de mim</>}
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                            <button onClick={buscarPerto} disabled={buscando} className="flex-1 sm:flex-none bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold py-3 px-6 rounded-xl text-sm transition-colors flex items-center justify-center gap-2">
+                                {buscando ? <><div className="h-4 w-4"><IconLoader2 /></div> Buscando...</> : <>📍 Buscar perto de mim</>}
+                            </button>
+                            {resultados && resultados.length > 0 && (
+                                <button onClick={toggleModoRota} className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-bold text-sm transition-colors ${modoRota ? 'bg-slate-900 text-white' : 'bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100'}`}>
+                                    {modoRota ? '✕ Cancelar seleção' : '🗺️ Planejar Rota'}
+                                </button>
+                            )}
+                        </div>
                     </header>
 
                     {erro && <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-semibold">⚠️ {erro}</div>}
+
+                    {modoRota && (
+                        <div className="bg-sky-50 border border-sky-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <p className="text-sm font-bold text-sky-800">Toque nos estabelecimentos que quer visitar hoje</p>
+                                <p className="text-xs text-sky-600">{selecionadosRota.size} selecionado(s) — máximo {MAX_PARADAS_ROTA}</p>
+                            </div>
+                            <button onClick={calcularRota} disabled={selecionadosRota.size < 2} className="bg-sky-700 hover:bg-sky-800 disabled:opacity-40 text-white font-bold py-2.5 px-5 rounded-xl text-sm transition-colors">Traçar Rota</button>
+                        </div>
+                    )}
+
+                    {rotaCalculada && (
+                        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                                <div>
+                                    <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>🧭</span> Sua rota de visitas</h3>
+                                    <p className="text-xs text-slate-500 mt-0.5">{rotaCalculada.length} paradas · {rotaCalculada.reduce((a, p) => a + p.distDoAnterior, 0).toFixed(1)} km no total, saindo de onde você está</p>
+                                </div>
+                                <a href={gerarLinkRotaMaps(minhaPos, rotaCalculada)} target="_blank" rel="noopener noreferrer" className="bg-rose-700 hover:bg-rose-800 text-white font-bold py-2.5 px-5 rounded-xl text-sm transition-colors">🗺️ Abrir rota no Google Maps</a>
+                            </div>
+                            <div className="space-y-2">
+                                {rotaCalculada.map((p, i) => {
+                                    const cat = OSM_CATEGORIAS[p.categoria] || { label: p.categoria, emoji: '📍' };
+                                    return (
+                                        <div key={p.id} className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
+                                            <div className="h-7 w-7 rounded-full bg-rose-700 text-white flex items-center justify-center font-bold text-xs shrink-0">{i + 1}</div>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="font-bold text-slate-800 text-sm truncate">{cat.emoji} {p.nome}</p>
+                                                <p className="text-xs text-slate-500 truncate">{p.endereco || 'Endereço não informado'}</p>
+                                            </div>
+                                            <p className="text-xs text-slate-400 shrink-0">+{p.distDoAnterior < 1 ? Math.round(p.distDoAnterior * 1000) + ' m' : p.distDoAnterior.toFixed(1) + ' km'}</p>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     {resultados && resultados.length > 0 && (
                         <div className="flex flex-wrap gap-2">
@@ -3202,25 +3298,31 @@
                             {resultadosFiltrados.map(lugar => {
                                 const cat = OSM_CATEGORIAS[lugar.categoria] || { label: lugar.categoria, emoji: '📍' };
                                 const jaAdicionado = adicionados[lugar.id];
+                                const selecionado = selecionadosRota.has(lugar.id);
                                 return (
-                                    <div key={lugar.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200">
-                                        <div className="flex justify-between items-start gap-2">
+                                    <div key={lugar.id} onClick={modoRota ? () => toggleSelecaoRota(lugar.id) : undefined} className={`bg-white rounded-2xl p-4 shadow-sm border relative ${modoRota ? 'cursor-pointer' : ''} ${selecionado ? 'border-sky-500 ring-2 ring-sky-200' : 'border-slate-200'}`}>
+                                        {modoRota && (
+                                            <div className={`absolute top-3 right-3 h-6 w-6 rounded-full border-2 flex items-center justify-center text-xs font-bold ${selecionado ? 'bg-sky-600 border-sky-600 text-white' : 'bg-white border-slate-300 text-transparent'}`}>✓</div>
+                                        )}
+                                        <div className="flex justify-between items-start gap-2 pr-6">
                                             <div className="min-w-0">
                                                 <p className="font-bold text-slate-800 truncate">{lugar.nome}</p>
                                                 <p className="text-xs text-slate-500 truncate">{lugar.endereco || 'Endereço não informado'}</p>
                                             </div>
-                                            <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0">{cat.emoji} {cat.label}</span>
+                                            {!modoRota && <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 shrink-0">{cat.emoji} {cat.label}</span>}
                                         </div>
                                         <p className="text-xs text-slate-400 mt-2">📏 {lugar.distKm < 1 ? Math.round(lugar.distKm * 1000) + ' m' : lugar.distKm.toFixed(1) + ' km'} de você</p>
                                         {lugar.jaCliente && <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 mt-2">✅ Parece que já é cliente</p>}
-                                        <div className="flex gap-2 mt-3">
-                                            <a href={`https://www.google.com/maps/search/?api=1&query=${lugar.lat},${lugar.lng}`} target="_blank" rel="noopener noreferrer" className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-xs transition-colors text-center">🗺️ Ver no Maps</a>
-                                            {!lugar.jaCliente && (
-                                                <button onClick={() => adicionarComoLead(lugar)} disabled={adicionando[lugar.id] || jaAdicionado} className="flex-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 font-bold py-2 rounded-lg text-xs transition-colors">
-                                                    {jaAdicionado ? '✅ Adicionado' : adicionando[lugar.id] ? 'Add...' : '➕ Add em Cadastros'}
-                                                </button>
-                                            )}
-                                        </div>
+                                        {!modoRota && (
+                                            <div className="flex gap-2 mt-3">
+                                                <a href={`https://www.google.com/maps/search/?api=1&query=${lugar.lat},${lugar.lng}`} target="_blank" rel="noopener noreferrer" className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-xs transition-colors text-center">🗺️ Ver no Maps</a>
+                                                {!lugar.jaCliente && (
+                                                    <button onClick={() => adicionarComoLead(lugar)} disabled={adicionando[lugar.id] || jaAdicionado} className="flex-1 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 font-bold py-2 rounded-lg text-xs transition-colors">
+                                                        {jaAdicionado ? '✅ Adicionado' : adicionando[lugar.id] ? 'Add...' : '➕ Add em Cadastros'}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
@@ -4182,6 +4284,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.5.1', data: '09/07/2026', areas: ['site'], itens: [
+                'Perto de Mim ganhou "🗺️ Planejar Rota": selecione até 9 estabelecimentos encontrados e o app monta a ordem de visita mais eficiente (do mais perto pro mais longe, sequencialmente) e abre a rota completa no Google Maps',
+            ]},
             { versao: '2.5.0', data: '09/07/2026', areas: ['site'], itens: [
                 'Novo "📍 Perto de Mim": usa sua localização pra sugerir mercados, restaurantes e açougues perto de você que ainda não são clientes (dados do OpenStreetMap, sem custo)',
                 'Cada sugestão mostra distância, endereço e um botão pra abrir no Google Maps ou já adicionar direto nos Cadastros em Processo',
