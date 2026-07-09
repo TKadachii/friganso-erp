@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 135;
+        const APP_BUILD_VERSION = 136;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3022,6 +3022,29 @@
             cnpj: { label: 'CNPJ', itens: ['Número do CNPJ', 'Email'] },
             cnpj_mei: { label: 'CNPJ MEI', itens: ['Número do CNPJ', 'Email', 'Foto da identidade do titular', 'CPF do titular', 'Comprovante de residência (endereço do CNPJ)'] },
         };
+        // 🔍 Consulta pública de CNPJ (BrasilAPI, espelha dados da Receita Federal) — poupa o vendedor
+        // de digitar razão social/endereço na mão quando já tem o número do CNPJ do cliente.
+        const formatarCNPJ = (v) => (v || '').replace(/\D/g, '').slice(0, 14).replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2}\.\d{3})(\d)/, '$1.$2').replace(/^(\d{2}\.\d{3}\.\d{3})(\d)/, '$1/$2').replace(/^(\d{2}\.\d{3}\.\d{3}\/\d{4})(\d)/, '$1-$2');
+        const buscarCnpjNaReceita = async (cnpj) => {
+            const digitos = (cnpj || '').replace(/\D/g, '');
+            if (digitos.length !== 14) throw new Error('CNPJ precisa ter 14 dígitos.');
+            const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digitos}`);
+            if (!resp.ok) throw new Error(resp.status === 404 ? 'CNPJ não encontrado.' : 'Falha na consulta (status ' + resp.status + ').');
+            const d = await resp.json();
+            const enderecoPartes = [
+                [d.descricao_tipo_de_logradouro, d.logradouro].filter(Boolean).join(' '),
+                d.numero, d.complemento, d.bairro, d.municipio, d.uf, d.cep,
+            ].filter(Boolean);
+            return {
+                razaoSocial: d.razao_social || '',
+                nomeFantasia: d.nome_fantasia || '',
+                endereco: enderecoPartes.join(', '),
+                situacaoCadastral: d.descricao_situacao_cadastral || '',
+                naturezaJuridica: d.natureza_juridica || '',
+                telefone: d.ddd_telefone_1 ? d.ddd_telefone_1.replace(/^(\d{2})(\d)/, '($1) $2') : '',
+                email: d.email || '',
+            };
+        };
         const CADASTRO_ABERTURAS = [
             'Oi, {nome}! Tudo bem? 😊',
             'Opa, {nome}! Passando aqui rapidinho.',
@@ -3370,11 +3393,12 @@
             const [loading, setLoading] = useState(true);
             const [showForm, setShowForm] = useState(false);
             const [editingId, setEditingId] = useState(null);
-            const [form, setForm] = useState({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '' });
+            const [form, setForm] = useState({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '', cnpj: '', enderecoCnpj: '', situacaoCadastralCnpj: '', naturezaJuridicaCnpj: '' });
             const [salvando, setSalvando] = useState(false);
             const [mensagemLead, setMensagemLead] = useState(null);
             const [mensagemTexto, setMensagemTexto] = useState('');
             const [roteiroLead, setRoteiroLead] = useState(null);
+            const [buscandoCnpj, setBuscandoCnpj] = useState(false);
 
             useEffect(() => {
                 if (!user.id) return;
@@ -3389,13 +3413,32 @@
 
             const abrirNovo = () => {
                 setEditingId(null);
-                setForm({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '' });
+                setForm({ nome: '', contato: '', tipoCadastro: 'cpf', itensRecebidos: [], observacoes: '', dorPrincipal: '', cnpj: '', enderecoCnpj: '', situacaoCadastralCnpj: '', naturezaJuridicaCnpj: '' });
                 setShowForm(true);
             };
             const abrirEditar = (lead) => {
                 setEditingId(lead.id);
-                setForm({ nome: lead.nome || '', contato: lead.contato || '', tipoCadastro: lead.tipoCadastro || 'cpf', itensRecebidos: lead.itensRecebidos || [], observacoes: lead.observacoes || '', dorPrincipal: lead.dorPrincipal || '' });
+                setForm({ nome: lead.nome || '', contato: lead.contato || '', tipoCadastro: lead.tipoCadastro || 'cpf', itensRecebidos: lead.itensRecebidos || [], observacoes: lead.observacoes || '', dorPrincipal: lead.dorPrincipal || '', cnpj: lead.cnpj || '', enderecoCnpj: lead.enderecoCnpj || '', situacaoCadastralCnpj: lead.situacaoCadastralCnpj || '', naturezaJuridicaCnpj: lead.naturezaJuridicaCnpj || '' });
                 setShowForm(true);
+            };
+            const buscarDadosCnpj = async () => {
+                setBuscandoCnpj(true);
+                try {
+                    const dados = await buscarCnpjNaReceita(form.cnpj);
+                    setForm(f => ({
+                        ...f,
+                        nome: dados.razaoSocial || f.nome,
+                        enderecoCnpj: dados.endereco,
+                        situacaoCadastralCnpj: dados.situacaoCadastral,
+                        naturezaJuridicaCnpj: dados.naturezaJuridica,
+                        contato: f.contato || dados.telefone,
+                    }));
+                    if (dados.situacaoCadastral && dados.situacaoCadastral !== 'ATIVA') {
+                        showMessage(`Atenção: situação cadastral desse CNPJ é "${dados.situacaoCadastral}" (não ativa)!`, 'error');
+                    } else {
+                        showMessage('Dados do CNPJ preenchidos!', 'success');
+                    }
+                } catch (e) { showMessage(e.message || 'Erro ao consultar o CNPJ.', 'error'); } finally { setBuscandoCnpj(false); }
             };
             const toggleItem = (item) => {
                 setForm(f => ({ ...f, itensRecebidos: f.itensRecebidos.includes(item) ? f.itensRecebidos.filter(i => i !== item) : [...f.itensRecebidos, item] }));
@@ -3464,6 +3507,7 @@
                                                 <div className={`h-full ${completo ? 'bg-emerald-500' : 'bg-rose-600'}`} style={{ width: pct + '%' }} />
                                             </div>
                                         </div>
+                                        {lead.situacaoCadastralCnpj && lead.situacaoCadastralCnpj !== 'ATIVA' && <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1 mt-2 font-bold">⚠️ CNPJ {lead.situacaoCadastralCnpj}</p>}
                                         {lead.dorPrincipal && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 mt-2">⚠️ Dor: {lead.dorPrincipal}</p>}
                                         {lead.observacoes && <p className="text-xs text-slate-500 mt-2 line-clamp-2">{lead.observacoes}</p>}
                                         <button onClick={() => setRoteiroLead(lead)} className="w-full mt-3 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-bold py-2 rounded-lg text-xs transition-colors">🎯 Roteiro de conversa (SPIN)</button>
@@ -3497,6 +3541,21 @@
                                             {Object.entries(CADASTRO_TIPOS).map(([key, t]) => <option key={key} value={key}>{t.label}</option>)}
                                         </select>
                                     </div>
+                                    {(form.tipoCadastro === 'cnpj' || form.tipoCadastro === 'cnpj_mei') && (
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500">CNPJ — busca razão social e endereço sozinho</label>
+                                            <div className="flex gap-2 mt-1">
+                                                <input type="text" value={form.cnpj} onChange={e => setForm(f => ({ ...f, cnpj: formatarCNPJ(e.target.value) }))} placeholder="00.000.000/0000-00" className="flex-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                                                <button onClick={buscarDadosCnpj} disabled={buscandoCnpj || form.cnpj.replace(/\D/g, '').length !== 14} type="button" className="bg-sky-700 hover:bg-sky-800 disabled:opacity-40 text-white font-bold px-4 rounded-xl text-sm transition-colors shrink-0">{buscandoCnpj ? '...' : '🔍 Buscar'}</button>
+                                            </div>
+                                            {form.situacaoCadastralCnpj && (
+                                                <div className={`mt-2 rounded-xl px-3 py-2 text-xs ${form.situacaoCadastralCnpj === 'ATIVA' ? 'bg-emerald-50 border border-emerald-200 text-emerald-700' : 'bg-red-50 border border-red-200 text-red-700 font-bold'}`}>
+                                                    {form.situacaoCadastralCnpj === 'ATIVA' ? '✅' : '⚠️'} Situação cadastral: {form.situacaoCadastralCnpj} {form.naturezaJuridicaCnpj && `· ${form.naturezaJuridicaCnpj}`}
+                                                    {form.enderecoCnpj && <p className="mt-1 text-slate-500 font-normal">{form.enderecoCnpj}</p>}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                     <div>
                                         <label className="text-xs font-bold text-slate-500">O que já recebi</label>
                                         <div className="mt-1 space-y-1.5">
@@ -4317,6 +4376,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.6.0', data: '09/07/2026', areas: ['site'], itens: [
+                'Cadastros em Processo: pra tipo CNPJ ou CNPJ MEI, agora dá pra digitar o número do CNPJ e clicar em "🔍 Buscar" — o app preenche sozinho a razão social e o endereço (consulta pública à Receita Federal) e avisa se o CNPJ não estiver ATIVO',
+            ]},
             { versao: '2.5.3', data: '09/07/2026', areas: ['site'], itens: [
                 'Perto de Mim: busca agora inclui também padarias, mercadinhos e hortifrutis (antes só pegava mercado grande, restaurante, lanchonete, açougue e loja de conveniência)',
             ]},
