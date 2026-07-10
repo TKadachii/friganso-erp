@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 141;
+        const APP_BUILD_VERSION = 142;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -486,14 +486,16 @@
         };
 
         // 💳 Reduz o texto cru da condição de pagamento do SPAmov (ex.: "21 Dias", "À Vista / PIX",
-        // "Cartao Credito") pra uma das 4 categorias da regra de negócio. "parcelado" não tem opção
-        // própria no SPAmov (é um arranjo manual do vendedor), então nunca é detectado automaticamente.
+        // "Cartao Credito") pra uma das 4 categorias da regra de negócio.
         const normalizarCondicaoPagamento = (texto) => {
             const t = (texto || '').toLowerCase().trim();
             if (!t) return null;
             if (t.indexOf('vista') !== -1 || t.indexOf('pix') !== -1) return 'avista';
             if (t.indexOf('cart') !== -1) return 'cartao';
-            if (t.indexOf('parcel') !== -1) return 'parcelado'; // só aparece se escolhido na mão (SPAmov não tem essa opção)
+            if (t.indexOf('parcel') !== -1) return 'parcelado'; // escolhido na mão no Resumo manual
+            // "7/14/21 Dias" (vários vencimentos separados por "/") é parcelado também, mesmo sem a
+            // palavra "parcelado" — o SPAmov mostra assim quando o pedido é dividido em várias datas.
+            if (/\d+\s*\/\s*\d+/.test(t)) return 'parcelado';
             if (/\d+\s*dias?/.test(t)) return 'prazo';
             return 'outro';
         };
@@ -2227,12 +2229,15 @@
             }, [products, mpBusca]);
             // 🔁 Mesma regra do Fazer Pedido: clicar de novo soma 1 na qty; a lista de resultados continua
             // aberta (não limpa a busca) pra selecionar mais itens em sequência sem redigitar.
-            // 💳 Preço padrão do item conforme a condição de pagamento escolhida no manual: Cartão usa o
-            // preço de cartão (sem desconto), Prazo Parcelado usa o teto (à vista, SEM desconto — nada de
-            // -3%), e tudo o mais (à vista / a prazo simples) pode ter até 3% de desconto, igual sempre.
+            // 💳 Preço do item conforme a condição de pagamento — passa por normalizarCondicaoPagamento,
+            // então funciona tanto com as strings do menu manual ("Prazo Parcelado", "Cartao Credito")
+            // quanto com o texto cru vindo do SPAmov (ex.: "7/14/21 Dias" = parcelado, "21 Dias" = prazo
+            // simples). Cartão usa o preço de cartão (sem desconto), Parcelado usa o teto (SEM desconto),
+            // e tudo o mais (à vista / a prazo simples) pode ter até 3% de desconto, igual sempre.
             const precoParaCondicaoMp = (p, condicao) => {
-                if (condicao === 'Prazo Parcelado') return Number(p.originalPrice) || 0;
-                if (condicao === 'Cartao Credito') return p.precoCartao != null ? Number(p.precoCartao) : (Number(p.originalPrice) || 0);
+                const cat = normalizarCondicaoPagamento(condicao);
+                if (cat === 'parcelado') return Number(p.originalPrice) || 0;
+                if (cat === 'cartao') return p.precoCartao != null ? Number(p.precoCartao) : (Number(p.originalPrice) || 0);
                 const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
                 return unitFinalPrice || 0;
             };
@@ -2506,7 +2511,9 @@
             const itemAtual = (it) => {
                 const rp = products.find(p => String(p.code) === String(it.code));
                 if (!rp) return { ...it, name: it.name, unitFinalPrice: it.unitFinalPrice || 0, naTabela: false, valorKg: it.precoKg || it.unitFinalPrice || 0 };
-                const { unitFinalPrice } = checkDiscountRules(rp.code, rp.name, rp.originalPrice);
+                // 💳 Respeita a condição de pagamento do pedido (ex.: "7/14/21 Dias" = parcelado, sem
+                // desconto) em vez de sempre aplicar o preço à vista com -3%.
+                const unitFinalPrice = precoParaCondicaoMp(rp, condicaoAtual);
                 return { ...it, name: rp.name, unitFinalPrice: unitFinalPrice, naTabela: true, valorKg: unitFinalPrice || it.precoKg || 0 };
             };
 
@@ -4646,6 +4653,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.7.4', data: '09/07/2026', areas: ['site'], itens: [
+                'Corrige bug no Resumo de Pedido (importado do SPAmov): pedidos com prazo parcelado (ex: "7/14/21 Dias") estavam saindo com o desconto de à vista por engano — agora reconhece esse formato como parcelado e usa o preço cheio, igual já funcionava no Resumo manual',
+            ]},
             { versao: '2.7.3', data: '09/07/2026', areas: ['site'], itens: [
                 'Leitor de PDF da Inscrição Estadual: endereço agora vem separado por campo (CEP, Rua, Número, Bairro, Cidade, UF) igual já era na Consulta CNPJ pela Receita Federal, em vez de tudo numa linha só',
             ]},
