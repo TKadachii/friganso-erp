@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.14.1011
+// @version      2026.7.14.1022
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -458,7 +458,10 @@
         // sem precisar gerar/copiar um arquivo.
         const textos = [];
         document.querySelectorAll("td, th, div, span, font, b, a, label, li, nobr, small, strong").forEach(function (el) {
-            if (el.children && el.children.length) return;
+            // "folha" = sem filhos-elemento, OU só com <br> — a coluna de data/hora do pedido (ex.:
+            // "01-07-2026<br>21:57:05") usa <br> entre a data e a hora, e sem essa tolerância a célula
+            // inteira era descartada (por isso o import caía tudo pra data de hoje).
+            for (var k = 0; k < el.children.length; k++) { if (el.children[k].tagName !== "BR") return; }
             const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
             // Nomes de cliente compostos (ex.: "[j] 48094 - Viter Distribuidora de Bebidas
             // Ltda/distribuidora do Junior", 72 caracteres) passavam do limite de 60 e sumiam —
@@ -467,6 +470,14 @@
             const r = el.getBoundingClientRect();
             if (!r.width || !r.height) return;
             textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t, tag: el.tagName });
+        });
+        // Captura atributo "title"/tooltip também — caso a data só apareça ali em vez do texto visível.
+        document.querySelectorAll("[title]").forEach(function (el) {
+            const tit = (el.getAttribute("title") || "").replace(/\s+/g, " ").trim();
+            if (!tit || tit.length > 200) return;
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: tit, tag: el.tagName });
         });
         if (!textos.length) return [];
 
@@ -487,6 +498,7 @@
         const reCliente = /\[([jf])\]\s*(\d+)\s*-\s*(.+)/i;    // [j] 86625 - dmb Produtos Ltda
         const reItem = /^(\d+)\s*-\s*(.+)/;                    // 1602 - DIANTEIRO BOVINO
         const reSpamov = /^\d{5,8}$/;
+        const reData = /^(\d{2})-(\d{2})-(\d{4})\s+\d{2}:\d{2}:\d{2}$/; // 01-07-2026 21:57:05
 
         const pedidos = [];
         let atual = null;
@@ -499,7 +511,7 @@
             for (let i = 0; i < cells.length; i++) { if (cells[i].tag === "A" && reSpamov.test(cells[i].t.trim())) { cellSpamov = cells[i]; break; } }
             if (cellSpamov) {
                 if (atual) pedidos.push(atual);
-                atual = { spamov: cellSpamov.t.trim(), clienteCode: "", clienteNome: "", tipoPessoa: "", faturadoTotal: null, itens: [] };
+                atual = { spamov: cellSpamov.t.trim(), clienteCode: "", clienteNome: "", tipoPessoa: "", faturadoTotal: null, dia: null, itens: [] };
                 const vizinhos = [clusters[ci - 1], cluster, clusters[ci + 1]].filter(Boolean).reduce(function (a, c) { return a.concat(c.itens); }, []);
                 let cCliente = null;
                 for (let i = 0; i < vizinhos.length; i++) { if (reCliente.test(vizinhos[i].t)) { cCliente = vizinhos[i]; break; } }
@@ -508,6 +520,14 @@
                     atual.tipoPessoa = m[1].toLowerCase() === "j" ? "juridica" : "fisica";
                     atual.clienteCode = m[2];
                     atual.clienteNome = m[3].trim();
+                }
+                // Data do pedido (não a data de faturamento/liberação) = a coluna de data/hora mais à
+                // esquerda do cabeçalho — o relatório mostra 2 datas, essa é a "Data do Pedido".
+                const candidatosData = vizinhos.filter(function (c) { return reData.test(c.t.trim()); });
+                if (candidatosData.length) {
+                    candidatosData.sort(function (a, b) { return a.x - b.x; });
+                    const md = candidatosData[0].t.trim().match(reData);
+                    atual.dia = md[3] + "-" + md[2] + "-" + md[1];
                 }
                 // Faturado do pedido = célula "B" em moeda, a mais à direita do cabeçalho (a "Valor" do
                 // pedido, mais cedo na linha, é só estimativa — não usar essa).

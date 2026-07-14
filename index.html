@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 146;
+        const APP_BUILD_VERSION = 147;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3193,6 +3193,36 @@
             const [pedidos, setPedidos] = useState([]);
             const [selecionados, setSelecionados] = useState({});
             const [importando, setImportando] = useState(false);
+            const [importsAntigos, setImportsAntigos] = useState(null); // null = não carregado ainda
+            const [carregandoAntigos, setCarregandoAntigos] = useState(false);
+            const [limpando, setLimpando] = useState(false);
+
+            // 🧹 A 1ª versão da leitura de vendas não pegava a data real de cada pedido (a coluna usava
+            // <br> entre data e hora, que a extração antiga descartava) e por isso todo pedido NOVO
+            // (sem SPAMOV já existente) entrava com a data de HOJE — inflando o dia atual à toa. Esse
+            // painel acha e apaga só esses registros mal-datados (os que foram ATUALIZADOS por SPAMOV
+            // existente ficam intocados, porque preservaram a data original de quando foram lançados).
+            const carregarImportsAntigos = async () => {
+                setCarregandoAntigos(true);
+                try {
+                    const snap = await db.collection('purchases').where('via', '==', 'relatorio_vendas').get();
+                    const ruins = snap.docs.filter(d => !d.data().corrigidoEm).map(d => ({ id: d.id, ...d.data() }));
+                    setImportsAntigos(ruins);
+                } catch (e) { showMessage('Erro ao verificar importações anteriores.', 'error'); }
+                setCarregandoAntigos(false);
+            };
+
+            const limparImportsAntigos = async () => {
+                if (!importsAntigos || !importsAntigos.length) return;
+                setLimpando(true);
+                let ok = 0;
+                for (const doc of importsAntigos) {
+                    try { await db.collection('purchases').doc(doc.id).delete(); ok++; } catch (e) {}
+                }
+                setLimpando(false);
+                setImportsAntigos([]);
+                showMessage(`${ok} registro(s) mal-datado(s) removido(s). Pode reimportar o relatório — agora a data real de cada pedido é usada.`, 'success');
+            };
 
             const processarPedidos = (raw) => {
                 try {
@@ -3247,7 +3277,7 @@
                                 clienteName: (cli && cli.name) || p.clienteNome || '',
                                 tipoPessoa: p.tipoPessoa || (cli && cli.tipo) || 'juridica',
                                 itens: itensSafe, valor: valorTotal, pesoTotal,
-                                spamov: String(p.spamov), condicaoPagamento: '', dia: diaStrGlobal(new Date()), ts: Date.now(),
+                                spamov: String(p.spamov), condicaoPagamento: '', dia: p.dia || diaStrGlobal(new Date()), ts: Date.now(),
                                 via: 'relatorio_vendas', vendedor: (user && user.code) || '', origemReal: true
                             });
                         }
@@ -3268,6 +3298,33 @@
                     <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                         <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">📊 Importar Vendas Reais</h2>
                         <p className="text-sm text-slate-500 mt-1">Lê o faturamento e o peso REALMENTE embarcado direto do relatório do SPAmov (não é mais estimativa) e corrige/atualiza os pedidos no sistema — usando o número SPAMOV pra não duplicar.</p>
+                    </div>
+
+                    {/* 🧹 Correção pontual: a 1ª versão da extração não pegava a data real do pedido e
+                        jogava tudo pra "hoje". Esse painel acha e remove só esses registros mal-datados. */}
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                            <div>
+                                <p className="font-bold text-slate-700 text-sm">🧹 Corrigir importação com data errada</p>
+                                <p className="text-xs text-slate-400 mt-0.5">A 1ª leitura de vendas não pegava a data do pedido e jogava tudo pra "hoje". Verifique se sobrou algum desses.</p>
+                            </div>
+                            <button onClick={carregarImportsAntigos} disabled={carregandoAntigos} className="text-xs font-bold text-rose-700 hover:underline disabled:opacity-50">
+                                {carregandoAntigos ? 'Verificando...' : 'Verificar agora'}
+                            </button>
+                        </div>
+                        {importsAntigos !== null && (
+                            importsAntigos.length === 0 ? (
+                                <p className="text-xs text-emerald-600 font-bold mt-3">✅ Nada errado encontrado.</p>
+                            ) : (
+                                <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3">
+                                    <p className="text-sm text-amber-800 font-bold">⚠️ {importsAntigos.length} pedido(s) mal-datado(s), total {fmt(importsAntigos.reduce((a, d) => a + (Number(d.valor) || 0), 0))} — todos marcados como vendidos em {importsAntigos[0] && importsAntigos[0].dia}.</p>
+                                    <p className="text-xs text-amber-700 mt-1">Remover é seguro: são pedidos criados do zero por essa importação (não existiam antes), então apagar não perde nada — só desfaz o erro de data. Depois é só reimportar o relatório de novo.</p>
+                                    <button onClick={limparImportsAntigos} disabled={limpando} className="mt-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold text-xs px-4 py-2 rounded-lg">
+                                        {limpando ? 'Removendo...' : `🗑️ Remover ${importsAntigos.length} pedido(s) mal-datado(s)`}
+                                    </button>
+                                </div>
+                            )
+                        )}
                     </div>
 
                     {!pedidos.length && (
@@ -3301,7 +3358,7 @@
                                                     <p className="font-bold text-slate-800 text-sm truncate">SPAMOV {p.spamov} — {p.clienteNome || '❌ cliente não identificado'}</p>
                                                     <p className="font-black text-emerald-700 text-sm">{fmt(p.faturadoTotal != null ? p.faturadoTotal : (p.itens || []).reduce((a, i) => a + i.faturado, 0))}</p>
                                                 </div>
-                                                <p className="text-xs text-slate-400">{(p.itens || []).length} item(ns) · {Math.round((p.itens || []).reduce((a, i) => a + i.peso, 0) * 100) / 100} kg embarcados</p>
+                                                <p className="text-xs text-slate-400">{(p.itens || []).length} item(ns) · {Math.round((p.itens || []).reduce((a, i) => a + i.peso, 0) * 100) / 100} kg embarcados · {p.dia ? '📅 ' + p.dia.slice(8, 10) + '/' + p.dia.slice(5, 7) + '/' + p.dia.slice(0, 4) : '⚠️ sem data — vai entrar como hoje'}</p>
                                             </div>
                                         </div>
                                     ))}
@@ -4785,6 +4842,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.7.9', data: '14/07/2026', areas: ['app', 'extensao'], itens: [
+                'Corrige a data errada no Relatório de Vendas: pedidos novos entravam com a data de HOJE (a coluna de data usava quebra de linha entre data e hora, que a leitura antiga ignorava) — agora pega a data real de cada pedido',
+                'Nova tela "🧹 Corrigir importação com data errada" (dentro de Importar Vendas Reais) pra achar e remover os pedidos que ficaram mal-datados na importação anterior',
+            ]},
             { versao: '2.7.8', data: '14/07/2026', areas: ['extensao'], itens: [
                 'Corrige bug que fazia ~37% dos pedidos virem "sem cliente identificado" no Relatório de Vendas — o texto do cliente era descartado quando o nome era comprido (mais de 60 caracteres, ex.: "Viter Distribuidora de Bebidas Ltda/distribuidora do Junior")',
             ]},
