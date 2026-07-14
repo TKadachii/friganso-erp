@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.14.1022
+// @version      2026.7.14.1300
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -511,8 +511,15 @@
             for (let i = 0; i < cells.length; i++) { if (cells[i].tag === "A" && reSpamov.test(cells[i].t.trim())) { cellSpamov = cells[i]; break; } }
             if (cellSpamov) {
                 if (atual) pedidos.push(atual);
-                atual = { spamov: cellSpamov.t.trim(), clienteCode: "", clienteNome: "", tipoPessoa: "", faturadoTotal: null, dia: null, itens: [] };
+                atual = { spamov: cellSpamov.t.trim(), clienteCode: "", clienteNome: "", tipoPessoa: "", faturadoTotal: null, dia: null, devolvido: false, itens: [] };
                 const vizinhos = [clusters[ci - 1], cluster, clusters[ci + 1]].filter(Boolean).reduce(function (a, c) { return a.concat(c.itens); }, []);
+                // 🔴 "E"/"D" na coluna de status (onde um pedido normal mostra só "S") = teve ocorrência
+                // e foi DEVOLVIDO — o SPAmov mostra isso em vermelho. Pedido devolvido não é venda de
+                // verdade (foi estornado), então esse pedido inteiro é descartado, não só o item.
+                for (let i = 0; i < vizinhos.length; i++) {
+                    const st = vizinhos[i].t.trim();
+                    if ((st === "E" || st === "D") && vizinhos[i].x > 600 && vizinhos[i].x < 900) { atual.devolvido = true; break; }
+                }
                 let cCliente = null;
                 for (let i = 0; i < vizinhos.length; i++) { if (reCliente.test(vizinhos[i].t)) { cCliente = vizinhos[i]; break; } }
                 if (cCliente) {
@@ -566,7 +573,7 @@
             atual.itens.push({ code: code, name: name, qty: qty, peso: peso, faturado: faturado, valorKg: valorKg });
         }
         if (atual) pedidos.push(atual);
-        return pedidos;
+        return pedidos.filter(function (p) { return !p.devolvido; });
     }
     function enviarRelatorioVendasParaApp() {
         const pedidos = extrairRelatorioVendas();

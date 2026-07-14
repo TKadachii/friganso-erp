@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 151;
+        const APP_BUILD_VERSION = 152;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -4963,6 +4963,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.8.4', data: '14/07/2026', areas: ['extensao'], itens: [
+                'Relatório de Vendas agora detecta pedidos DEVOLVIDOS (marcados com "E"/"D" vermelho no SPAmov, indicando ocorrência + devolução) e descarta o pedido inteiro — não é venda de verdade, é um estorno, não deveria contar no faturamento',
+            ]},
             { versao: '2.8.3', data: '14/07/2026', areas: ['app'], itens: [
                 'Nova ferramenta "🔍 Achar vendas contadas em dobro" (dentro de Importar Vendas Reais) — encontra SPAMOVs que aparecem em mais de um registro de compra (faturamento contado 2x) e deixa remover o duplicado errado',
             ]},
