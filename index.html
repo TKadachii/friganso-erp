@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 150;
+        const APP_BUILD_VERSION = 151;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3249,6 +3249,37 @@
                 showMessage(`${ok} registro(s) mal-datado(s) removido(s). Pode reimportar o relatório — agora a data real de cada pedido é usada.`, 'success');
             };
 
+            // 🔍 Acha SPAMOVs que aparecem em MAIS de um registro de compra — isso conta a mesma venda
+            // duas vezes no faturamento (ex.: o pedido original estimado + um pedido novo criado pela
+            // importação porque o SPAMOV não bateu certinho com o original). Mostra os dois pra decidir
+            // qual manter (o que tem "🔵 dado real" costuma ser o certo pra manter).
+            const [duplicados, setDuplicados] = useState(null);
+            const [carregandoDup, setCarregandoDup] = useState(false);
+            const carregarDuplicados = async () => {
+                setCarregandoDup(true);
+                try {
+                    const snap = await db.collection('purchases').orderBy('ts', 'desc').limit(3000).get();
+                    const porSpamov = {};
+                    snap.docs.forEach(d => {
+                        const data = d.data();
+                        const sp = (data.spamov || '').trim();
+                        if (!sp) return;
+                        (porSpamov[sp] = porSpamov[sp] || []).push({ id: d.id, ...data });
+                    });
+                    const dups = Object.keys(porSpamov).filter(sp => porSpamov[sp].length > 1).map(sp => ({ spamov: sp, docs: porSpamov[sp] }));
+                    dups.sort((a, b) => b.docs.reduce((s, d) => s + (Number(d.valor) || 0), 0) - a.docs.reduce((s, d) => s + (Number(d.valor) || 0), 0));
+                    setDuplicados(dups);
+                } catch (e) { showMessage('Erro ao procurar SPAMOVs duplicados.', 'error'); }
+                setCarregandoDup(false);
+            };
+            const excluirCompra = async (id, spamov) => {
+                try {
+                    await db.collection('purchases').doc(id).delete();
+                    setDuplicados(prev => prev.map(g => g.spamov !== spamov ? g : { ...g, docs: g.docs.filter(d => d.id !== id) }).filter(g => g.docs.length > 1));
+                    showMessage('Registro duplicado removido.', 'success');
+                } catch (e) { showMessage('Erro ao remover.', 'error'); }
+            };
+
             const processarPedidos = (raw) => {
                 try {
                     const arr = JSON.parse(raw);
@@ -3354,6 +3385,45 @@
                                     <button onClick={limparImportsAntigos} disabled={limpando} className="mt-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold text-xs px-4 py-2 rounded-lg">
                                         {limpando ? 'Removendo...' : `🗑️ Remover ${importsAntigos.length} pedido(s) mal-datado(s)`}
                                     </button>
+                                </div>
+                            )
+                        )}
+                    </div>
+
+                    {/* 🔍 Acha vendas contadas 2x: mesmo SPAMOV em mais de 1 registro de compra — geralmente
+                        o pedido original (estimado) + um pedido novo criado porque o SPAMOV não bateu. */}
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                            <div>
+                                <p className="font-bold text-slate-700 text-sm">🔍 Achar vendas contadas em dobro (SPAMOV duplicado)</p>
+                                <p className="text-xs text-slate-400 mt-0.5">Se o faturamento no Painel estiver maior do que deveria, o motivo mais provável é isso — mesmo pedido registrado 2 vezes.</p>
+                            </div>
+                            <button onClick={carregarDuplicados} disabled={carregandoDup} className="text-xs font-bold text-rose-700 hover:underline disabled:opacity-50">
+                                {carregandoDup ? 'Verificando...' : 'Verificar agora'}
+                            </button>
+                        </div>
+                        {duplicados !== null && (
+                            duplicados.length === 0 ? (
+                                <p className="text-xs text-emerald-600 font-bold mt-3">✅ Nenhum SPAMOV duplicado encontrado.</p>
+                            ) : (
+                                <div className="mt-3 space-y-3">
+                                    <p className="text-sm text-red-800 font-bold">🚩 {duplicados.length} SPAMOV(s) duplicado(s), somando {fmt(duplicados.reduce((a, g) => a + g.docs.reduce((s, d) => s + (Number(d.valor) || 0), 0), 0))} contados em dobro (ou mais).</p>
+                                    {duplicados.map(g => (
+                                        <div key={g.spamov} className="bg-red-50 border border-red-200 rounded-xl p-3">
+                                            <p className="text-sm font-bold text-red-800 mb-2">SPAMOV {g.spamov} — {g.docs.length} registros</p>
+                                            <div className="space-y-1.5">
+                                                {g.docs.map(d => (
+                                                    <div key={d.id} className="flex items-center justify-between gap-2 bg-white rounded-lg p-2 text-xs">
+                                                        <div className="min-w-0">
+                                                            <p className="font-bold text-slate-700 truncate">{d.clienteName || d.clienteCode} · {fmt(d.valor)} · 📅 {d.dia}</p>
+                                                            <p className="text-slate-400">{d.origemReal ? '🔵 dado real (do relatório de vendas)' : '⚪ estimativa original'}{d.via ? ' · via: ' + d.via : ''}</p>
+                                                        </div>
+                                                        <button onClick={() => excluirCompra(d.id, g.spamov)} className="flex-shrink-0 text-red-600 hover:text-red-800 font-bold px-2 py-1 rounded hover:bg-red-100">🗑️ Remover</button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             )
                         )}
@@ -4893,6 +4963,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.8.3', data: '14/07/2026', areas: ['app'], itens: [
+                'Nova ferramenta "🔍 Achar vendas contadas em dobro" (dentro de Importar Vendas Reais) — encontra SPAMOVs que aparecem em mais de um registro de compra (faturamento contado 2x) e deixa remover o duplicado errado',
+            ]},
             { versao: '2.8.2', data: '14/07/2026', areas: ['app'], itens: [
                 'Importar Vendas Reais ignora itens rejeitados (peso 0 = nada embarcado, não é erro de leitura) e não mostra mais aviso falso pra eles — se o pedido inteiro só tinha item rejeitado, o pedido some da lista (não tem venda nenhuma pra importar)',
             ]},
