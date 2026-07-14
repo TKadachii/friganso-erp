@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 148;
+        const APP_BUILD_VERSION = 149;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3189,10 +3189,13 @@
         // estimativa que a gente calcula sozinho) — lido pelo botão da extensão na tela de Faturamento.
         // Usa o número SPAMOV pra atualizar o pedido já existente (registrarCompra já dedupa por spamov),
         // ou criar um novo se ele não tiver passado pelo app.
-        // ✅ Cruza peso, quantidade e valor de cada item com o total do cabeçalho e com o preço de
-        // tabela pra sinalizar pedidos suspeitos (extração errada, coluna desalinhada etc.) — não basta
-        // ter cliente identificado, os números têm que bater entre si também.
-        const validarPedido = (p, products) => {
+        // ✅ Cruza peso e quantidade de cada item com o total do cabeçalho pra sinalizar pedidos
+        // suspeitos (extração errada, coluna desalinhada etc.). NÃO compara com o preço de tabela de
+        // hoje — o preço de carne varia dia a dia, então um pedido antigo com preço bem diferente do
+        // atual é normal, não é erro. O peso serve só de métrica (variação de kg por dia/produto), não
+        // de validação — pra saber o kg médio por unidade quando tem mais de um item igual no pedido
+        // (ex.: 2 dianteiros bovinos), é peso total da linha ÷ quantidade daquele item.
+        const validarPedido = (p) => {
             const avisos = [];
             const itens = p.itens || [];
             if (!itens.length) { avisos.push('Pedido sem nenhum item'); return avisos; }
@@ -3203,16 +3206,14 @@
             itens.forEach(i => {
                 if (!(Number(i.peso) > 0)) avisos.push(`Item ${i.code} (${i.name || ''}) sem peso embarcado`);
                 if (!(Number(i.qty) > 0)) avisos.push(`Item ${i.code} (${i.name || ''}) com quantidade zero`);
-                const prod = (products || []).find(pr => String(pr.code) === String(i.code));
-                if (prod && Number(prod.originalPrice) > 0 && Number(i.valorKg) > 0) {
-                    const razao = i.valorKg / prod.originalPrice;
-                    if (razao < 0.5 || razao > 2) avisos.push(`Item ${i.code}: R$/kg lido (${Number(i.valorKg).toFixed(2)}) muito diferente do preço de tabela (${Number(prod.originalPrice).toFixed(2)})`);
-                }
             });
             return avisos;
         };
+        // ⚖️ Peso médio por unidade de um item (kg do animal/peça, não da linha inteira) — usado pra
+        // métrica de variação de kg por dia. Ex.: 2 dianteiros somando 100kg = 50kg de média cada.
+        const pesoMedioPorUnidade = (item) => (Number(item.qty) > 0 ? (Number(item.peso) || 0) / Number(item.qty) : 0);
 
-        const RelatorioVendasScreen = ({ user, clients, products, showMessage }) => {
+        const RelatorioVendasScreen = ({ user, clients, showMessage }) => {
             const [pedidos, setPedidos] = useState([]);
             const [selecionados, setSelecionados] = useState({});
             const [importando, setImportando] = useState(false);
@@ -3253,7 +3254,7 @@
                     if (!Array.isArray(arr) || !arr.length) { showMessage('Não veio nenhum pedido do relatório.', 'error'); return; }
                     setPedidos(arr);
                     const sel = {};
-                    arr.forEach(p => { sel[p.spamov] = !!p.clienteCode && validarPedido(p, products).length === 0; });
+                    arr.forEach(p => { sel[p.spamov] = !!p.clienteCode && validarPedido(p).length === 0; });
                     setSelecionados(sel);
                 } catch (e) { showMessage('Erro ao ler o relatório de vendas.', 'error'); }
             };
@@ -3314,7 +3315,7 @@
 
             const totalSelecionado = pedidos.filter(p => selecionados[p.spamov]);
             const semCliente = pedidos.filter(p => !p.clienteCode);
-            const comAvisos = pedidos.filter(p => p.clienteCode && validarPedido(p, products).length > 0);
+            const comAvisos = pedidos.filter(p => p.clienteCode && validarPedido(p).length > 0);
             const fmt = (v) => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
             return (
@@ -3374,13 +3375,13 @@
                                 <div className="p-4 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
                                     <p className="font-bold text-slate-700 text-sm">{pedidos.length} pedido(s) no relatório · {totalSelecionado.length} selecionado(s)</p>
                                     <div className="flex gap-2">
-                                        <button onClick={() => { const sel = {}; pedidos.forEach(p => sel[p.spamov] = !!p.clienteCode && validarPedido(p, products).length === 0); setSelecionados(sel); }} className="text-xs font-bold text-rose-700 hover:underline">Selecionar sem avisos</button>
+                                        <button onClick={() => { const sel = {}; pedidos.forEach(p => sel[p.spamov] = !!p.clienteCode && validarPedido(p).length === 0); setSelecionados(sel); }} className="text-xs font-bold text-rose-700 hover:underline">Selecionar sem avisos</button>
                                         <button onClick={() => setSelecionados({})} className="text-xs font-bold text-slate-500 hover:underline">Limpar</button>
                                     </div>
                                 </div>
                                 <div className="max-h-[500px] overflow-y-auto divide-y divide-slate-100">
                                     {pedidos.map(p => {
-                                        const avisos = validarPedido(p, products);
+                                        const avisos = validarPedido(p);
                                         return (
                                             <div key={p.spamov} className={`p-3 flex items-start gap-3 ${!p.clienteCode ? 'bg-amber-50/50' : avisos.length ? 'bg-red-50/50' : ''}`}>
                                                 <input type="checkbox" disabled={!p.clienteCode} checked={!!selecionados[p.spamov]} onChange={() => toggleSel(p.spamov)} className="mt-1.5 h-4 w-4" />
@@ -3390,6 +3391,13 @@
                                                         <p className="font-black text-emerald-700 text-sm">{fmt(p.faturadoTotal != null ? p.faturadoTotal : (p.itens || []).reduce((a, i) => a + i.faturado, 0))}</p>
                                                     </div>
                                                     <p className="text-xs text-slate-400">{(p.itens || []).length} item(ns) · {Math.round((p.itens || []).reduce((a, i) => a + i.peso, 0) * 100) / 100} kg embarcados · {p.dia ? '📅 ' + p.dia.slice(8, 10) + '/' + p.dia.slice(5, 7) + '/' + p.dia.slice(0, 4) : '⚠️ sem data — vai entrar como hoje'}</p>
+                                                    <ul className="mt-1 space-y-0.5">
+                                                        {(p.itens || []).map((it, i) => (
+                                                            <li key={i} className="text-xs text-slate-500">
+                                                                {it.code} - {it.name} · {it.qty} un · {Number(it.peso).toFixed(2)} kg total{Number(it.qty) > 1 ? ` (${pesoMedioPorUnidade(it).toFixed(2)} kg/un)` : ''}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
                                                     {!!avisos.length && (
                                                         <ul className="mt-1.5 space-y-0.5">
                                                             {avisos.map((a, i) => <li key={i} className="text-xs text-red-600 flex items-start gap-1">🚩 <span>{a}</span></li>)}
@@ -4878,6 +4886,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.8.1', data: '14/07/2026', areas: ['app'], itens: [
+                'Remove a comparação com o preço de tabela de hoje na validação do Relatório de Vendas — o preço da carne varia dia a dia, então um pedido antigo com preço diferente não é erro, dava alarme falso',
+                'Cada pedido agora mostra a lista de itens com o peso total e o kg médio por unidade (peso ÷ quantidade) — útil quando tem mais de um item igual, tipo 2 dianteiros bovinos no mesmo pedido',
+            ]},
             { versao: '2.8.0', data: '14/07/2026', areas: ['app'], itens: [
                 'Importar Vendas Reais agora valida cada pedido antes de importar: confere se a soma dos itens bate com o total do pedido, se algum item veio sem peso/quantidade, e se o preço/kg lido é muito diferente do preço de tabela — pedidos suspeitos vêm desmarcados e com aviso, precisam de revisão manual',
             ]},
@@ -7518,7 +7530,7 @@
                     case 'cardapio': return <CardapioScreen products={products} produtoFotos={produtoFotos} showMessage={showMessage} catalogoContatos={catalogoContatos} salvarCatalogoContatos={salvarCatalogoContatos} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
                     case 'historico': return <HistoricoScreen user={user} showMessage={showMessage} />;
-                    case 'importarVendas': return <RelatorioVendasScreen user={user} clients={clients} products={products} showMessage={showMessage} />;
+                    case 'importarVendas': return <RelatorioVendasScreen user={user} clients={clients} showMessage={showMessage} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} listaNegra={listaNegra} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
