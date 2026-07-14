@@ -1251,11 +1251,35 @@
         document.body.appendChild(b);
     }
 
+    // 👁️ Botão mestre pra esconder/mostrar TODOS os elementos da extensão de uma vez — às vezes eles
+    // ficam em cima de algo da tela do SPAmov que o vendedor precisa ler. Usa "visibility" (não
+    // "display") de propósito: assim não bagunça o estado próprio de cada um (ex.: o painel de log
+    // continua fechado se já estava fechado, mesmo depois de mostrar tudo de novo).
+    function criarBotaoOcultar() {
+        if (document.getElementById("friganso-toggle-btn")) return;
+        const btn = document.createElement("button");
+        btn.id = "friganso-toggle-btn"; btn.type = "button"; btn.textContent = "👁️";
+        btn.title = "Esconder os botões da extensão";
+        Object.assign(btn.style, { position: "fixed", top: "10px", right: "10px", width: "34px", height: "34px", borderRadius: "50%", border: "1px solid #334155", background: "#0f172a", color: "#fff", fontSize: "15px", cursor: "pointer", zIndex: "2147483647", boxShadow: "0 4px 12px rgba(0,0,0,.35)", padding: "0", lineHeight: "34px", textAlign: "center" });
+        let escondido = false;
+        btn.addEventListener("click", function () {
+            escondido = !escondido;
+            document.querySelectorAll('[id^="friganso-"]').forEach(function (el) {
+                if (el.id === "friganso-toggle-btn") return;
+                el.style.visibility = escondido ? "hidden" : "";
+            });
+            btn.textContent = escondido ? "👁️‍🗨️" : "👁️";
+            btn.title = escondido ? "Mostrar os botões da extensão" : "Esconder os botões da extensão";
+        });
+        document.body.appendChild(btn);
+    }
+
     const temLeitura = temPedidoLeitura(montarPedidoLeitura());
 
     if (ehFramePrincipal()) {
         botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", abrirPopupFila);
         botao("friganso-cancelar-btn", "⏹ Cancelar lançamento", "#64748b", "70px", cancelarLancamento);
+        criarBotaoOcultar();
     }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
     // 🔍 "Ler Página": disponível em QUALQUER tela do SPAmov (não só pedido), pra usar como ferramenta
