@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 144;
+        const APP_BUILD_VERSION = 145;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3185,6 +3185,138 @@
             };
         };
 
+        // 📊 Importa o relatório de vendas REAL do SPAmov (faturado e peso REALMENTE embarcado, não a
+        // estimativa que a gente calcula sozinho) — lido pelo botão da extensão na tela de Faturamento.
+        // Usa o número SPAMOV pra atualizar o pedido já existente (registrarCompra já dedupa por spamov),
+        // ou criar um novo se ele não tiver passado pelo app.
+        const RelatorioVendasScreen = ({ user, clients, showMessage }) => {
+            const [pedidos, setPedidos] = useState([]);
+            const [selecionados, setSelecionados] = useState({});
+            const [importando, setImportando] = useState(false);
+
+            const processarPedidos = (raw) => {
+                try {
+                    const arr = JSON.parse(raw);
+                    if (!Array.isArray(arr) || !arr.length) { showMessage('Não veio nenhum pedido do relatório.', 'error'); return; }
+                    setPedidos(arr);
+                    const sel = {};
+                    arr.forEach(p => { sel[p.spamov] = !!p.clienteCode; });
+                    setSelecionados(sel);
+                } catch (e) { showMessage('Erro ao ler o relatório de vendas.', 'error'); }
+            };
+
+            useEffect(() => {
+                const raw = window.sessionStorage.getItem('friganso_relatorio_vendas_json');
+                if (raw) { window.sessionStorage.removeItem('friganso_relatorio_vendas_json'); processarPedidos(raw); }
+                const onMsg = (e) => {
+                    const d = e.data;
+                    if (!d || d.source !== 'friganso-ext' || d.type !== 'RELATORIO_VENDAS_PENDENTE' || !d.pedidos) return;
+                    window.sessionStorage.removeItem('friganso_relatorio_vendas_json');
+                    processarPedidos(JSON.stringify(d.pedidos));
+                };
+                window.addEventListener('message', onMsg);
+                return () => window.removeEventListener('message', onMsg);
+            }, []);
+
+            const toggleSel = (spamov) => setSelecionados(s => ({ ...s, [spamov]: !s[spamov] }));
+
+            const importarTudo = async () => {
+                const alvo = pedidos.filter(p => selecionados[p.spamov] && p.clienteCode && (p.itens || []).length);
+                if (!alvo.length) { showMessage('Nenhum pedido selecionado (ou sem cliente identificado).', 'error'); return; }
+                setImportando(true);
+                let ok = 0, falha = 0;
+                for (const p of alvo) {
+                    try {
+                        const itensSafe = p.itens.map(i => ({ code: String(i.code), name: i.name || ('Produto ' + i.code), qty: Number(i.qty) || 1, peso: Number(i.peso) || 0, valorKg: Number(i.valorKg) || 0 })).filter(i => i.code && i.peso > 0);
+                        if (!itensSafe.length) { falha++; continue; }
+                        const valorTotal = p.faturadoTotal != null ? p.faturadoTotal : Math.round(itensSafe.reduce((a, i) => a + i.peso * i.valorKg, 0) * 100) / 100;
+                        const pesoTotal = Math.round(itensSafe.reduce((a, i) => a + i.peso, 0) * 100) / 100;
+                        const cli = (clients || []).find(c => String(c.code) === String(p.clienteCode));
+                        const existente = await db.collection('purchases').where('spamov', '==', String(p.spamov)).limit(1).get();
+                        if (!existente.empty) {
+                            await existente.docs[0].ref.update({
+                                clienteCode: String(p.clienteCode),
+                                clienteName: (cli && cli.name) || p.clienteNome || '',
+                                tipoPessoa: p.tipoPessoa || (cli && cli.tipo) || 'juridica',
+                                itens: itensSafe, valor: valorTotal, pesoTotal,
+                                origemReal: true, corrigidoEm: Date.now(), corrigidoPor: (user && user.code) || ''
+                            });
+                        } else {
+                            await db.collection('purchases').add({
+                                clienteCode: String(p.clienteCode),
+                                clienteName: (cli && cli.name) || p.clienteNome || '',
+                                tipoPessoa: p.tipoPessoa || (cli && cli.tipo) || 'juridica',
+                                itens: itensSafe, valor: valorTotal, pesoTotal,
+                                spamov: String(p.spamov), condicaoPagamento: '', dia: diaStrGlobal(new Date()), ts: Date.now(),
+                                via: 'relatorio_vendas', vendedor: (user && user.code) || '', origemReal: true
+                            });
+                        }
+                        ok++;
+                    } catch (e) { falha++; }
+                }
+                setImportando(false);
+                showMessage(`${ok} pedido(s) importado(s)/atualizado(s)${falha ? `, ${falha} com erro` : ''}.`, falha ? 'info' : 'success');
+                setPedidos(prev => prev.filter(p => !(selecionados[p.spamov] && p.clienteCode)));
+            };
+
+            const totalSelecionado = pedidos.filter(p => selecionados[p.spamov]);
+            const semCliente = pedidos.filter(p => !p.clienteCode);
+            const fmt = (v) => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                        <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">📊 Importar Vendas Reais</h2>
+                        <p className="text-sm text-slate-500 mt-1">Lê o faturamento e o peso REALMENTE embarcado direto do relatório do SPAmov (não é mais estimativa) e corrige/atualiza os pedidos no sistema — usando o número SPAMOV pra não duplicar.</p>
+                    </div>
+
+                    {!pedidos.length && (
+                        <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-400">
+                            <p className="font-bold">Nenhum relatório carregado ainda.</p>
+                            <p className="text-sm mt-1">Abra a tela de Faturamento/Embarcado no SPAmov e toque em "📊 Enviar Relatório de Vendas".</p>
+                        </div>
+                    )}
+
+                    {!!pedidos.length && (
+                        <>
+                            {!!semCliente.length && (
+                                <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl p-4 text-sm">
+                                    ⚠️ {semCliente.length} pedido(s) vieram sem cliente identificado no relatório (falha de origem do SPAmov) — não podem ser importados automaticamente. SPAMOVs: {semCliente.map(p => p.spamov).join(', ')}
+                                </div>
+                            )}
+                            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                                <div className="p-4 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+                                    <p className="font-bold text-slate-700 text-sm">{pedidos.length} pedido(s) no relatório · {totalSelecionado.length} selecionado(s)</p>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => { const sel = {}; pedidos.forEach(p => sel[p.spamov] = !!p.clienteCode); setSelecionados(sel); }} className="text-xs font-bold text-rose-700 hover:underline">Selecionar todos com cliente</button>
+                                        <button onClick={() => setSelecionados({})} className="text-xs font-bold text-slate-500 hover:underline">Limpar</button>
+                                    </div>
+                                </div>
+                                <div className="max-h-[500px] overflow-y-auto divide-y divide-slate-100">
+                                    {pedidos.map(p => (
+                                        <div key={p.spamov} className={`p-3 flex items-start gap-3 ${!p.clienteCode ? 'bg-amber-50/50' : ''}`}>
+                                            <input type="checkbox" disabled={!p.clienteCode} checked={!!selecionados[p.spamov]} onChange={() => toggleSel(p.spamov)} className="mt-1.5 h-4 w-4" />
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                                    <p className="font-bold text-slate-800 text-sm truncate">SPAMOV {p.spamov} — {p.clienteNome || '❌ cliente não identificado'}</p>
+                                                    <p className="font-black text-emerald-700 text-sm">{fmt(p.faturadoTotal != null ? p.faturadoTotal : (p.itens || []).reduce((a, i) => a + i.faturado, 0))}</p>
+                                                </div>
+                                                <p className="text-xs text-slate-400">{(p.itens || []).length} item(ns) · {Math.round((p.itens || []).reduce((a, i) => a + i.peso, 0) * 100) / 100} kg embarcados</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <button onClick={importarTudo} disabled={importando || !totalSelecionado.length} className="w-full bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-black py-3.5 rounded-xl transition-colors">
+                                {importando ? 'Importando...' : `✅ Importar ${totalSelecionado.length} pedido(s) selecionado(s)`}
+                            </button>
+                            <p className="text-xs text-slate-400 text-center">O relatório não traz a data de cada pedido separadamente — os importados novos entram com a data de hoje pra fins de estatística.</p>
+                        </>
+                    )}
+                </div>
+            );
+        };
+
         // 🔍 Consulta CNPJ avulsa — igual a busca de dentro do Cadastro em Processo, mas sem precisar
         // criar um cliente antes. Útil só pra conferir um CNPJ rapidinho.
         const ConsultaCnpjScreen = ({ showMessage }) => {
@@ -4653,6 +4785,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.7.7', data: '14/07/2026', areas: ['app', 'extensao'], itens: [
+                'Novo botão "📊 Enviar Relatório de Vendas" na tela de Faturamento/Embarcado do SPAmov — lê o faturamento e o peso REALMENTE embarcado de cada pedido (não a estimativa que o app calcula sozinho) e manda pro site',
+                'Nova tela "📊 Importar Vendas Reais" (menu Vendas Diárias) — mostra os pedidos lidos, deixa escolher quais importar e atualiza/corrige o histórico de compras usando o número SPAMOV pra não duplicar nada',
+            ]},
             { versao: '2.7.6', data: '14/07/2026', areas: ['extensao'], itens: [
                 'Novo botão 👁️ (canto superior direito, na página do SPAmov) pra esconder/mostrar todos os botões da extensão de uma vez — útil quando eles ficam em cima de algo que você precisa ler na tela',
             ]},
@@ -7279,6 +7415,7 @@
                     case 'cardapio': return <CardapioScreen products={products} produtoFotos={produtoFotos} showMessage={showMessage} catalogoContatos={catalogoContatos} salvarCatalogoContatos={salvarCatalogoContatos} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
                     case 'historico': return <HistoricoScreen user={user} showMessage={showMessage} />;
+                    case 'importarVendas': return <RelatorioVendasScreen user={user} clients={clients} showMessage={showMessage} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
                     case 'disparos': return <DisparosScreen clients={clients} products={products} user={user} showMessage={showMessage} setActiveRoute={setActiveRoute} listaNegra={listaNegra} />;
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
@@ -7388,6 +7525,7 @@
                             {(isElectron || isCapacitor) && <NavButton route="navegador" icon={IconWhatsApp} label="🌐 Site da Friganso" />}
                             <NavButton route="resumo" icon={IconReceipt} label="Resumo de Pedido" />
                             <NavButton route="historico" icon={IconFileText} label="🧾 Histórico de Vendas" />
+                            <NavButton route="importarVendas" icon={IconCloudUpload} label="📊 Importar Vendas Reais" />
                             <NavButton route="orcamentos" icon={IconWhatsApp} label="Gerador de Zap" />
                             <NavButton route="disparos" icon={IconWhatsApp} label="Disparos WhatsApp" />
                             
@@ -7516,6 +7654,16 @@
                 window.sessionStorage.setItem('friganso_initial_route', 'pdf');
                 if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
             }
+            // 📊 Relatório de Vendas lido DIRETO da tela de Faturamento/Embarcado do SPAmov
+            const vendasJson = p.get('relatorioVendasJson');
+            if (vendasJson) {
+                try { window.sessionStorage.setItem('friganso_relatorio_vendas_json', decodeURIComponent(escape(atob(vendasJson)))); } catch (e) { window.sessionStorage.setItem('friganso_relatorio_vendas_json', vendasJson); }
+                window.sessionStorage.setItem('friganso_initial_route', 'importarVendas');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            } else if (p.get('relatorioVendas') === 'pendente') {
+                window.sessionStorage.setItem('friganso_initial_route', 'importarVendas');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            }
         })();
 
         // 📥 Tabela de Preços entregue pela extensão via chrome.storage (URL curta, evita "I/O error"
@@ -7523,11 +7671,20 @@
         // pode chegar antes de qualquer listener existir e se perder.
         window.addEventListener('message', function (e) {
             const d = e.data;
-            if (!d || d.source !== 'friganso-ext' || d.type !== 'TABELA_PENDENTE' || !d.produtos) return;
-            try {
-                window.sessionStorage.setItem('friganso_tabela_json', JSON.stringify(d.produtos));
-                window.sessionStorage.setItem('friganso_initial_route', 'pdf');
-            } catch (err) {}
+            if (d && d.source === 'friganso-ext' && d.type === 'TABELA_PENDENTE' && d.produtos) {
+                try {
+                    window.sessionStorage.setItem('friganso_tabela_json', JSON.stringify(d.produtos));
+                    window.sessionStorage.setItem('friganso_initial_route', 'pdf');
+                } catch (err) {}
+                return;
+            }
+            // 📊 Relatório de Vendas entregue pela extensão via chrome.storage
+            if (d && d.source === 'friganso-ext' && d.type === 'RELATORIO_VENDAS_PENDENTE' && d.pedidos) {
+                try {
+                    window.sessionStorage.setItem('friganso_relatorio_vendas_json', JSON.stringify(d.pedidos));
+                    window.sessionStorage.setItem('friganso_initial_route', 'importarVendas');
+                } catch (err) {}
+            }
         });
 
         // Captura o prompt de instalação do PWA para usar no botão do Perfil

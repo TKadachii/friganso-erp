@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.14.0431
+// @version      2026.7.14.0939
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -54,6 +54,17 @@
                 if (Date.now() - (pend.ts || 0) > 10 * 60 * 1000) { chrome.storage.local.remove("friganso_tabela_pendente"); return; } // expira em 10min
                 chrome.storage.local.remove("friganso_tabela_pendente");
                 try { window.postMessage({ source: "friganso-ext", type: "TABELA_PENDENTE", produtos: pend.produtos }, "*"); } catch (e) {}
+            });
+        } catch (e) {}
+        // 📊 Mesma ponte, pro Relatório de Vendas (pedidos reais lidos do SPAmov, com peso embarcado e
+        // faturado de verdade — não é estimativa).
+        try {
+            chrome.storage.local.get(["friganso_relatorio_vendas_pendente"], function (r) {
+                const pend = r && r.friganso_relatorio_vendas_pendente;
+                if (!pend || !pend.pedidos || !pend.pedidos.length) return;
+                if (Date.now() - (pend.ts || 0) > 10 * 60 * 1000) { chrome.storage.local.remove("friganso_relatorio_vendas_pendente"); return; }
+                chrome.storage.local.remove("friganso_relatorio_vendas_pendente");
+                try { window.postMessage({ source: "friganso-ext", type: "RELATORIO_VENDAS_PENDENTE", pedidos: pend.pedidos }, "*"); } catch (e) {}
             });
         } catch (e) {}
         window.addEventListener("message", function (e) {
@@ -430,6 +441,129 @@
             try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; }
             return;
         }
+        try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
+        catch (e) { window.open(url, "friganso_erp_app"); }
+    }
+
+    // ================= RELATÓRIO DE VENDAS (faturamento real) =================
+    // Lê a tela de relatório de vendas do SPAmov (a que lista pedidos por SPAMOV, com peso EMBARCADO
+    // e FATURADO reais — não a estimativa "Valor" do pedido) e manda pro app. Isso substitui/corrige
+    // o faturamento que o app hoje só estima a partir do que foi digitado no Resumo.
+    function ehTelaRelatorioVendas() {
+        const bt = bodyText();
+        return /faturado/i.test(bt) && /embarcado/i.test(bt) && /spamov/i.test(bt);
+    }
+    function extrairRelatorioVendas() {
+        // Mesma coleta de "célula-folha com posição" usada no diagnóstico — mas direto da tela viva,
+        // sem precisar gerar/copiar um arquivo.
+        const textos = [];
+        document.querySelectorAll("td, th, div, span, font, b, a, label, li, nobr, small, strong").forEach(function (el) {
+            if (el.children && el.children.length) return;
+            const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+            if (!t || t.length > 60) return;
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t, tag: el.tagName });
+        });
+        if (!textos.length) return [];
+
+        // Agrupa em "linhas visuais" por Y com tolerância (o relatório espalha uma mesma linha lógica
+        // em Y ligeiramente diferentes por causa de sub-elementos com fonte/estilo diferente).
+        const ordenados = textos.slice().sort(function (a, b) { return a.y - b.y || a.x - b.x; });
+        const clusters = [];
+        ordenados.forEach(function (t) {
+            let cluster = clusters[clusters.length - 1];
+            if (!cluster || t.y - cluster.yMax > 10) { cluster = { yMax: t.y, itens: [] }; clusters.push(cluster); }
+            cluster.yMax = Math.max(cluster.yMax, t.y);
+            cluster.itens.push(t);
+        });
+        clusters.forEach(function (c) { c.itens.sort(function (a, b) { return a.x - b.x; }); });
+
+        const reCurrency = /^\d{1,3}(\.\d{3})*,\d{2}$/;      // 6.133,60
+        const reKg = /^\d{1,4},\d{4}$/;                        // 278,8000
+        const reCliente = /\[([jf])\]\s*(\d+)\s*-\s*(.+)/i;    // [j] 86625 - dmb Produtos Ltda
+        const reItem = /^(\d+)\s*-\s*(.+)/;                    // 1602 - DIANTEIRO BOVINO
+        const reSpamov = /^\d{5,8}$/;
+
+        const pedidos = [];
+        let atual = null;
+        for (let ci = 0; ci < clusters.length; ci++) {
+            const cluster = clusters[ci];
+            const cells = cluster.itens;
+
+            // Início de um pedido novo: célula tag "A" (link) com texto só-dígitos = número do SPAMOV.
+            let cellSpamov = null;
+            for (let i = 0; i < cells.length; i++) { if (cells[i].tag === "A" && reSpamov.test(cells[i].t.trim())) { cellSpamov = cells[i]; break; } }
+            if (cellSpamov) {
+                if (atual) pedidos.push(atual);
+                atual = { spamov: cellSpamov.t.trim(), clienteCode: "", clienteNome: "", tipoPessoa: "", faturadoTotal: null, itens: [] };
+                const vizinhos = [clusters[ci - 1], cluster, clusters[ci + 1]].filter(Boolean).reduce(function (a, c) { return a.concat(c.itens); }, []);
+                let cCliente = null;
+                for (let i = 0; i < vizinhos.length; i++) { if (reCliente.test(vizinhos[i].t)) { cCliente = vizinhos[i]; break; } }
+                if (cCliente) {
+                    const m = cCliente.t.match(reCliente);
+                    atual.tipoPessoa = m[1].toLowerCase() === "j" ? "juridica" : "fisica";
+                    atual.clienteCode = m[2];
+                    atual.clienteNome = m[3].trim();
+                }
+                // Faturado do pedido = célula "B" em moeda, a mais à direita do cabeçalho (a "Valor" do
+                // pedido, mais cedo na linha, é só estimativa — não usar essa).
+                const candidatosFat = vizinhos.filter(function (c) { return c.tag === "B" && reCurrency.test(c.t.trim()) && c.x > 2000; });
+                if (candidatosFat.length) {
+                    candidatosFat.sort(function (a, b) { return b.x - a.x; });
+                    atual.faturadoTotal = parseFloat(candidatosFat[0].t.trim().replace(/\./g, "").replace(",", "."));
+                }
+                continue;
+            }
+
+            if (!atual) continue;
+
+            const cellItem = cells.filter(function (c) { return c.x < 400 && c.tag === "TD" && reItem.test(c.t.trim()); })[0];
+            if (!cellItem) continue; // cabeçalho de tabela, linha TOTAL etc. — ignora
+            const mItem = cellItem.t.trim().match(reItem);
+            const code = mItem[1];
+            const name = mItem[2].trim();
+
+            const cellKg = cells.filter(function (c) { return reKg.test(c.t.trim()); })[0];
+            let peso = 0, faturado = 0, qty = 1;
+            if (cellKg) {
+                peso = parseFloat(cellKg.t.trim().replace(",", "."));
+                const candidatosF = cells.filter(function (c) { return c.x > cellKg.x && reCurrency.test(c.t.trim()); });
+                if (candidatosF.length) {
+                    candidatosF.sort(function (a, b) { return a.x - b.x; });
+                    faturado = parseFloat(candidatosF[0].t.trim().replace(/\./g, "").replace(",", "."));
+                }
+                const candidatosQty = cells.filter(function (c) { return c.x < cellKg.x && /^\d+$/.test(c.t.trim()); });
+                if (candidatosQty.length) {
+                    candidatosQty.sort(function (a, b) { return b.x - a.x; });
+                    qty = parseInt(candidatosQty[0].t.trim(), 10) || 1;
+                }
+            }
+            const valorKg = peso > 0 ? Math.round((faturado / peso) * 10000) / 10000 : 0;
+            atual.itens.push({ code: code, name: name, qty: qty, peso: peso, faturado: faturado, valorKg: valorKg });
+        }
+        if (atual) pedidos.push(atual);
+        return pedidos;
+    }
+    function enviarRelatorioVendasParaApp() {
+        const pedidos = extrairRelatorioVendas();
+        if (!pedidos.length) { alert("Não consegui ler nenhum pedido nessa tela."); return; }
+        try {
+            if (window.chrome && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ friganso_relatorio_vendas_pendente: { pedidos: pedidos, ts: Date.now() } }, function () {
+                    const url = APP_URL + "?relatorioVendas=pendente";
+                    const ehCelular = (navigator.maxTouchPoints || 0) > 0;
+                    if (ehCelular) { try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; } return; }
+                    try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
+                    catch (e) { window.open(url, "friganso_erp_app"); }
+                });
+                return;
+            }
+        } catch (e) {}
+        const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(pedidos))));
+        const url = APP_URL + "?relatorioVendasJson=" + encodeURIComponent(b64);
+        const ehCelular = (navigator.maxTouchPoints || 0) > 0;
+        if (ehCelular) { try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; } return; }
         try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
         catch (e) { window.open(url, "friganso_erp_app"); }
     }
@@ -1293,12 +1427,13 @@
     // ficam em cima de algo da tela do SPAmov que o vendedor precisa ler. Usa "visibility" (não
     // "display") de propósito: assim não bagunça o estado próprio de cada um (ex.: o painel de log
     // continua fechado se já estava fechado, mesmo depois de mostrar tudo de novo).
-    function criarBotaoOcultar() {
+    // Fica na MESMA pilha dos outros botões (canto inferior direito), não separado — por isso não usa
+    // o helper botao() (que não deixa trocar o texto depois de criado, e aqui precisa alternar o rótulo).
+    function criarBotaoOcultar(bottom) {
         if (document.getElementById("friganso-toggle-btn")) return;
         const btn = document.createElement("button");
-        btn.id = "friganso-toggle-btn"; btn.type = "button"; btn.textContent = "👁️";
-        btn.title = "Esconder os botões da extensão";
-        Object.assign(btn.style, { position: "fixed", top: "10px", right: "10px", width: "34px", height: "34px", borderRadius: "50%", border: "1px solid #334155", background: "#0f172a", color: "#fff", fontSize: "15px", cursor: "pointer", zIndex: "2147483647", boxShadow: "0 4px 12px rgba(0,0,0,.35)", padding: "0", lineHeight: "34px", textAlign: "center" });
+        btn.id = "friganso-toggle-btn"; btn.type = "button"; btn.textContent = "👁️ Esconder botões";
+        Object.assign(btn.style, { position: "fixed", right: "18px", bottom: bottom, zIndex: "2147483647", background: "#334155", color: "#fff", border: "none", borderRadius: "12px", padding: "12px 18px", fontSize: "14px", fontWeight: "bold", fontFamily: "system-ui,sans-serif", boxShadow: "0 6px 20px rgba(0,0,0,0.3)", cursor: "pointer" });
         let escondido = false;
         btn.addEventListener("click", function () {
             escondido = !escondido;
@@ -1306,8 +1441,7 @@
                 if (el.id === "friganso-toggle-btn") return;
                 el.style.visibility = escondido ? "hidden" : "";
             });
-            btn.textContent = escondido ? "👁️‍🗨️" : "👁️";
-            btn.title = escondido ? "Mostrar os botões da extensão" : "Esconder os botões da extensão";
+            btn.textContent = escondido ? "👁️ Mostrar botões" : "👁️ Esconder botões";
         });
         document.body.appendChild(btn);
     }
@@ -1317,7 +1451,7 @@
     if (ehFramePrincipal()) {
         botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", abrirPopupFila);
         botao("friganso-cancelar-btn", "⏹ Cancelar lançamento", "#64748b", "70px", cancelarLancamento);
-        criarBotaoOcultar();
+        criarBotaoOcultar("220px");
     }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
     // 🔍 "Ler Página": disponível em QUALQUER tela do SPAmov (não só pedido), pra usar como ferramenta
@@ -1326,6 +1460,9 @@
     // 📥 Atualizar Tabela: só na tela "Lista de Preços" — lê o catálogo inteiro direto da tela
     // (sem precisar de PDF) e manda pro site, que atualiza a Tabela de Preços sozinho.
     if (ehTelaListaPrecos()) botao("friganso-tabela-btn", "📥 Atualizar Tabela do Site", "#7c3aed", "220px", enviarTabelaParaApp);
+    // 📊 Relatório de Vendas: só na tela que lista pedidos por SPAMOV com peso embarcado/faturado reais
+    // — lê tudo e manda pro site, que usa isso pra corrigir o faturamento real (não a estimativa).
+    if (ehTelaRelatorioVendas()) botao("friganso-vendas-btn", "📊 Enviar Relatório de Vendas", "#0891b2", "270px", enviarRelatorioVendasParaApp);
 
     // Mostra o log salvo (passo a passo que sobrevive aos recarregamentos)
     if (ehFramePrincipal()) mostrarLogSalvo();
