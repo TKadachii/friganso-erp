@@ -422,7 +422,10 @@
         document.querySelectorAll("td, th, div, span, font, b, a, label, li, nobr, small, strong").forEach(function (el) {
             if (el.children && el.children.length) return;
             const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-            if (!t || t.length > 60) return;
+            // Nomes de cliente compostos (ex.: "[j] 48094 - Viter Distribuidora de Bebidas
+            // Ltda/distribuidora do Junior", 72 caracteres) passavam do limite de 60 e sumiam —
+            // por isso ~37% dos pedidos vinham "sem cliente identificado" mesmo tendo o dado na tela.
+            if (!t || t.length > 200) return;
             const r = el.getBoundingClientRect();
             if (!r.width || !r.height) return;
             textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t, tag: el.tagName });
@@ -574,7 +577,9 @@
                 // coluna DATA (que mostra "13-07-2026<br>21:44:47") sumia inteira do diagnóstico.
                 for (var k = 0; k < el.children.length; k++) { if (el.children[k].tagName !== "BR") return; }
                 const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-                if (!t || t.length > 60) return;
+                // Nomes de cliente compostos podem passar de 60 caracteres facilmente — usa o mesmo
+                // limite generoso do extrairRelatorioVendas (ver comentário lá) pra não descartá-los.
+                if (!t || t.length > 200) return;
                 const r = el.getBoundingClientRect();
                 if (!r.width || !r.height) return;
                 textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t, tag: el.tagName });
@@ -583,7 +588,7 @@
             // valor só no title (aparece ao passar o mouse), então o texto visível vinha vazio.
             document.querySelectorAll("[title]").forEach(function (el) {
                 const tit = (el.getAttribute("title") || "").replace(/\s+/g, " ").trim();
-                if (!tit || tit.length > 80) return;
+                if (!tit || tit.length > 200) return;
                 const r = el.getBoundingClientRect();
                 if (!r.width || !r.height) return;
                 textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: tit, tag: el.tagName, attr: "title" });
