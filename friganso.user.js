@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.7.0927
+// @version      2026.7.14.0420
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -474,12 +474,23 @@
             // (que precisa da página inteira, ex.: catálogo com centenas de produtos).
             const textos = [];
             document.querySelectorAll("td, th, div, span, font, b, a, label, li, nobr, small, strong").forEach(function (el) {
-                if (el.children && el.children.length) return; // só folhas
+                // "folha" = sem filhos-elemento, OU só com <br> — antes um <br> descartava a célula, e a
+                // coluna DATA (que mostra "13-07-2026<br>21:44:47") sumia inteira do diagnóstico.
+                for (var k = 0; k < el.children.length; k++) { if (el.children[k].tagName !== "BR") return; }
                 const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
                 if (!t || t.length > 60) return;
                 const r = el.getBoundingClientRect();
                 if (!r.width || !r.height) return;
                 textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t, tag: el.tagName });
+            });
+            // 🏷️ Também captura atributos "title"/tooltip — algumas colunas (como a DATA) mostram o
+            // valor só no title (aparece ao passar o mouse), então o texto visível vinha vazio.
+            document.querySelectorAll("[title]").forEach(function (el) {
+                const tit = (el.getAttribute("title") || "").replace(/\s+/g, " ").trim();
+                if (!tit || tit.length > 80) return;
+                const r = el.getBoundingClientRect();
+                if (!r.width || !r.height) return;
+                textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: tit, tag: el.tagName, attr: "title" });
             });
             const campos = [];
             document.querySelectorAll("input, select").forEach(function (el) {
