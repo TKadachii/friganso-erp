@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 153;
+        const APP_BUILD_VERSION = 154;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -4963,6 +4963,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.8.6', data: '14/07/2026', areas: ['app'], itens: [
+                'O Gerador de Zap da tela Fazer Pedido agora usa o título "ORÇAMENTO" em vez de "PEDIDO"',
+            ]},
             { versao: '2.8.5', data: '14/07/2026', areas: ['app'], itens: [
                 'Tela "Fazer Pedido" agora tem um Gerador de Zap embutido no lado direito — os itens do pedido viram uma mensagem prontinha (mesmo formato da aba Gerador de Zap, com preço e quantidade) pra copiar e mandar pro cliente na hora',
             ]},
@@ -6305,7 +6308,7 @@
                     if (!prod) return `Cod: *${i.code}*\n*${i.name}*\n${qtd}`;
                     return montarBlocoProdutoZap(prod, estiloZapPedido).trimEnd() + '\n' + qtd;
                 });
-                const header = `🥩 *PEDIDO*\n\n`;
+                const header = `🥩 *ORÇAMENTO*\n\n`;
                 if (estiloZapPedido === 'antigo') return header + blocos.join('\n\n');
                 return header + blocos.join(`\n${SEPARADOR_ZAP}\n`);
             };
