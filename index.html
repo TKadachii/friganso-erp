@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 152;
+        const APP_BUILD_VERSION = 153;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -4963,6 +4963,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.8.5', data: '14/07/2026', areas: ['app'], itens: [
+                'Tela "Fazer Pedido" agora tem um Gerador de Zap embutido no lado direito — os itens do pedido viram uma mensagem prontinha (mesmo formato da aba Gerador de Zap, com preço e quantidade) pra copiar e mandar pro cliente na hora',
+            ]},
             { versao: '2.8.4', data: '14/07/2026', areas: ['extensao'], itens: [
                 'Relatório de Vendas agora detecta pedidos DEVOLVIDOS (marcados com "E"/"D" vermelho no SPAmov, indicando ocorrência + devolução) e descarta o pedido inteiro — não é venda de verdade, é um estorno, não deveria contar no faturamento',
             ]},
@@ -6289,6 +6292,31 @@
                 }
             };
 
+            // 📲 Gera a mensagem de WhatsApp do pedido atual (mesmo formato do Gerador de Zap, respeitando
+            // o estilo salvo lá) pra mandar pro cliente confirmando os itens e valores. Puxa o preço da
+            // tabela do dia pelo código; item que não está na tabela sai só com código, nome e quantidade.
+            const estiloZapPedido = getEstiloZapSalvo();
+            const gerarZapPedido = () => {
+                const validos = itens.filter(i => Number(i.qty) > 0);
+                if (!validos.length) return '';
+                const blocos = validos.map(i => {
+                    const qtd = `📦 Qtd: *${i.qty}*`;
+                    const prod = products.find(p => String(p.code) === String(i.code));
+                    if (!prod) return `Cod: *${i.code}*\n*${i.name}*\n${qtd}`;
+                    return montarBlocoProdutoZap(prod, estiloZapPedido).trimEnd() + '\n' + qtd;
+                });
+                const header = `🥩 *PEDIDO*\n\n`;
+                if (estiloZapPedido === 'antigo') return header + blocos.join('\n\n');
+                return header + blocos.join(`\n${SEPARADOR_ZAP}\n`);
+            };
+            const copiarZapPedido = () => {
+                const txt = gerarZapPedido();
+                if (!txt) { showMessage('Adicione itens ao pedido primeiro.', 'error'); return; }
+                navigator.clipboard.writeText(txt);
+                showMessage('Mensagem do pedido copiada pro Zap! 📲', 'success');
+            };
+            const temItensValidos = itens.filter(i => Number(i.qty) > 0).length > 0;
+
             return (
                 <div className="animate-in fade-in max-w-5xl mx-auto">
                     <div className="mb-4">
@@ -6447,9 +6475,31 @@
                     </div>
                     </div>{/* fim coluna do formulário */}
 
+                    {/* Coluna da direita: mensagem pro cliente (Zap) + histórico do dia */}
+                    <div className="lg:col-span-1 space-y-4">
+
+                    {/* 📲 Gerador de Zap do pedido — mesmo formato da aba Gerador de Zap, com os itens deste pedido */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-3 sm:p-4 border-b border-slate-100 flex justify-between items-center gap-2">
+                            <h3 className="font-bold text-slate-800 flex items-center gap-2"><div className="h-5 w-5 text-emerald-600"><IconWhatsApp/></div> Mandar pro cliente</h3>
+                            <button onClick={copiarZapPedido} disabled={!temItensValidos} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-sm transition-colors flex-shrink-0">📋 Copiar</button>
+                        </div>
+                        <div className="p-4 bg-slate-100" style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')", backgroundSize: 'cover', backgroundPosition: 'center' }}>
+                            {temItensValidos ? (
+                                <div className="bg-[#e1ffc7] p-4 rounded-2xl shadow-sm border border-[#d3f4b8]">
+                                    <pre className="font-mono text-xs whitespace-pre-wrap text-slate-800 font-medium">{gerarZapPedido()}</pre>
+                                </div>
+                            ) : (
+                                <div className="text-center py-8"><p className="text-slate-600 text-sm bg-white/95 rounded-xl p-3 border border-slate-200 font-medium">Adicione itens ao pedido e a mensagem aparece aqui pra você copiar e mandar. 📲</p></div>
+                            )}
+                        </div>
+                        {products.length === 0 && temItensValidos && (
+                            <p className="text-[10px] text-amber-600 font-semibold px-4 py-2">⏳ Sem a Tabela do Dia carregada os preços não aparecem — abra <b>Tabela do Dia (PDF)</b> no menu.</p>
+                        )}
+                    </div>
+
                     {/* Histórico de pedidos do dia */}
-                    <div className="lg:col-span-1">
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden lg:sticky lg:top-4">
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                             <div className="p-3 sm:p-4 border-b border-slate-100 flex justify-between items-center">
                                 <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>📋</span> Histórico do dia</h3>
                                 <span className="text-xs font-bold text-slate-400">{histHoje.length}</span>
