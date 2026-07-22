@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 155;
+        const APP_BUILD_VERSION = 156;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -4963,6 +4963,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.8.8', data: '14/07/2026', areas: ['app'], itens: [
+                'Na busca de produtos da tela Fazer Pedido, cada item mostra agora uma caixinha "Nx vendido" ao lado do nome — quantas vezes você já vendeu aquele produto, pra saber quais você mais trabalha',
+            ]},
             { versao: '2.8.7', data: '14/07/2026', areas: ['app'], itens: [
                 'O Orçamento gerado na tela Fazer Pedido não mostra mais a quantidade de cada item — só código, nome e preço',
             ]},
@@ -6107,7 +6110,7 @@
             const [purchases, setPurchases] = useState([]);
             useEffect(() => {
                 try {
-                    const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(400).onSnapshot(
+                    const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(1500).onSnapshot(
                         snap => setPurchases(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
                         () => {}
                     );
@@ -6214,6 +6217,22 @@
                 if (!q) return [];
                 return products.filter(p => matchProduto(p, q)).slice(0, 30);
             }, [products, busca]);
+
+            // 📊 Quantas VEZES cada produto já foi vendido (nº de pedidos que incluíram o item, não peso) —
+            // aparece como uma caixinha ao lado do nome na busca pra saber quais produtos você mais trabalha.
+            const vendasPorProduto = useMemo(() => {
+                const m = {};
+                purchases.forEach(p => {
+                    const vistos = new Set(); // conta 1 por pedido, mesmo se o item aparecer repetido nele
+                    (p.itens || []).forEach(it => {
+                        const c = String(it.code);
+                        if (vistos.has(c)) return;
+                        vistos.add(c);
+                        m[c] = (m[c] || 0) + 1;
+                    });
+                });
+                return m;
+            }, [purchases]);
 
             // 🔁 Clicar num item que já está no pedido SOMA 1 na quantidade (em vez de ignorar) — assim dá
             // pra clicar 2x na Banda Suína e já vir com qty=2. Não limpa a busca: a lista de resultados
@@ -6423,6 +6442,9 @@
                                     <button key={p.code} onClick={() => addItem(p)} className="w-full text-left px-3 py-2 bg-slate-50 hover:bg-rose-50 rounded-lg flex items-center gap-2 transition-colors border border-transparent hover:border-rose-200">
                                         <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{p.code}</span>
                                         <span className="text-sm text-slate-700 flex-1 truncate">{p.name}</span>
+                                        {vendasPorProduto[String(p.code)] > 0 && (
+                                            <span title={`Você já vendeu este item ${vendasPorProduto[String(p.code)]} vez(es)`} className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold text-[11px] flex-shrink-0">{vendasPorProduto[String(p.code)]}× vendido</span>
+                                        )}
                                         <span className="text-rose-600 font-bold flex-shrink-0">+</span>
                                     </button>
                                 ))}
