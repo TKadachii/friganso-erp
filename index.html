@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 154;
+        const APP_BUILD_VERSION = 155;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -4963,6 +4963,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.8.7', data: '14/07/2026', areas: ['app'], itens: [
+                'O Orçamento gerado na tela Fazer Pedido não mostra mais a quantidade de cada item — só código, nome e preço',
+            ]},
             { versao: '2.8.6', data: '14/07/2026', areas: ['app'], itens: [
                 'O Gerador de Zap da tela Fazer Pedido agora usa o título "ORÇAMENTO" em vez de "PEDIDO"',
             ]},
@@ -6303,10 +6306,9 @@
                 const validos = itens.filter(i => Number(i.qty) > 0);
                 if (!validos.length) return '';
                 const blocos = validos.map(i => {
-                    const qtd = `📦 Qtd: *${i.qty}*`;
                     const prod = products.find(p => String(p.code) === String(i.code));
-                    if (!prod) return `Cod: *${i.code}*\n*${i.name}*\n${qtd}`;
-                    return montarBlocoProdutoZap(prod, estiloZapPedido).trimEnd() + '\n' + qtd;
+                    if (!prod) return `Cod: *${i.code}*\n*${i.name}*`;
+                    return montarBlocoProdutoZap(prod, estiloZapPedido).trimEnd();
                 });
                 const header = `🥩 *ORÇAMENTO*\n\n`;
                 if (estiloZapPedido === 'antigo') return header + blocos.join('\n\n');
