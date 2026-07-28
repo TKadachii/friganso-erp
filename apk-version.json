@@ -1,6 +1,6 @@
 {
-    "versionCode": 11,
-    "versionName": "2.9",
+    "versionCode": 12,
+    "versionName": "3.0",
     "url": "https://tkadachii.github.io/friganso-erp/FrigansoERP.apk",
-    "novidades": "• Captura a condição de pagamento (à vista/cartão/prazo) ao ler o pedido pela aba Navegador\n• Automação de lançamento de pedido: prazos bem mais folgados pra internet lenta (não descarta mais o pedido no meio do processo)"
+    "novidades": "• 🔄 Continua de onde você parou: saiu do SPAmov pra ver algo no WhatsApp e voltou? Ele volta na mesma página e ainda logado (antes reiniciava do zero)\n• Botões de cima agora são menores e dá pra arrastar pro lado — o 📋 ERP, o Log e o Fechar não ficam mais escondidos fora da tela\n• Novo botão 🏠 pra recomeçar do início do SPAmov quando quiser\n• O botão 🚀 avisa quando não acha a tela certa, em vez de não fazer nada"
 }
