@@ -342,7 +342,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 157;
+        const APP_BUILD_VERSION = 158;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -4963,6 +4963,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.9.0', data: '28/07/2026', areas: ['apk', 'extensao'], itens: [
+                'Novo botão 🪜 ETAPAS: quando o lançamento se perde no meio, dá pra forçar a partir da etapa certa (1 entrar no site · 2 abrir Vendas · 3 Novo + Cliente · 4 lançar os itens) em vez de recomeçar tudo do zero',
+                'A etapa 4 abre a lista dos itens que você mandou pelo "🚀 Só mandar (site já aberto)" — e o "▶ daqui" retoma do item onde parou, sem repetir os que já entraram',
+            ]},
             { versao: '2.8.9', data: '14/07/2026', areas: ['apk'], itens: [
                 'App Android 3.0: o navegador do SPAmov agora CONTINUA DE ONDE VOCÊ PAROU — sair pro WhatsApp e voltar não reinicia mais tudo do zero, e o login continua valendo',
                 'Os botões da barra de cima ficaram menores e dá pra arrastar pro lado: o 📋 ERP, o Log e o Fechar não somem mais fora da tela em celular estreito',

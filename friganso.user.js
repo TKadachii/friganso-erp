@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.14.1300
+// @version      2026.7.28.1752
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -1282,6 +1282,153 @@
     }
     function cancelarLancamento() { clearRun().then(function () { statusBox()("Lançamento cancelado."); }); }
 
+    // ---------- 🪜 ETAPAS (retomar de um ponto específico) ----------
+    // O lançamento tem 4 fases (login → menu Vendas → Novo+Cliente → itens) e cada uma recarrega o
+    // SPAmov inteiro. Quando algo sai do trilho no meio (internet caiu, o site deslogou, a tela voltou
+    // pro lugar errado), antes só dava pra recomeçar tudo do zero. Aqui cada fase vira um botão que
+    // força a partir dali — inclusive retomando os itens do ponto onde parou, sem repetir o que já foi.
+    function forcarEtapaLogin() {
+        const status = statusBox();
+        if (!document.querySelector("input[type=password]")) { status("ℹ️ Você já está logado (não é a tela de login). Pule pra etapa 2."); return; }
+        chrome.storage.local.get(["friganso_creds"], function (c) {
+            const cr = (c && c.friganso_creds) || {};
+            if (!cr.usuario || !cr.senha) { status("⚠️ Não tem login salvo. Salve seu usuário/senha do SPAmov na aba 🐞 Debug do app."); return; }
+            chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario, senha: cr.senha, autoLogin: true, irVendas: false } }, function () {
+                status("1️⃣ Fazendo o login...");
+                tentarLogin();
+            });
+        });
+    }
+    function forcarEtapaVendas() {
+        const status = statusBox();
+        if (document.querySelector("input[type=password]")) { status("⚠️ Ainda está na tela de login — faça a etapa 1 primeiro."); return; }
+        chrome.storage.local.get(["friganso_creds"], function (c) {
+            const cr = (c && c.friganso_creds) || {};
+            chrome.storage.local.set({ friganso_creds: { usuario: cr.usuario || "", senha: cr.senha || "", autoLogin: false, irVendas: true } }, function () {
+                status("2️⃣ Abrindo VENDAS - VENDEDOR...");
+                tentarNavegarVendas();
+            });
+        });
+    }
+    function forcarEtapaCliente(p) {
+        limparLog();
+        dlog("🪜 etapa forçada: Novo + Cliente — cliente " + (p.cliente || "?"));
+        statusBox()("3️⃣ Abrindo 'Novo' e preenchendo o cliente " + (p.cliente || "?") + "...");
+        clearRun().then(function () {
+            setRun({ pedido: p, stage: "novo", idx: 0, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
+        });
+    }
+    function forcarEtapaItens(p, idx) {
+        const total = (p.itens || []).length;
+        limparLog();
+        dlog("🪜 etapa forçada: itens a partir do " + (idx + 1) + "/" + total);
+        statusBox()("4️⃣ Lançando os itens a partir do " + (idx + 1) + "º (" + (total - idx) + " restante(s))...");
+        clearRun().then(function () {
+            setRun({ pedido: p, stage: "itens", idx: idx, ativo: true, aguardando: false, ultimoCode: "", ts: Date.now() }).then(processarRun);
+        });
+    }
+
+    function abrirPopupEtapas() {
+        chrome.storage.local.get(["friganso_fila"], function (r) {
+            const fila = (r && r.friganso_fila) || [];
+            let escolhido = fila.length ? fila[fila.length - 1] : null; // o mais recente que você mandou
+            const old = document.getElementById("friganso-popup"); if (old) old.remove();
+            const ov = document.createElement("div"); ov.id = "friganso-popup";
+            Object.assign(ov.style, { position: "fixed", inset: "0", background: "rgba(15,23,42,.6)", zIndex: "2147483647", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui,sans-serif" });
+            ov.addEventListener("click", function (e) { if (e.target === ov) ov.remove(); });
+            const box = document.createElement("div");
+            Object.assign(box.style, { background: "#fff", borderRadius: "16px", padding: "18px", width: "460px", maxWidth: "94vw", maxHeight: "86vh", overflow: "auto", boxShadow: "0 10px 40px rgba(0,0,0,.4)" });
+
+            const titulo = document.createElement("div"); titulo.textContent = "🪜 Etapas do pedido";
+            Object.assign(titulo.style, { fontWeight: "800", fontSize: "16px", color: "#0f172a" });
+            box.appendChild(titulo);
+            const sub = document.createElement("div"); sub.textContent = "Travou no meio? Force a partir da etapa certa — sem recomeçar tudo.";
+            Object.assign(sub.style, { color: "#64748b", fontSize: "12px", margin: "3px 0 12px", lineHeight: "1.4" });
+            box.appendChild(sub);
+
+            // Escolha do pedido (as etapas 3 e 4 precisam saber cliente/itens)
+            const areaSel = document.createElement("div"); box.appendChild(areaSel);
+            // Corpo que muda conforme o pedido escolhido (etapas 3/4 + lista de itens)
+            const areaPedido = document.createElement("div"); box.appendChild(areaPedido);
+
+            function linhaEtapa(num, titulo2, desc, corBtn, onClick, habilitado) {
+                const row = document.createElement("div");
+                Object.assign(row.style, { border: "1px solid #e2e8f0", borderRadius: "12px", padding: "10px", margin: "8px 0", display: "flex", gap: "10px", alignItems: "center" });
+                const info = document.createElement("div"); info.style.flex = "1"; info.style.minWidth = "0";
+                info.innerHTML = '<div style="font-weight:700;color:#0f172a;font-size:14px;">' + num + ' ' + titulo2 + '</div><div style="color:#64748b;font-size:12px;line-height:1.4;">' + desc + '</div>';
+                const btn = document.createElement("button"); btn.textContent = "Forçar";
+                Object.assign(btn.style, { background: habilitado ? corBtn : "#cbd5e1", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 14px", fontWeight: "700", cursor: habilitado ? "pointer" : "not-allowed", flexShrink: "0" });
+                if (habilitado) btn.addEventListener("click", function () { ov.remove(); onClick(); });
+                row.appendChild(info); row.appendChild(btn);
+                return row;
+            }
+
+            // Etapas 1 e 2 não dependem de pedido nenhum
+            box.insertBefore(linhaEtapa("1️⃣", "Entrar no site", "Preenche usuário e senha e clica em Log In.", "#0f172a", forcarEtapaLogin, true), areaSel);
+            box.insertBefore(linhaEtapa("2️⃣", "Abrir VENDAS - VENDEDOR", "Abre o menu SPAmov e entra na tela de vendas.", "#0f172a", forcarEtapaVendas, true), areaSel);
+
+            function desenharPedido() {
+                areaPedido.innerHTML = "";
+                if (!escolhido) {
+                    const aviso = document.createElement("div");
+                    aviso.style.cssText = "color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:12px;font-size:13px;line-height:1.5;margin:8px 0;";
+                    aviso.innerHTML = 'As etapas <b>3</b> e <b>4</b> precisam de um pedido. No app, vá em <b>Fazer Pedido</b>, monte o pedido e toque em <b>🚀 Só mandar (site já aberto)</b> — ele aparece aqui.';
+                    areaPedido.appendChild(aviso);
+                    return;
+                }
+                const p = escolhido;
+                areaPedido.appendChild(linhaEtapa("3️⃣", "Novo pedido + cliente", "Clica em 'Novo' e preenche o cliente " + (p.cliente || "?") + ".", "#15803d", function () { forcarEtapaCliente(p); }, true));
+                areaPedido.appendChild(linhaEtapa("4️⃣", "Lançar os itens", "Lança os " + p.itens.length + " itens do começo.", "#15803d", function () { forcarEtapaItens(p, 0); }, true));
+
+                const tit = document.createElement("div");
+                tit.innerHTML = '📋 <b>Itens deste pedido</b>';
+                Object.assign(tit.style, { fontSize: "13px", color: "#0f172a", margin: "14px 0 2px" });
+                areaPedido.appendChild(tit);
+                const dica = document.createElement("div");
+                dica.textContent = "Se parou no meio, toque em “▶ daqui” pra continuar desse item — os anteriores não são repetidos.";
+                Object.assign(dica.style, { color: "#64748b", fontSize: "11px", marginBottom: "6px", lineHeight: "1.4" });
+                areaPedido.appendChild(dica);
+
+                p.itens.forEach(function (it, i) {
+                    const li = document.createElement("div");
+                    Object.assign(li.style, { display: "flex", gap: "8px", alignItems: "center", padding: "7px 9px", border: "1px solid #e2e8f0", borderRadius: "10px", margin: "5px 0" });
+                    const txt = document.createElement("div"); txt.style.cssText = "flex:1;min-width:0;font-size:12px;color:#334155;line-height:1.35;";
+                    txt.innerHTML = '<b style="color:#0f172a;">' + (i + 1) + '. ' + it.code + '</b> × ' + it.qty + '<br><span style="color:#64748b;">' + ((it.nome || it.name || "") + "").slice(0, 46) + '</span>';
+                    const b = document.createElement("button"); b.textContent = "▶ daqui"; b.title = "Lançar a partir deste item";
+                    Object.assign(b.style, { background: "#f1f5f9", color: "#0f172a", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "7px 10px", fontSize: "12px", fontWeight: "700", cursor: "pointer", flexShrink: "0" });
+                    b.addEventListener("click", function () { ov.remove(); forcarEtapaItens(p, i); });
+                    li.appendChild(txt); li.appendChild(b);
+                    areaPedido.appendChild(li);
+                });
+            }
+
+            if (fila.length > 1) {
+                const lab = document.createElement("div"); lab.textContent = "Pedido (etapas 3 e 4):";
+                Object.assign(lab.style, { fontSize: "12px", fontWeight: "700", color: "#334155", margin: "10px 0 4px" });
+                areaSel.appendChild(lab);
+                const sel = document.createElement("select");
+                Object.assign(sel.style, { width: "100%", padding: "9px", borderRadius: "10px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#fff" });
+                fila.slice().reverse().forEach(function (p, i) {
+                    const o = document.createElement("option");
+                    o.value = String(i);
+                    o.textContent = "Cliente " + (p.cliente || "?") + " — " + p.itens.length + " item(ns)";
+                    sel.appendChild(o);
+                });
+                const invertida = fila.slice().reverse();
+                sel.addEventListener("change", function () { escolhido = invertida[parseInt(sel.value, 10)] || null; desenharPedido(); });
+                areaSel.appendChild(sel);
+            }
+
+            desenharPedido();
+
+            const fechar = document.createElement("button"); fechar.textContent = "Fechar";
+            Object.assign(fechar.style, { marginTop: "12px", background: "#e2e8f0", color: "#334155", border: "none", borderRadius: "8px", padding: "10px 12px", cursor: "pointer", width: "100%", fontWeight: "700" });
+            fechar.addEventListener("click", function () { ov.remove(); });
+            box.appendChild(fechar);
+            ov.appendChild(box); document.body.appendChild(ov);
+        });
+    }
+
     // ---------- LOGIN AUTOMÁTICO ----------
     function acharCampoPorLabel(re, tipo) {
         let labelRect = null;
@@ -1483,6 +1630,8 @@
     if (ehFramePrincipal()) {
         botao("friganso-lancar-btn", "🚀 Lançar pedido", "#15803d", "120px", abrirPopupFila);
         botao("friganso-cancelar-btn", "⏹ Cancelar lançamento", "#64748b", "70px", cancelarLancamento);
+        // 🪜 Etapas: retomar o lançamento de um ponto específico quando o processo se perde no meio
+        botao("friganso-etapas-btn", "🪜 Etapas", "#b45309", "320px", abrirPopupEtapas);
         criarBotaoOcultar("220px");
     }
     if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
