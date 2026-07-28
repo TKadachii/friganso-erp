@@ -1,6 +1,6 @@
 {
-    "versionCode": 13,
-    "versionName": "3.1",
+    "versionCode": 14,
+    "versionName": "3.2",
     "url": "https://tkadachii.github.io/friganso-erp/FrigansoERP.apk",
-    "novidades": "• 🪜 NOVO botão ETAPAS: travou no meio do pedido? Force a partir da etapa certa (1 login · 2 Vendas · 3 Novo+Cliente · 4 Itens) sem recomeçar tudo\n• Na etapa 4 ele mostra a lista dos itens que você mandou, e o \"▶ daqui\" continua do item onde parou — sem repetir os que já entraram\n• 🔄 Continua de onde você parou: sair pro WhatsApp e voltar não reinicia mais o SPAmov, e o login continua valendo\n• Botões de cima menores e roláveis pro lado — 📋 ERP, Log e Fechar não ficam mais escondidos\n• Novo botão 🏠 pra recomeçar do início do SPAmov"
+    "novidades": "• 📋 CORRIGIDO o botão ERP que \"não funcionava\": ele tentava ler uma vez só e desistia se a tela do pedido ainda não tivesse carregado. Agora insiste por ~12s até conseguir — não precisa mais sair e voltar várias vezes\n• O pedido volta direto pro app, sem passar por link gigante (era o que às vezes dava erro no meio do caminho)\n• O log parou de encher de \"tabela NAO achada\" a toda hora — agora só mostra isso quando você realmente pediu a leitura\n• 🪜 Botão ETAPAS: travou no meio? Force a partir da etapa certa (1 login · 2 Vendas · 3 Novo+Cliente · 4 Itens), com \"▶ daqui\" pra continuar do item onde parou"
 }

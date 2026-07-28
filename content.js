@@ -271,15 +271,18 @@
             return { valor: melhor.value, texto: texto, opcoes: opcoes };
         } catch (e) { return null; }
     }
-    function montarPedidoLeitura() {
+    // logar=true só quando o vendedor PEDIU a leitura (botão 📋). Antes essa linha saía em toda injeção
+    // de todo frame — e como a maioria dos frames do SPAmov realmente não tem a tabela, o log vivia
+    // cheio de "tabela=NAO achada" mesmo quando estava tudo certo, escondendo o problema de verdade.
+    function montarPedidoLeitura(logar) {
         const c = extrairCliente(); const sp = extrairSpamov(); const itens = extrairItens(sp);
         const cond = extrairCondicaoPagamento();
-        try { console.log('[FRIG-LER] >>> cliente=' + c.code + ' (' + c.nome + ') | spamov=' + sp + ' | tabela=' + (acharTabelaItens() ? 'achada' : 'NAO achada') + ' | condicaoPagamento=' + (cond ? cond.texto : '(nao achada)') + ' | itens=' + JSON.stringify(itens.map(function (x) { return { c: x.code, q: x.qty, n: (x.nome || '').slice(0, 30) }; }))); } catch (e) {}
+        if (logar) { try { console.log('[FRIG-LER] >>> cliente=' + c.code + ' (' + c.nome + ') | spamov=' + sp + ' | tabela=' + (acharTabelaItens() ? 'achada' : 'NAO achada') + ' | condicaoPagamento=' + (cond ? cond.texto : '(nao achada)') + ' | itens=' + JSON.stringify(itens.map(function (x) { return { c: x.code, q: x.qty, n: (x.nome || '').slice(0, 30) }; }))); } catch (e) {} }
         return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens, condicaoPagamento: cond ? cond.texto : '', condicaoPagamentoValor: cond ? cond.valor : '' };
     }
     function temPedidoLeitura(p) { return p && (p.cliente || p.spamov || (p.itens && p.itens.length > 0)); }
     function enviarParaApp() {
-        const p = montarPedidoLeitura();
+        const p = montarPedidoLeitura(true);
         if (!temPedidoLeitura(p) || p.itens.length === 0) { alert("Não consegui ler o pedido nesta tela."); return; }
         const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(p))));
         const url = APP_URL + "?pedidojson=" + encodeURIComponent(b64);
