@@ -24,6 +24,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <!-- SheetJS para importar planilhas Excel/CSV de clientes -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- jsPDF para GERAR PDF (o PDF.js acima só lê) — usado no PDF de mudanças de preço -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <!-- Chart.js (gráficos do Dashboard) — versão fixada pra não quebrar -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     
@@ -342,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 159;
+        const APP_BUILD_VERSION = 160;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -1690,6 +1692,71 @@
             );
         };
 
+        // 📄 PDF preto-e-branco só com as MUDANÇAS DE PREÇO da tabela nova em relação à anterior, pra
+        // mandar pro cliente no WhatsApp. Separa em "baixaram" e "subiram" (as quedas primeiro, da maior
+        // pra menor — é o que interessa pro cliente ver) e quebra em várias páginas sozinho.
+        const gerarPdfMudancasPreco = (changes, user) => {
+            const JsPDF = window.jspdf && window.jspdf.jsPDF;
+            if (!JsPDF) throw new Error('sem-lib');
+            const preco = (v) => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
+            const doc = new JsPDF({ unit: 'mm', format: 'a4' });
+            const hoje = new Date().toLocaleDateString('pt-BR');
+            const baixaram = changes.filter(c => c.newPrice < c.oldPrice)
+                .sort((a, b) => (a.newPrice - a.oldPrice) / a.oldPrice - (b.newPrice - b.oldPrice) / b.oldPrice);
+            const subiram = changes.filter(c => c.newPrice > c.oldPrice)
+                .sort((a, b) => (b.newPrice - b.oldPrice) / b.oldPrice - (a.newPrice - a.oldPrice) / a.oldPrice);
+
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
+            doc.text('FRIGANSO - MUDANÇAS DE PREÇO', 14, 16);
+            doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+            doc.text('Tabela de ' + hoje + '  |  ' + changes.length + ' preço(s) mudaram em relação à tabela anterior', 14, 22);
+            doc.setLineWidth(0.4); doc.line(14, 25, 196, 25);
+            let y = 33;
+
+            const corta = (txt, larg, tam) => {
+                doc.setFontSize(tam);
+                let t = String(txt || '');
+                while (doc.getTextWidth(t) > larg && t.length > 4) t = t.slice(0, -2);
+                return t === String(txt || '') ? t : t + '.';
+            };
+            const secao = (titulo, lista) => {
+                if (!lista.length) return;
+                if (y > 262) { doc.addPage(); y = 20; }
+                doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+                doc.text(titulo, 14, y); y += 2;
+                doc.setLineWidth(0.3); doc.line(14, y, 196, y); y += 6;
+                doc.setFont('helvetica', 'normal');
+                lista.forEach(c => {
+                    if (y > 278) { doc.addPage(); y = 20; }
+                    const pct = ((c.newPrice - c.oldPrice) / c.oldPrice) * 100;
+                    doc.setFontSize(9);
+                    doc.text(String(c.code), 14, y);
+                    doc.text(corta(c.name, 90, 9), 32, y);
+                    doc.setFontSize(9);
+                    doc.text('de ' + preco(c.oldPrice), 126, y);
+                    doc.setFont('helvetica', 'bold');
+                    doc.text('por ' + preco(c.newPrice), 156, y);
+                    doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+                    doc.text('(' + (pct > 0 ? '+' : '') + pct.toFixed(1) + '%)', 196, y, { align: 'right' });
+                    y += 5.8;
+                });
+                y += 7;
+            };
+            secao('BAIXARAM DE PREÇO (' + baixaram.length + ')', baixaram);
+            secao('SUBIRAM DE PREÇO (' + subiram.length + ')', subiram);
+
+            const fone = (user && user.whatsapp) ? String(user.whatsapp) : '';
+            const nome = (user && user.name) ? user.name : 'Friganso';
+            const n = doc.internal.getNumberOfPages();
+            for (let i = 1; i <= n; i++) {
+                doc.setPage(i);
+                doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+                doc.text(nome + (fone ? ' - ' + fone : ''), 14, 288);
+                doc.text('Página ' + i + ' de ' + n, 196, 288, { align: 'right' });
+            }
+            return doc;
+        };
+
         const PdfScreen = ({ user, products, setProducts, showMessage, listaNegra, toggleListaNegra, valorMaximo, setValorMaximoProduto }) => {
             const lnSet = new Set((listaNegra || []).map(String));
             const vmMap = valorMaximo || {};
@@ -1702,6 +1769,23 @@
             // {changes:[...], novos:[...], removidos:n} — PERSISTE no aparelho (não some ao trocar de tela)
             const [priceChanges, setPriceChanges] = useState(() => { try { const r = window.localStorage.getItem('friganso_price_changes'); return r ? JSON.parse(r) : null; } catch (e) { return null; } });
             useEffect(() => { try { if (priceChanges) window.localStorage.setItem('friganso_price_changes', JSON.stringify(priceChanges)); else window.localStorage.removeItem('friganso_price_changes'); } catch (e) {} }, [priceChanges]);
+
+            // 📄 Baixa o PDF das mudanças de preço pra mandar pro cliente (só as mudanças, sem produtos
+            // novos nem os que saíram). Precisa de internet na primeira vez — a lib vem de CDN.
+            const baixarPdfMudancas = () => {
+                const lista = (priceChanges && priceChanges.changes) || [];
+                if (!lista.length) { showMessage('Nenhuma mudança de preço pra gerar o PDF.', 'error'); return; }
+                try {
+                    const doc = gerarPdfMudancasPreco(lista, user);
+                    const d = new Date();
+                    const nome = 'friganso-mudancas-preco-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '.pdf';
+                    doc.save(nome);
+                    showMessage('PDF gerado! Procure em Downloads pra mandar no WhatsApp. 📄', 'success');
+                } catch (e) {
+                    if (e && e.message === 'sem-lib') showMessage('O gerador de PDF não carregou. Conecte na internet e atualize a página uma vez.', 'error');
+                    else showMessage('Erro ao gerar o PDF: ' + (e && e.message ? e.message : e), 'error');
+                }
+            };
 
             useEffect(() => {
                 if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -2048,9 +2132,14 @@
                     {/* 🔔 Mudanças de preço em relação à tabela anterior */}
                     {priceChanges && (priceChanges.changes.length > 0 || priceChanges.novos.length > 0 || priceChanges.removidos > 0) && (
                         <div className="bg-white rounded-3xl shadow-sm border-2 border-amber-200 overflow-hidden">
-                            <div className="p-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center">
-                                <h3 className="font-bold text-amber-800 flex items-center gap-2"><span>🔔</span> Mudanças nesta tabela (comparado à anterior)</h3>
-                                <button onClick={() => setPriceChanges(null)} className="h-7 w-7 flex items-center justify-center rounded-full bg-amber-100 hover:bg-amber-200 text-amber-700"><div className="h-3.5 w-3.5"><IconX/></div></button>
+                            <div className="p-4 bg-amber-50 border-b border-amber-100 flex justify-between items-center gap-2">
+                                <h3 className="font-bold text-amber-800 flex items-center gap-2 min-w-0"><span>🔔</span> <span className="truncate">Mudanças nesta tabela (comparado à anterior)</span></h3>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                    {priceChanges.changes.length > 0 && (
+                                        <button onClick={baixarPdfMudancas} className="bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors">📄 Gerar PDF</button>
+                                    )}
+                                    <button onClick={() => setPriceChanges(null)} className="h-7 w-7 flex items-center justify-center rounded-full bg-amber-100 hover:bg-amber-200 text-amber-700"><div className="h-3.5 w-3.5"><IconX/></div></button>
+                                </div>
                             </div>
                             <div className="p-4 space-y-3 max-h-[40vh] overflow-y-auto">
                                 <div className="flex flex-wrap gap-2 text-xs font-bold">
@@ -4963,6 +5052,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.9.2', data: '30/07/2026', areas: ['site'], itens: [
+                'Novo botão "📄 Gerar PDF" no aviso de Mudanças de Preço (Tabela do Dia) — baixa um PDF preto-e-branco só com o que mudou de preço, pronto pra mandar pro cliente no WhatsApp',
+                'O PDF separa em "Baixaram de preço" (as maiores quedas primeiro) e "Subiram de preço", com o preço antigo, o novo e a variação em % de cada item',
+            ]},
             { versao: '2.9.1', data: '28/07/2026', areas: ['apk', 'extensao'], itens: [
                 'Corrigido o 📋 ERP do app que "não funcionava": ele lia uma vez só e desistia calado se a tela do pedido ainda não tivesse carregado — por isso só pegava depois de sair e voltar várias vezes. Agora insiste por ~12 segundos e explica o que houve se não achar',
                 'O pedido lido volta direto pro app em vez de passar por um link gigante com os dados dentro (esse caminho falhava em pedido grande)',
