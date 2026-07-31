@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 160;
+        const APP_BUILD_VERSION = 161;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -1400,17 +1400,46 @@
             const pesoPeriodo = filtradas.reduce((a, p) => a + (Number(p.pesoTotal) || 0), 0);
 
             // ---------- Editar ----------
-            const abrirEdicao = (p) => setEditando(JSON.parse(JSON.stringify(p)));
+            // Guarda quanto pesa CADA unidade ao abrir (peso ÷ qtd) — é isso que deixa a quantidade
+            // mexer no peso depois sem depender do valor que estiver na tela no meio da digitação.
+            const abrirEdicao = (p) => {
+                const copia = JSON.parse(JSON.stringify(p));
+                copia.itens = (copia.itens || []).map(it => {
+                    const q = Number(it.qty) || 0, pe = Number(it.peso) || 0;
+                    return { ...it, pesoUn: q > 0 ? pe / q : 0 };
+                });
+                setEditando(copia);
+            };
             const mudarCampo = (campo, valor) => setEditando(e => ({ ...e, [campo]: valor }));
             const mudarItem = (idx, campo, valor) => setEditando(e => {
                 const itens = e.itens.slice();
-                itens[idx] = { ...itens[idx], [campo]: (campo === 'name') ? valor : (Number(valor) || 0) };
+                const atual = itens[idx];
+                if (campo === 'name') { itens[idx] = { ...atual, name: valor }; return { ...e, itens }; }
+                const num = Number(valor) || 0;
+                const novo = { ...atual, [campo]: num };
+                // ⚖️ O total do item é PESO × R$/kg — a quantidade não entra na conta. Então baixar de
+                // 2 caixas pra 1 não mudava valor nenhum, e o vendedor tinha que lembrar de corrigir o
+                // peso na mão. Agora mudar a Qtd ajusta o peso na mesma proporção (o peso por unidade
+                // continua o mesmo), que é como o peso realmente se comporta: 2 traseiros de 85kg = 170kg.
+                if (campo === 'qty') {
+                    const un = Number(atual.pesoUn) || 0;
+                    if (un > 0 && num > 0) novo.peso = Math.round(un * num * 100) / 100;
+                }
+                // Corrigir o peso na mão redefine quanto vale cada unidade, pras próximas mudanças de Qtd
+                // (o peso real varia de peça pra peça, então a última correção manual é a que vale).
+                if (campo === 'peso') {
+                    const q = Number(novo.qty) || 0;
+                    if (q > 0) novo.pesoUn = num / q;
+                }
+                itens[idx] = novo;
                 return { ...e, itens };
             });
             const removerItemEdit = (idx) => setEditando(e => ({ ...e, itens: e.itens.filter((_, i) => i !== idx) }));
             const salvarEdicao = async () => {
                 if (!editando) return;
-                const itensValidos = (editando.itens || []).filter(i => Number(i.qty) > 0);
+                // pesoUn é só auxiliar da tela (peso por unidade) — não vai pro banco.
+                const itensValidos = (editando.itens || []).filter(i => Number(i.qty) > 0)
+                    .map(({ pesoUn, ...resto }) => resto);
                 if (!itensValidos.length) { showMessage && showMessage('O pedido precisa ter ao menos 1 item.', 'error'); return; }
                 setSalvandoEdit(true);
                 try {
@@ -1650,7 +1679,10 @@
                                                         <input type="number" step="0.01" value={it.valorKg} onChange={e => mudarItem(i, 'valorKg', e.target.value)} className="w-full mt-0.5 px-2 py-1.5 bg-white border rounded-lg text-sm outline-none focus:border-rose-500" />
                                                     </div>
                                                 </div>
-                                                <div className="text-right text-xs font-bold text-emerald-700">Subtotal: {formatPrice((Number(it.peso) || 0) * (Number(it.valorKg) || 0))}</div>
+                                                <div className="flex items-center justify-between gap-2 text-xs">
+                                                    <span className="text-slate-400">{Number(it.qty) > 0 && Number(it.peso) > 0 ? '≈ ' + (Math.round(((Number(it.peso) || 0) / Number(it.qty)) * 100) / 100).toString().replace('.', ',') + ' kg por unidade' : ''}</span>
+                                                    <span className="font-bold text-emerald-700 flex-shrink-0">Subtotal: {formatPrice((Number(it.peso) || 0) * (Number(it.valorKg) || 0))}</span>
+                                                </div>
                                             </div>
                                         ))}
                                         {(editando.itens || []).length === 0 && <p className="text-xs text-slate-400 text-center py-2">Sem itens — o pedido precisa de pelo menos 1.</p>}
@@ -5052,6 +5084,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.9.3', data: '30/07/2026', areas: ['site'], itens: [
+                'Corrigido: ao editar um pedido, mudar a Quantidade não mexia no valor nenhum — porque o total é peso × R$/kg e a quantidade não entrava na conta. Agora baixar de 2 pra 1 caixa reduz o peso na mesma proporção (e o valor cai junto)',
+                'Cada item mostra "≈ X kg por unidade" na edição, pra você conferir de onde vem o peso. Se corrigir o peso na mão, é esse novo peso por unidade que vale nas próximas mudanças de quantidade',
+            ]},
             { versao: '2.9.2', data: '30/07/2026', areas: ['site'], itens: [
                 'Novo botão "📄 Gerar PDF" no aviso de Mudanças de Preço (Tabela do Dia) — baixa um PDF preto-e-branco só com o que mudou de preço, pronto pra mandar pro cliente no WhatsApp',
                 'O PDF separa em "Baixaram de preço" (as maiores quedas primeiro) e "Subiram de preço", com o preço antigo, o novo e a variação em % de cada item',
