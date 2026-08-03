@@ -228,6 +228,27 @@ diagnósticos reais completos (737-741 produtos) antes de publicar. Lição: qua
 "achar a coisa mais próxima de X" falha repetidas vezes sem explicação clara, e a ORDEM dos elementos é
 previsível, prefira extrair por ORDEM em vez de por DISTÂNCIA.
 
+## ⚠️ Lição aprendida (2026-08-03): posição X FIXA quebra a leitura — ancore numa coluna vizinha
+Continuação direta da lição de 04/07. `extrairListaPrecos()` achava o nome do produto com
+`c.x >= 100` — número fixo herdado de um layout antigo. Na tela real de Lista de Preços o **código
+fica em x=6 e o nome em x=75**, então nenhum nome passava no filtro; como linha sem nome é
+descartada, **767 linhas de produto viravam 0** e o botão só dizia "Não consegui ler a tabela de
+preços nesta tela" — enquanto o código e os 9 preços já eram lidos perfeitamente. Sintoma enganoso:
+parecia que a leitura de preço tinha quebrado, mas o que falhava era o NOME.
+
+Conserto: o limite esquerdo do nome passou a ser o **X da própria célula do código**
+(`c.x > celCodigo.x`), que se ajusta sozinho a qualquer largura de tela. Regra geral pro `content.js`:
+**nunca ancore em pixel absoluto** — ancore no código/cabeçalho vizinho, ou use a ORDEM das colunas.
+O `limiteNome` já fazia certo (`colUn - 60`, derivado do cabeçalho "UN.").
+
+Como diagnosticar isso rápido: botão **🔍 Ler Página** → 💾 Baixar .txt → o JSON traz `textos[]` com
+`{x, y, t}` de cada célula de todos os frames. Dá pra reproduzir o filtro em cima desse arquivo e ver
+exatamente qual etapa zera. Foi assim que caiu de "não lê" pra causa exata em minutos.
+
+⚠️ Detalhe conhecido: o cabeçalho **"Peças" não é encontrado** por `colXHeader` nessa tela, então
+`pcsItem` sai vazio. Não impede a leitura (o campo é só informativo) — mas se um dia precisar do
+número de peças, é aí que está o problema.
+
 ## 🐞 PENDENTE / em investigação
 - **Bug do preço 00,00 no PDF `2206.pdf`**: vários itens vieram R$ 0,00. Ex.: código **13291**
   (correto = 30,63). Causa descoberta: NESSE PDF as colunas estão em posições X **diferentes** das
