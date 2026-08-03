@@ -63,6 +63,28 @@ git add index.html sw.js web-version.json content.js
 git commit -m "..."
 git push origin main
 ```
+
+### ⚠️ Mexeu no `content.js`? REGENERE O ZIP DA EXTENSÃO (descoberto em 2026-08-03)
+O `content.js` mora em **3 lugares** no repo, e o zip é o único que NÃO se atualiza sozinho:
+1. `content.js` (raiz) — o que o `WebUpdater` do app baixa;
+2. `extensao/content.js` — a pasta-fonte da extensão;
+3. **`friganso-extensao.zip`** — ⚠️ **artefato gerado À MÃO**, é o que o botão de download do site entrega.
+
+O zip ficou **parado em 25/06 até 03/08**: o `content.js` de dentro dele era o de 56 KB enquanto o de
+verdade já estava em 111 KB. Quem baixava a extensão pelo site recebia uma versão de mais de um mês
+atrás, sem `precoCartao`/`precosPrazo`/`extrairCondicaoPagamento` nem a leitura da Lista de Preços —
+por isso a extensão "parou de pegar os preços do produto direto do site". O `friganso.user.js`
+(Tampermonkey) é gerado por `extensao/gerar-userscript.js` e estava OK; só o zip ficou pra trás.
+
+Regenerar (PowerShell, da raiz do repo):
+```powershell
+$f = "content.js","manifest.json","icon16.png","icon48.png","icon128.png","COMO-INSTALAR.txt" |
+     ForEach-Object { "extensao\$_" }
+Compress-Archive -Path $f -DestinationPath "friganso-extensao.zip" -Force
+```
+Conferir SEMPRE depois: o md5 do `content.js` de dentro do zip tem que bater com o da raiz.
+E avisar o usuário — **extensão instalada por pasta não se atualiza sozinha**: precisa baixar de novo,
+trocar os arquivos e clicar em 🔄 "Atualizar" em `chrome://extensions`.
 Ver no navegador: Ctrl+Shift+R. O HTML é network-first no SW, então chega rápido.
 
 ## 📲 Auto-atualização do conteúdo do APP (desde a v6/2.4 — 2026-07-03, estilo Discord)
