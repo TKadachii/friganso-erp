@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.7.28.1816
+// @version      2026.8.3.1829
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -383,8 +383,14 @@
             const linha = porLinha[y];
             const candCodigo = linha.filter(function (c) { return /^\d{3,7}$/.test(c.t) && c.x < 100; });
             if (!candCodigo.length) return;
-            const code = candCodigo[0].t;
-            const candNome = linha.filter(function (c) { return c.x >= 100 && c.x < limiteNome && /[A-Za-zÀ-Ú]{3,}/.test(c.t); });
+            const celCodigo = candCodigo[0];
+            const code = celCodigo.t;
+            // 📛 O nome vem logo DEPOIS da célula do código — o limite esquerdo é o X do próprio
+            // código, não um número fixo. Antes era `c.x >= 100`, chute que valia pro layout antigo:
+            // nesta tela o código fica em x=6 e o nome em x=75, então NENHUM nome passava, e como
+            // linha sem nome é descartada, as 767 linhas com preço viravam 0 produto ("Não consegui
+            // ler a tabela de preços nesta tela"). Descoberto em 2026-08-03 com o 🔍 Ler Página.
+            const candNome = linha.filter(function (c) { return c.x > celCodigo.x && c.x < limiteNome && /[A-Za-zÀ-Ú]{3,}/.test(c.t); });
             candNome.sort(function (a, b) { return b.t.length - a.t.length; });
             if (!candNome.length) return;
             const name = candNome[0].t;

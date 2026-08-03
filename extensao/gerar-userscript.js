@@ -4,7 +4,8 @@ const fs = require("fs");
 const path = require("path");
 
 const SRC = path.join(__dirname, "content.js");
-const OUT = path.join(__dirname, "..", "friganso-app", "friganso.user.js");
+// A raiz do repo É o site (não existe mais a pasta friganso-app), então o userscript sai um nível acima.
+const OUT = path.join(__dirname, "..", "friganso.user.js");
 
 const now = new Date();
 const pad = (n) => String(n).padStart(2, "0");
