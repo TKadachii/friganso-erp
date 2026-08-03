@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 161;
+        const APP_BUILD_VERSION = 162;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -5084,6 +5084,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.9.4', data: '03/08/2026', areas: ['extensao'], itens: [
+                'Corrigido: o download da extensão pelo site entregava uma versão parada em 25/06 — por isso ela tinha parado de pegar os preços do produto direto do site. O arquivo compactado nunca era regerado junto com as atualizações, então quem baixava recebia uma extensão velha, sem a leitura da Lista de Preços (à vista, cartão e os prazos) nem a captura da Condição de Pagamento',
+                '⚠️ Se você já tem a extensão instalada, baixe de novo pelo site, troque os arquivos da pasta e clique em "Atualizar" (🔄) na extensão em chrome://extensions — extensão instalada por pasta não se atualiza sozinha',
+            ]},
             { versao: '2.9.3', data: '30/07/2026', areas: ['site'], itens: [
                 'Corrigido: ao editar um pedido, mudar a Quantidade não mexia no valor nenhum — porque o total é peso × R$/kg e a quantidade não entrava na conta. Agora baixar de 2 pra 1 caixa reduz o peso na mesma proporção (e o valor cai junto)',
                 'Cada item mostra "≈ X kg por unidade" na edição, pra você conferir de onde vem o peso. Se corrigir o peso na mão, é esse novo peso por unidade que vale nas próximas mudanças de quantidade',
