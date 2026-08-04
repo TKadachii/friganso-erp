@@ -344,11 +344,30 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 172;
+        const APP_BUILD_VERSION = 173;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
         const FILA_ATUAL = 'friganso_fila_atual';   // índice do pedido que está aberto no Resumo agora
+
+        // 💬 COMO ABRIR O WHATSAPP NO PC. O usuário às vezes usa o aplicativo do WhatsApp, às vezes o
+        // navegador — e cada formato de link se comporta diferente:
+        //   • whatsapp://send        → força o APLICATIVO instalado (protocolo registrado no Windows)
+        //   • web.whatsapp.com/send  → força o NAVEGADOR (WhatsApp Web)
+        //   • wa.me                  → ambíguo: o Windows decide, e às vezes ainda passa por uma
+        //                              página intermediária de "Continuar para o chat"
+        // Era o wa.me que estava em uso, daí a inconsistência. Agora é escolha do usuário, lembrada.
+        const ZAP_DESTINO = 'friganso_zap_destino';   // 'app' | 'web' | 'auto'
+        const lerZapDestino = () => { try { return window.localStorage.getItem(ZAP_DESTINO) || 'auto'; } catch (e) { return 'auto'; } };
+        const zapUrl = (numero, texto) => {
+            const n = String(numero || '').replace(/\D/g, '');
+            const t = encodeURIComponent(texto || '');
+            const destino = lerZapDestino();
+            // No celular o certo é sempre o app (o navegador só redirecionaria pra ele de qualquer jeito)
+            if (isCapacitor || destino === 'app') return `whatsapp://send?phone=${n}&text=${t}`;
+            if (destino === 'web') return `https://web.whatsapp.com/send?phone=${n}&text=${t}`;
+            return `https://wa.me/${n}?text=${t}`;
+        };
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -5401,6 +5420,11 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.12.2', data: '04/08/2026', areas: ['site'], itens: [
+                '💬 Agora você escolhe se o WhatsApp abre no APLICATIVO do PC ou no NAVEGADOR (WhatsApp Web). A opção fica na Fila de Pedidos, é lembrada e vale também pros Disparos',
+                'Antes o app usava links "wa.me", que são ambíguos: o Windows decidia sozinho e às vezes ainda passava por uma tela de "Continuar para o chat". Escolhendo Aplicativo ou Navegador, vai direto pro lugar certo',
+                'Na Fila, cada pedido já conferido ganhou um botão de WhatsApp que abre a conversa com aquele resumo (e copia junto, porque o WhatsApp Web às vezes ignora o texto quando a conversa ainda não estava aberta)',
+            ]},
             { versao: '2.12.1', data: '04/08/2026', areas: ['site', 'extensao'], itens: [
                 'Corrigido: a Fila aparecia vazia mesmo depois de você somar pedidos no site. Faltavam duas coisas — se você somasse mas não tocasse em "Finalizar e abrir o app", os pedidos ficavam presos na extensão; e, mesmo tocando, a tela às vezes montava antes da entrega chegar e via a fila vazia',
                 'Agora a tela BUSCA a fila sozinha ao abrir, e continua ouvindo caso a entrega chegue depois. Se ainda assim aparecer vazia, tem o botão "🔄 Buscar fila que ficou no site"',
@@ -6291,6 +6315,7 @@
             const [fila, setFila] = useState([]);
             const [buscando, setBuscando] = useState(false);
             const [zap, setZap] = useState(() => { try { return window.localStorage.getItem('friganso_fila_zap') || ''; } catch (e) { return ''; } });
+            const [zapDestino, setZapDestino] = useState(lerZapDestino);
 
             const salvar = (itens) => { try { window.localStorage.setItem(FILA_ATIVA, JSON.stringify(itens)); } catch (e) {} };
             const aplicarPedidos = (pedidos) => {
@@ -6386,6 +6411,15 @@
                 navigator.clipboard.writeText(f.texto);
                 showMessage('Resumo copiado!', 'success');
             };
+            // 💬 No PC não existe balão: abre o WhatsApp direto, já com o texto do pedido, respeitando
+            // a preferência de aplicativo x navegador. Copia junto porque o WhatsApp Web às vezes
+            // ignora o ?text= quando a conversa ainda não estava aberta — assim é só colar.
+            const abrirNoZap = (f) => {
+                const tel = waNum(zap);
+                if (!tel) { showMessage('Preencha o número do WhatsApp primeiro.', 'error'); return; }
+                try { navigator.clipboard.writeText(f.texto); } catch (e) {}
+                window.open(zapUrl(tel, f.texto), '_blank');
+            };
 
             return (
                 <div className="animate-in fade-in space-y-6">
@@ -6439,6 +6473,7 @@
                                             </div>
                                             <div className="flex gap-1.5 flex-shrink-0">
                                                 {f.feito && <button onClick={() => copiarUm(f)} title="Copiar de novo" className="bg-slate-100 hover:bg-slate-200 text-slate-600 h-9 px-3 rounded-lg text-xs font-bold transition-colors">Copiar</button>}
+                                                {f.feito && !isCapacitor && <button onClick={() => abrirNoZap(f)} title="Abrir no WhatsApp com este resumo" className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 h-9 w-9 rounded-lg flex items-center justify-center transition-colors"><div className="h-4 w-4"><IconWhatsApp/></div></button>}
                                                 <button onClick={() => abrirNoResumo(i)} className={`h-9 px-3 rounded-lg text-xs font-bold transition-colors ${f.feito ? 'bg-slate-100 hover:bg-slate-200 text-slate-600' : 'bg-rose-600 hover:bg-rose-700 text-white'}`}>
                                                     {f.feito ? 'Rever' : 'Conferir'}
                                                 </button>
@@ -6468,6 +6503,30 @@
                                     </button>
                                 </div>
                                 {prontos.length === 0 && <p className="text-xs text-slate-400 mt-2">Confira e copie ao menos um pedido pra liberar o envio.</p>}
+
+                                {/* 💬 App x navegador: o usuário usa os dois, e cada link se comporta diferente */}
+                                {!isCapacitor && (
+                                    <div className="mt-4 pt-4 border-t border-slate-100">
+                                        <p className="text-xs font-bold text-slate-600 mb-2">Abrir o WhatsApp em:</p>
+                                        <div className="flex flex-wrap gap-2">
+                                            {[
+                                                { v: 'app',  t: '💻 Aplicativo do WhatsApp', d: 'Abre o programa instalado no PC' },
+                                                { v: 'web',  t: '🌐 Navegador (WhatsApp Web)', d: 'Abre em web.whatsapp.com' },
+                                                { v: 'auto', t: '🤷 Tanto faz', d: 'Deixa o Windows escolher (pode passar por uma tela extra)' }
+                                            ].map(op => (
+                                                <button key={op.v} title={op.d}
+                                                    onClick={() => { try { window.localStorage.setItem(ZAP_DESTINO, op.v); } catch (e) {} setZapDestino(op.v); }}
+                                                    className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${zapDestino === op.v ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
+                                                    {op.t}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 mt-2">
+                                            Fica lembrado e vale também pros Disparos. Se escolher "Aplicativo" e ele não abrir, é sinal de que o
+                                            WhatsApp do PC não está instalado — nesse caso use o Navegador.
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         </>
                     )}
@@ -7581,7 +7640,8 @@
                     .replace(/\{ofertas\}/gi, ofertas)
                     .replace(/\{produto\}/gi, primeiro);
             };
-            const waLink = (c) => `https://wa.me/${waNumber(c.phone)}?text=${encodeURIComponent(personalizar(c))}`;
+            // respeita a preferência de "aplicativo x navegador" escolhida pelo usuário (ver zapUrl)
+            const waLink = (c) => zapUrl(waNumber(c.phone), personalizar(c));
 
             // --- quantos clientes compram cada produto (pro filtro "Por produto") ---
             const clientesPorProduto = useMemo(() => {
