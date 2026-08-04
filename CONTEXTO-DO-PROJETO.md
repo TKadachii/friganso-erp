@@ -76,13 +76,21 @@ atrás, sem `precoCartao`/`precosPrazo`/`extrairCondicaoPagamento` nem a leitura
 por isso a extensão "parou de pegar os preços do produto direto do site". O `friganso.user.js`
 (Tampermonkey) é gerado por `extensao/gerar-userscript.js` e estava OK; só o zip ficou pra trás.
 
-Regenerar (PowerShell, da raiz do repo):
+**Desde 04/08/2026 isso virou um comando só** (da raiz do repo), que faz tudo e ainda confere:
 ```powershell
-$f = "content.js","manifest.json","icon16.png","icon48.png","icon128.png","COMO-INSTALAR.txt" |
-     ForEach-Object { "extensao\$_" }
-Compress-Archive -Path $f -DestinationPath "friganso-extensao.zip" -Force
+powershell -ExecutionPolicy Bypass -File extensao\gerar-extensao.ps1
 ```
-Conferir SEMPRE depois: o md5 do `content.js` de dentro do zip tem que bater com o da raiz.
+Ele grava a versão no `manifest.json`, gera o `friganso.user.js`, copia o `content.js` pra raiz, monta
+o `friganso-extensao.zip` e **falha** se o `content.js` de dentro do zip não bater com o da raiz.
+⚠️ Rode DEPOIS de bumpar o `web-version.json` e de escrever a entrada nova no `CHANGELOG` — o script
+lê os dois pra montar a versão da extensão.
+
+**Versão da extensão (desde 04/08/2026):** ficava fixa em `2.0.0`, então não dava pra saber pelo
+`chrome://extensions` se a extensão instalada era a nova. Agora o manifest sai com
+`"version": "<maj>.<min>.<build>"` e `"version_name": "<versão do CHANGELOG> - build <build>"`
+(ex.: `2.10.1 - build 166`), com o build vindo do `web-version.json`. Pra conferir se o usuário está
+com a extensão certa: o build do `chrome://extensions` tem que bater com o da aba Atualizações.
+
 E avisar o usuário — **extensão instalada por pasta não se atualiza sozinha**: precisa baixar de novo,
 trocar os arquivos e clicar em 🔄 "Atualizar" em `chrome://extensions`.
 Ver no navegador: Ctrl+Shift+R. O HTML é network-first no SW, então chega rápido.
