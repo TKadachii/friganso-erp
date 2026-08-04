@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 163;
+        const APP_BUILD_VERSION = 164;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -4354,10 +4354,16 @@
             const [rawProfileText, setRawProfileText] = useState('');
             const [importPreview, setImportPreview] = useState(null);
             const [importBusy, setImportBusy] = useState(false);
+            const [importOrigem, setImportOrigem] = useState('planilha'); // 'planilha' | 'spamov'
+            const [completarExistentes, setCompletarExistentes] = useState(true);
+            const [clientesCarregados, setClientesCarregados] = useState(false);
             const fileInputRef = useRef(null);
             const [historyPreview, setHistoryPreview] = useState(null);
             const histInputRef = useRef(null);
             const [clientSearch, setClientSearch] = useState('');
+            // marca quando o Firestore já respondeu — a importação da extensão espera isso pra não
+            // achar que todo mundo é novo e acabar duplicando cliente
+            const marcarCarregados = () => setClientesCarregados(true);
 
             // Filtra clientes por nome ou ID conforme a busca
             const filteredClients = useMemo(() => {
@@ -4371,7 +4377,7 @@
             }, [clients, clientSearch]);
 
             useEffect(() => {
-                const unsubscribe = db.collection('clients').onSnapshot(snap => setClients(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+                const unsubscribe = db.collection('clients').onSnapshot(snap => { setClients(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))); marcarCarregados(); });
                 return () => unsubscribe();
             }, []);
 
@@ -4384,8 +4390,62 @@
                 return { title: "Importado da Planilha", color: "bg-slate-100 text-slate-600" };
             };
 
+            // 👥 Cadastro vindo da extensão (tela "Procura de Pessoas" do SPAmov). Cai no MESMO preview
+            // da planilha, mas trazendo bem mais coisa: CNPJ/CPF, telefone, CEP, bairro/município e
+            // limite/saldo de crédito. Espera os clientes já terem carregado, senão todo mundo apareceria
+            // como "novo" (o onSnapshot ainda não respondeu) e criaria cliente duplicado.
+            useEffect(() => {
+                if (!clientesCarregados) return;
+                let brutos = null;
+                try {
+                    const raw = window.sessionStorage.getItem('friganso_clientes_json');
+                    if (!raw) return;
+                    window.sessionStorage.removeItem('friganso_clientes_json');
+                    brutos = JSON.parse(raw);
+                } catch (err) { return; }
+                if (!Array.isArray(brutos) || !brutos.length) return;
+
+                const porCodigo = new Map(clients.map(c => [normCode(c.code), c]));
+                const vazio = (v) => !v || !String(v).trim();
+                const vistos = new Set();
+                const parsed = [];
+                for (const b of brutos) {
+                    const code = String(b.code || '').trim();
+                    if (!code || vistos.has(code)) continue;
+                    vistos.add(code);
+                    const atual = porCodigo.get(normCode(code));
+                    const address = [b.logradouro, b.bairro, b.municipio, b.cep].filter(Boolean).join(' - ');
+                    // Só oferece preencher o que está VAZIO hoje — nunca sobrescreve dado já cadastrado
+                    const faltando = [];
+                    if (atual) {
+                        if (!vazio(b.cnpj) && vazio(atual.cnpj)) faltando.push('cnpj');
+                        if (!vazio(b.telefone) && vazio(atual.phone)) faltando.push('phone');
+                        if (!vazio(address) && vazio(atual.address)) faltando.push('address');
+                    }
+                    parsed.push({
+                        code,
+                        name: b.name || `Cliente ${code}`,
+                        address,
+                        cnpj: b.cnpj || '',
+                        phone: b.telefone || '',
+                        tipo: b.tipo === 'j' ? 'Pessoa Jurídica' : (b.tipo === 'f' ? 'Pessoa Física' : ''),
+                        uf: b.uf || '', municipio: b.municipio || '', bairro: b.bairro || '', cep: b.cep || '',
+                        statusSpamov: b.status || '',
+                        limiteCredito: b.limiteCredito || '', saldoCredito: b.saldoCredito || '',
+                        profile: inferProfileFromName(b.name),
+                        exists: !!atual,
+                        docId: atual ? atual.id : null,
+                        faltando
+                    });
+                }
+                if (!parsed.length) return;
+                setImportOrigem('spamov');
+                setImportPreview(parsed);
+            }, [clientesCarregados, clients]);
+
             // Lê a planilha selecionada e monta o preview de importação
             const handleFileSelected = (e) => {
+                setImportOrigem('planilha');
                 const file = e.target.files && e.target.files[0];
                 if (!file) return;
                 if (typeof XLSX === 'undefined') { showMessage('Biblioteca de planilha não carregou. Verifique a internet.', 'error'); return; }
@@ -4457,24 +4517,60 @@
             const handleConfirmImport = async () => {
                 if (!importPreview) return;
                 const novos = importPreview.filter(p => !p.exists);
-                if (!novos.length) { showMessage('Todos os clientes já estão cadastrados.', 'info'); setImportPreview(null); return; }
+                // 👥 Só o cadastro vindo do SPAmov consegue COMPLETAR quem já existe: a planilha não traz
+                // CNPJ/telefone/crédito, então pra ela o comportamento continua exatamente o de antes.
+                const completar = (importOrigem === 'spamov' && completarExistentes)
+                    ? importPreview.filter(p => p.exists && p.docId)
+                    : [];
+                if (!novos.length && !completar.length) {
+                    showMessage('Todos os clientes já estão cadastrados.', 'info');
+                    setImportPreview(null); return;
+                }
                 setImportBusy(true);
                 try {
                     let batch = db.batch();
                     let count = 0;
+                    // Firestore limita 500 operações por lote
+                    const passo = async () => { count++; if (count % 450 === 0) { await batch.commit(); batch = db.batch(); } };
                     for (const c of novos) {
                         const ref = db.collection('clients').doc();
-                        batch.set(ref, {
-                            name: c.name, code: c.code, phone: '', cnpj: '',
+                        const novoDoc = {
+                            name: c.name, code: c.code, phone: c.phone || '', cnpj: c.cnpj || '',
                             address: c.address, contactName: '', history: [],
                             tipo: c.tipo || '', profile: c.profile
+                        };
+                        if (importOrigem === 'spamov') {
+                            novoDoc.uf = c.uf || ''; novoDoc.municipio = c.municipio || '';
+                            novoDoc.bairro = c.bairro || ''; novoDoc.cep = c.cep || '';
+                            novoDoc.statusSpamov = c.statusSpamov || '';
+                            novoDoc.limiteCredito = c.limiteCredito || ''; novoDoc.saldoCredito = c.saldoCredito || '';
+                            novoDoc.atualizadoEmSpamov = new Date().toISOString();
+                        }
+                        batch.set(ref, novoDoc);
+                        await passo();
+                    }
+                    for (const c of completar) {
+                        const upd = {};
+                        // ⚠️ contato/endereço: só preenche o que está VAZIO — nunca sobrescreve o que
+                        // você ajustou na mão (o SPAmov costuma ter dado mais velho que o seu)
+                        (c.faltando || []).forEach(campo => {
+                            if (campo === 'cnpj') upd.cnpj = c.cnpj;
+                            if (campo === 'phone') upd.phone = c.phone;
+                            if (campo === 'address') upd.address = c.address;
                         });
-                        count++;
-                        // Firestore limita 500 operações por lote
-                        if (count % 450 === 0) { await batch.commit(); batch = db.batch(); }
+                        // crédito e status são do SPAmov por natureza: aqui o valor novo sempre vale
+                        upd.limiteCredito = c.limiteCredito || ''; upd.saldoCredito = c.saldoCredito || '';
+                        upd.statusSpamov = c.statusSpamov || '';
+                        upd.municipio = c.municipio || ''; upd.bairro = c.bairro || ''; upd.uf = c.uf || ''; upd.cep = c.cep || '';
+                        upd.atualizadoEmSpamov = new Date().toISOString();
+                        batch.update(db.collection('clients').doc(c.docId), upd);
+                        await passo();
                     }
                     await batch.commit();
-                    showMessage(`${novos.length} cliente(s) importado(s) com sucesso!`, 'success');
+                    const partes = [];
+                    if (novos.length) partes.push(`${novos.length} novo(s)`);
+                    if (completar.length) partes.push(`${completar.length} atualizado(s)`);
+                    showMessage(`Clientes: ${partes.join(' e ')}.`, 'success');
                     setImportPreview(null);
                 } catch (err) {
                     showMessage('Erro ao salvar: ' + err.message, 'error');
@@ -4907,10 +5003,15 @@
                             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                 <div className="p-6 border-b border-slate-200 flex justify-between items-center">
                                     <div>
-                                        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2"><span>📊</span> Importar Clientes da Planilha</h2>
+                                        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                            <span>{importOrigem === 'spamov' ? '👥' : '📊'}</span>
+                                            {importOrigem === 'spamov' ? 'Clientes lidos do SPAmov' : 'Importar Clientes da Planilha'}
+                                        </h2>
                                         <p className="text-sm text-slate-500 mt-1">
                                             <span className="font-bold text-emerald-600">{importPreview.filter(p => !p.exists).length} novos</span>
-                                            {importPreview.some(p => p.exists) && <span className="text-slate-400"> · {importPreview.filter(p => p.exists).length} já cadastrados (serão ignorados)</span>}
+                                            {importPreview.some(p => p.exists) && (importOrigem === 'spamov'
+                                                ? <span className="text-slate-400"> · {importPreview.filter(p => p.exists).length} já cadastrados</span>
+                                                : <span className="text-slate-400"> · {importPreview.filter(p => p.exists).length} já cadastrados (serão ignorados)</span>)}
                                         </p>
                                     </div>
                                     <button onClick={() => !importBusy && setImportPreview(null)} className="h-9 w-9 bg-slate-100 hover:bg-slate-200 rounded-full flex items-center justify-center text-slate-500"><IconX/></button>
@@ -4925,18 +5026,37 @@
                                             <div className="flex items-center gap-2 flex-shrink-0 ml-3">
                                                 <span className="text-xs font-mono text-slate-400">Cód. {p.code}</span>
                                                 {p.exists
-                                                    ? <span className="text-[10px] font-bold bg-slate-200 text-slate-500 px-2 py-1 rounded-full">já existe</span>
+                                                    ? (importOrigem === 'spamov' && p.faltando && p.faltando.length
+                                                        ? <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-full">completa {p.faltando.length} campo(s)</span>
+                                                        : <span className="text-[10px] font-bold bg-slate-200 text-slate-500 px-2 py-1 rounded-full">já existe</span>)
                                                     : <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${p.profile.color}`}>{p.profile.title}</span>}
                                             </div>
                                         </div>
                                     ))}
                                 </div>
-                                <div className="p-4 border-t border-slate-200 flex gap-3 justify-end bg-slate-50">
-                                    <button onClick={() => setImportPreview(null)} disabled={importBusy} className="px-5 py-2.5 font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors">Cancelar</button>
-                                    <button onClick={handleConfirmImport} disabled={importBusy || importPreview.filter(p => !p.exists).length === 0} className="px-5 py-2.5 font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md transition-colors flex items-center gap-2 disabled:opacity-50">
-                                        {importBusy ? <div className="h-5 w-5"><IconLoader2/></div> : null}
-                                        {importBusy ? 'Importando...' : `Importar ${importPreview.filter(p => !p.exists).length} clientes`}
-                                    </button>
+                                <div className="p-4 border-t border-slate-200 bg-slate-50">
+                                    {importOrigem === 'spamov' && importPreview.some(p => p.exists) && (
+                                        <label className="flex items-start gap-2 mb-3 text-sm text-slate-600 cursor-pointer">
+                                            <input type="checkbox" checked={completarExistentes} onChange={e => setCompletarExistentes(e.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-600" />
+                                            <span>
+                                                Também atualizar os {importPreview.filter(p => p.exists).length} que já existem
+                                                <span className="block text-xs text-slate-400">Preenche só o que está vazio (CNPJ, telefone, endereço) e atualiza limite/saldo de crédito. Não sobrescreve nada que você editou à mão.</span>
+                                            </span>
+                                        </label>
+                                    )}
+                                    <div className="flex gap-3 justify-end">
+                                        <button onClick={() => setImportPreview(null)} disabled={importBusy} className="px-5 py-2.5 font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors">Cancelar</button>
+                                        <button onClick={handleConfirmImport} disabled={importBusy || (importPreview.filter(p => !p.exists).length === 0 && !(importOrigem === 'spamov' && completarExistentes && importPreview.some(p => p.exists)))} className="px-5 py-2.5 font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md transition-colors flex items-center gap-2 disabled:opacity-50">
+                                            {importBusy ? <div className="h-5 w-5"><IconLoader2/></div> : null}
+                                            {importBusy ? 'Salvando...' : (() => {
+                                                const n = importPreview.filter(p => !p.exists).length;
+                                                const a = (importOrigem === 'spamov' && completarExistentes) ? importPreview.filter(p => p.exists).length : 0;
+                                                if (n && a) return `Importar ${n} e atualizar ${a}`;
+                                                if (n) return `Importar ${n} clientes`;
+                                                return `Atualizar ${a} clientes`;
+                                            })()}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -5084,6 +5204,11 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.10.0', data: '04/08/2026', areas: ['site', 'extensao', 'app'], itens: [
+                'NOVO: botão "👥 Atualizar Clientes do Site" na tela Procura de Pessoas do SPAmov. Monte o relatório com as informações que quiser, clique em Procurar e depois no botão — o cadastro vem inteiro pro app: nome, CNPJ/CPF, endereço completo, telefone, status e limite/saldo de crédito',
+                'Quem ainda não está cadastrado entra como cliente novo. Quem já existe é COMPLETADO: preenche só o que está vazio (CNPJ, telefone, endereço) e atualiza limite e saldo de crédito — nunca sobrescreve o que você editou à mão',
+                'Se o relatório estiver paginado, o app avisa antes de enviar: aumente "Pessoas por Página" e procure de novo pra trazer todo mundo de uma vez',
+            ]},
             { versao: '2.9.5', data: '03/08/2026', areas: ['extensao', 'app'], itens: [
                 'Corrigido o "Não consegui ler a tabela de preços nesta tela": a leitura da Lista de Preços do SPAmov procurava o nome do produto só a partir de uma posição fixa da tela, e nessa tela o nome aparece mais à esquerda que isso. Como linha sem nome era descartada, as 767 linhas de produto viravam ZERO — mesmo com o código e os 9 preços todos lidos certinho',
                 'Agora o nome é procurado logo depois da coluna do código, seja qual for a largura da tela. Testado contra a sua tabela real: 764 produtos lidos, todos com os 9 preços (à vista, cartão e os 7 prazos)',
@@ -8094,6 +8219,17 @@
                 window.sessionStorage.setItem('friganso_initial_route', 'importarVendas');
                 if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
             }
+            // 👥 Cadastro de clientes lido DIRETO da tela "Procura de Pessoas" do SPAmov
+            const cliJson = p.get('clientesJson');
+            if (cliJson) {
+                try { window.sessionStorage.setItem('friganso_clientes_json', decodeURIComponent(escape(atob(cliJson)))); } catch (e) { window.sessionStorage.setItem('friganso_clientes_json', cliJson); }
+                window.sessionStorage.setItem('friganso_initial_route', 'clients');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            } else if (p.get('clientes') === 'pendente') {
+                // Os clientes vêm por postMessage (extensão) em vez de ir na URL — só prepara a rota aqui.
+                window.sessionStorage.setItem('friganso_initial_route', 'clients');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            }
         })();
 
         // 📥 Tabela de Preços entregue pela extensão via chrome.storage (URL curta, evita "I/O error"
@@ -8113,6 +8249,14 @@
                 try {
                     window.sessionStorage.setItem('friganso_relatorio_vendas_json', JSON.stringify(d.pedidos));
                     window.sessionStorage.setItem('friganso_initial_route', 'importarVendas');
+                } catch (err) {}
+                return;
+            }
+            // 👥 Cadastro de clientes entregue pela extensão (tela "Procura de Pessoas" do SPAmov)
+            if (d && d.source === 'friganso-ext' && d.type === 'CLIENTES_PENDENTE' && d.clientes) {
+                try {
+                    window.sessionStorage.setItem('friganso_clientes_json', JSON.stringify(d.clientes));
+                    window.sessionStorage.setItem('friganso_initial_route', 'clients');
                 } catch (err) {}
             }
         });

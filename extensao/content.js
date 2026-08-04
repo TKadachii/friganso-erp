@@ -29,6 +29,16 @@
                 try { window.postMessage({ source: "friganso-ext", type: "RELATORIO_VENDAS_PENDENTE", pedidos: pend.pedidos }, "*"); } catch (e) {}
             });
         } catch (e) {}
+        // 👥 Mesma ponte, pro cadastro de clientes lido da tela "Procura de Pessoas".
+        try {
+            chrome.storage.local.get(["friganso_clientes_pendente"], function (r) {
+                const pend = r && r.friganso_clientes_pendente;
+                if (!pend || !pend.clientes || !pend.clientes.length) return;
+                if (Date.now() - (pend.ts || 0) > 10 * 60 * 1000) { chrome.storage.local.remove("friganso_clientes_pendente"); return; }
+                chrome.storage.local.remove("friganso_clientes_pendente");
+                try { window.postMessage({ source: "friganso-ext", type: "CLIENTES_PENDENTE", clientes: pend.clientes }, "*"); } catch (e) {}
+            });
+        } catch (e) {}
         window.addEventListener("message", function (e) {
             const d = e.data;
             if (!d || d.source !== "friganso-app") return;
@@ -412,6 +422,138 @@
             try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; }
             return;
         }
+        try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
+        catch (e) { window.open(url, "friganso_erp_app"); }
+    }
+
+    // ================= PROCURA DE PESSOAS (cadastro de clientes) =================
+    // Lê a tela "Procura de Pessoas" do SPAmov (system.spadim) e traz o cadastro completo dos clientes
+    // pro app: nome, CNPJ/CPF, endereço quebrado em partes, telefone, status e limite/saldo de crédito.
+    // ⚠️ Diferente da Lista de Preços, aqui cada célula de dado cai EXATAMENTE no mesmo X da coluna do
+    // cabeçalho (conferido num diagnóstico real: 788 células, 60 clientes, zero desalinhamento). Então
+    // o mapeamento é por X exato com folga de 2px — nada de "achar o mais próximo", que é o que já deu
+    // problema duas vezes nas outras telas.
+    function coletarCelulasTabela() {
+        const cels = [];
+        document.querySelectorAll("td, th, b, font, span, div, nobr, a").forEach(function (el) {
+            for (var k = 0; k < el.children.length; k++) { if (el.children[k].tagName !== "BR") return; }
+            const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+            if (!t || t.length > 200) return;
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            cels.push({ x: Math.round(r.left), y: Math.round(r.top), t: t });
+        });
+        return cels;
+    }
+    // Acha a linha de cabeçalho do resultado: a que tem "Nome / Razão Social" E "CNPF / CNPJ" juntas.
+    // É por conteúdo, não por posição, então continua achando se o usuário mudar as colunas do relatório.
+    function acharCabecalhoClientes(cels) {
+        const porY = {};
+        cels.forEach(function (c) { (porY[c.y] = porY[c.y] || []).push(c); });
+        let melhor = null;
+        Object.keys(porY).forEach(function (y) {
+            const linha = porY[y];
+            const temNome = linha.some(function (c) { return /raz[ãa]o\s*social/i.test(c.t); });
+            const temDoc = linha.some(function (c) { return /cn?p[fj]\s*\/\s*cnpj/i.test(c.t); });
+            if (!temNome || !temDoc) return;
+            if (!melhor || Number(y) < melhor.y) melhor = { y: Number(y), cols: linha.slice() };
+        });
+        return melhor;
+    }
+    function ehTelaClientes() {
+        if (/procura\s+de\s+pessoas/i.test(document.title || "")) return true;
+        if (!/system\.spadim/i.test(location.href)) return false;
+        const txt = (document.body && document.body.innerText) || "";
+        return /raz[ãa]o\s*social/i.test(txt) && /cn?p[fj]\s*\/\s*cnpj/i.test(txt);
+    }
+    function extrairClientes() {
+        const cels = coletarCelulasTabela();
+        const cab = acharCabecalhoClientes(cels);
+        if (!cab) return { clientes: [], faixa: null };
+        const cols = cab.cols.slice().sort(function (a, b) { return a.x - b.x; });
+        function colunaDoX(x) {
+            for (var i = 0; i < cols.length; i++) { if (Math.abs(cols[i].x - x) <= 2) return cols[i].t; }
+            return null;
+        }
+        // pega o valor da coluna cujo TÍTULO casa com a regex (o usuário pode reordenar as colunas)
+        function val(o, re) { for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k) && re.test(k)) return (o[k] || "").trim(); } return ""; }
+
+        const porY = {};
+        cels.forEach(function (c) { if (c.y > cab.y) (porY[c.y] = porY[c.y] || []).push(c); });
+
+        const clientes = [];
+        Object.keys(porY).map(Number).sort(function (a, b) { return a - b; }).forEach(function (y) {
+            const o = {};
+            porY[y].forEach(function (c) { const nome = colunaDoX(c.x); if (nome) o[nome] = c.t; });
+            const idBruto = val(o, /^id$/i);
+            // rodapé ("De: 1 à 60"), paginação e linhas de controle não têm ID numérico — caem fora aqui
+            if (!idBruto || !/\d{3,}/.test(idBruto)) return;
+            // "[j] 48016" -> tipo "j" (jurídica) / "f" (física) + código limpo. Mesmo formato que a
+            // importação por planilha do site já entende.
+            const mTipo = idBruto.match(/\[([a-z])\]/i);
+            const code = idBruto.replace(/^\s*\[[a-z]\]\s*/i, "").trim();
+            if (!code) return;
+            const rua = val(o, /^rua$/i), numero = val(o, /^n[úu]mero$/i), compl = val(o, /complemento/i);
+            const logradouro = [rua, numero].filter(Boolean).join(", ") + (compl ? " - " + compl : "");
+            clientes.push({
+                code: code,
+                tipo: mTipo ? mTipo[1].toLowerCase() : "",
+                name: val(o, /raz[ãa]o\s*social|^nome/i),
+                cnpj: val(o, /cn?p[fj]/i),
+                status: val(o, /^status$/i),
+                uf: val(o, /^uf$/i),
+                municipio: val(o, /munic[íi]pio/i),
+                bairro: val(o, /^bairro$/i),
+                logradouro: logradouro,
+                cep: val(o, /c\.?e\.?p/i),
+                telefone: val(o, /^telefone$/i),
+                limiteCredito: val(o, /limite\s*de\s*cr[ée]dito/i),
+                saldoCredito: val(o, /saldo\s*(de\s*)?cr[ée]dito/i),
+                bloqueio: val(o, /ocorr[êe]ncia\s*de\s*bloqueio|vendas\s*bloqueada/i)
+            });
+        });
+
+        // "De: 1 à 60" — serve pra avisar que pode haver mais páginas (o relatório pagina por
+        // "Pessoas por Página"). Não dá pra saber o TOTAL por aqui: a tela não mostra esse número.
+        let faixa = null;
+        try {
+            const m = ((document.body && document.body.innerText) || "").match(/De:\s*(\d+)\s*[àaá]\s*(\d+)/i);
+            if (m) faixa = { de: Number(m[1]), ate: Number(m[2]) };
+        } catch (e) {}
+        return { clientes: clientes, faixa: faixa };
+    }
+    function enviarClientesParaApp() {
+        const r = extrairClientes();
+        const clientes = r.clientes;
+        if (!clientes.length) { alert("Não consegui ler a lista de clientes nesta tela.\n\nAbra o relatório de Procura de Pessoas e clique em Procurar antes de usar este botão."); return; }
+        // ⚠️ Avisa se provavelmente tem mais gente além desta página. Como a tela não informa o total,
+        // o critério é: começou no 1 e leu exatamente o tamanho da página -> quase certo que há mais.
+        if (r.faixa && r.faixa.de === 1 && clientes.length >= (r.faixa.ate - r.faixa.de + 1)) {
+            const segue = confirm(
+                "Li " + clientes.length + " cliente(s) — mas isso é só a página atual (De: " + r.faixa.de + " à " + r.faixa.ate + ").\n\n" +
+                "Se você tem mais clientes que isso, cancele, aumente o campo \"Pessoas por Página\" (ex.: 1000), " +
+                "clique em Procurar de novo e use este botão outra vez.\n\nQuer enviar assim mesmo?"
+            );
+            if (!segue) return;
+        }
+        const payload = { clientes: clientes, ts: Date.now() };
+        try {
+            if (window.chrome && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ friganso_clientes_pendente: payload }, function () {
+                    const url = APP_URL + "?clientes=pendente";
+                    const ehCelular = (navigator.maxTouchPoints || 0) > 0;
+                    if (ehCelular) { try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; } return; }
+                    try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
+                    catch (e) { window.open(url, "friganso_erp_app"); }
+                });
+                return;
+            }
+        } catch (e) {}
+        // Fallback sem chrome.storage (Tampermonkey sem @grant): manda pela URL mesmo.
+        const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(clientes))));
+        const url = APP_URL + "?clientesJson=" + encodeURIComponent(b64);
+        const ehCelular = (navigator.maxTouchPoints || 0) > 0;
+        if (ehCelular) { try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; } return; }
         try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
         catch (e) { window.open(url, "friganso_erp_app"); }
     }
@@ -1615,6 +1757,10 @@
     // 📊 Relatório de Vendas: só na tela que lista pedidos por SPAMOV com peso embarcado/faturado reais
     // — lê tudo e manda pro site, que usa isso pra corrigir o faturamento real (não a estimativa).
     if (ehTelaRelatorioVendas()) botao("friganso-vendas-btn", "📊 Enviar Relatório de Vendas", "#0891b2", "270px", enviarRelatorioVendasParaApp);
+    // 👥 Clientes: só na tela "Procura de Pessoas" — lê o cadastro completo (com CNPJ, endereço,
+    // telefone e limite/saldo de crédito) e manda pro site. Usa o mesmo 270px do relatório de vendas
+    // sem risco de conflito: as duas telas são diferentes, nunca aparecem juntas.
+    if (ehTelaClientes()) botao("friganso-clientes-btn", "👥 Atualizar Clientes do Site", "#0d9488", "270px", enviarClientesParaApp);
 
     // Mostra o log salvo (passo a passo que sobrevive aos recarregamentos)
     if (ehFramePrincipal()) mostrarLogSalvo();
