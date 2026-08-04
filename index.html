@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 167;
+        const APP_BUILD_VERSION = 168;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -5204,6 +5204,13 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.11.0', data: '04/08/2026', areas: ['site'], itens: [
+                '🎯 O Radar de Clientes foi refeito e agora enxerga TEMPO. Antes ele classificava pela quantidade de produtos diferentes que cada um já tinha comprado — então quem comprou 10 itens há dois anos aparecia como "Top", e quem compra fiel toda semana o mesmo produto caía em "Precisa de Atenção". Era a única tela do app que nunca olhava o histórico de compras',
+                'NOVO "Não compraram mês passado": a lista de quem já é seu cliente mas ficou fora do mês anterior, com a última compra de cada um',
+                'As situações agora são Sumido / Atrasado / Em dia / Nunca comprou — e o atraso é medido pelo RITMO DE CADA CLIENTE, não por um prazo fixo. Quem compra toda semana e sumiu há 15 dias aparece como urgente; quem compra de mês em mês com 20 dias parado continua normal',
+                'Em cada cliente você vê agora: quando comprou pela última vez e o quê, de quanto em quanto tempo costuma comprar, o dia da semana que ele costuma comprar, os produtos que mais leva, quantas compras já fez e o ticket médio',
+                'O ranking passou a ser por quanto cada um comprou de verdade (em R$), não por variedade de itens',
+            ]},
             { versao: '2.10.2', data: '04/08/2026', areas: ['extensao'], itens: [
                 'Corrigido o "Não consegui ler a lista de clientes nesta tela": a leitura exigia que o relatório tivesse as colunas "Nome / Razão Social" E "CNPF / CNPJ". Montando o relatório com "Fantasia" no lugar do nome, ou sem o CNPJ, ela não achava a tabela e desistia',
                 'Agora a leitura se ancora no formato do ID ("[j] 48016"), que é o único ponto fixo — funciona com QUALQUER conjunto de colunas que você escolher no relatório. O nome do cliente vem da Razão Social; se ela não estiver marcada, usa a Fantasia/Apelido',
@@ -6056,6 +6063,25 @@
 
         // ===== RADAR DE CLIENTES: controle situacional + recomendações diárias =====
         const RadarScreen = ({ clients, products, setActiveRoute, showMessage }) => {
+            // 📈 Compras reais. O Radar era a ÚNICA tela do app que não olhava a coleção `purchases`:
+            // classificava cliente pela VARIEDADE de produtos ("9+ = Top"), sem nenhuma noção de tempo.
+            // Na prática quem comprou 10 itens diferentes há dois anos aparecia como "Top", e quem
+            // compra fiel toda semana o mesmo produto caía em "Precisa de Atenção" — o sinal invertido.
+            // Agora tudo aqui parte de QUANDO cada um comprou.
+            const [purchases, setPurchases] = useState([]);
+            const [loadingCompras, setLoadingCompras] = useState(true);
+            useEffect(() => {
+                const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(3000).onSnapshot(s => {
+                    setPurchases(s.docs.map(d => d.data()));
+                    setLoadingCompras(false);
+                }, () => setLoadingCompras(false));
+                return () => unsub();
+            }, []);
+            const DIA_MS = 24 * 60 * 60 * 1000;
+            const normCodeR = (v) => String(v == null ? '' : v).replace(/[^0-9a-z]/gi, '').replace(/^0+/, '').toLowerCase();
+            const NOMES_DIA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+            const brl = (v) => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            const haQuanto = (d) => d === null ? '' : (d === 0 ? 'hoje' : (d === 1 ? 'ontem' : `há ${d} dias`));
             // Categoria do produto por palavras-chave do nome
             const CAT_RE = {
                 acougue: /costela|alcatra|patinho|cox[aã]o|ac[eé]m|contra.?fil|dianteiro|traseiro|banda|pernil|barriga|toucinho|f[ií]gado|mocot|bucho|rabada|carne|fraldinha|maminha|picanha|cupim|lagarto|m[uú]sculo|peito\s*resf|carr[eé]|suin|bovin/i,
@@ -6082,36 +6108,110 @@
 
             const catLabel = { acougue: '🥩 Açougue', mercado: '🛒 Mercado', restaurante: '🍽️ Restaurante', geral: '📦 Geral' };
 
-            // Classificação situacional por nº de produtos diferentes já comprados
-            const stats = useMemo(() => {
-                const lvl = (c) => (c.history || []).length;
-                const inativos = clients.filter(c => lvl(c) === 0);
-                const atencao = clients.filter(c => lvl(c) >= 1 && lvl(c) <= 3);
-                const medios = clients.filter(c => lvl(c) >= 4 && lvl(c) <= 8);
-                const top = clients.filter(c => lvl(c) >= 9);
-                const ranking = [...clients].sort((a, b) => lvl(b) - lvl(a));
-                return { inativos, atencao, medios, top, ranking, total: clients.length };
-            }, [clients]);
+            // 🧮 Uma "ficha" por cliente, tirada das compras: quando comprou pela última vez, de quanto
+            // em quanto tempo costuma comprar, quanto gasta, o que gosta e em que dia da semana compra.
+            const fichas = useMemo(() => {
+                const porCliente = new Map();
+                purchases.forEach(p => {
+                    const k = normCodeR(p.clienteCode);
+                    if (!k) return;
+                    if (!porCliente.has(k)) porCliente.set(k, []);
+                    porCliente.get(k).push(p);
+                });
+                const hoje = Date.now();
+                // mês passado no calendário — é o corte que o usuário pediu ("não vendi mês passado")
+                const ag = new Date();
+                const iniMesPassado = new Date(ag.getFullYear(), ag.getMonth() - 1, 1).getTime();
+                const fimMesPassado = new Date(ag.getFullYear(), ag.getMonth(), 1).getTime();
 
-            // Recomendações do dia (rotaciona pela data, prioriza quem precisa de atenção)
+                return clients.map(c => {
+                    const ps = (porCliente.get(normCodeR(c.code)) || []).filter(p => p.ts).sort((a, b) => b.ts - a.ts);
+                    const compras = ps.length;
+                    if (!compras) {
+                        return { cliente: c, compras: 0, situacao: 'nunca', diasSem: null, ritmo: null, atraso: 0,
+                                 total: 0, ticket: 0, topProdutos: [], diaSemana: null, ultima: null, comprouMesPassado: false };
+                    }
+                    const ultima = ps[0];
+                    const diasSem = Math.max(0, Math.floor((hoje - ultima.ts) / DIA_MS));
+                    // ritmo = média dos intervalos entre compras (só existe com 2+ compras)
+                    let ritmo = null;
+                    if (compras >= 2) {
+                        const primeira = ps[compras - 1];
+                        ritmo = Math.max(1, Math.round(((ultima.ts - primeira.ts) / DIA_MS) / (compras - 1)));
+                    }
+                    // ⏱️ atraso = quantas "rodadas" do PRÓPRIO ritmo o cliente já passou sem comprar.
+                    // É melhor que um corte fixo de 30 dias: quem compra toda semana e sumiu há 15 dias
+                    // é urgente, e quem compra de mês em mês com 20 dias parado está normal.
+                    const base = ritmo || 30;
+                    const atraso = diasSem / base;
+                    let situacao = 'em_dia';
+                    if (atraso >= 2) situacao = 'sumido';
+                    else if (atraso >= 1.3) situacao = 'atrasado';
+                    const total = ps.reduce((a, p) => a + (Number(p.valor) || 0), 0);
+                    // o que ele gosta: produtos que mais se repetem entre as compras dele
+                    const cont = new Map();
+                    ps.forEach(p => (p.itens || []).forEach(i => {
+                        const nome = i.name || ('Produto ' + i.code);
+                        const at = cont.get(nome) || { nome: nome, code: i.code, vezes: 0 };
+                        at.vezes++; cont.set(nome, at);
+                    }));
+                    const topProdutos = [...cont.values()].sort((a, b) => b.vezes - a.vezes).slice(0, 3);
+                    // dia da semana preferido — só afirma com histórico suficiente pra não ser coincidência
+                    const dias = [0, 0, 0, 0, 0, 0, 0];
+                    ps.forEach(p => { dias[new Date(p.ts).getDay()]++; });
+                    let melhor = 0;
+                    dias.forEach((n, i) => { if (n > dias[melhor]) melhor = i; });
+                    const diaSemana = (compras >= 3 && dias[melhor] >= 2) ? NOMES_DIA[melhor] : null;
+                    const comprouMesPassado = ps.some(p => p.ts >= iniMesPassado && p.ts < fimMesPassado);
+                    return { cliente: c, compras: compras, situacao: situacao, diasSem: diasSem, ritmo: ritmo, atraso: atraso,
+                             total: Math.round(total * 100) / 100, ticket: Math.round((total / compras) * 100) / 100,
+                             topProdutos: topProdutos, diaSemana: diaSemana, ultima: ultima, comprouMesPassado: comprouMesPassado };
+                });
+            }, [clients, purchases]);
+
+            const stats = useMemo(() => {
+                const por = (s) => fichas.filter(f => f.situacao === s);
+                const sumidos = por('sumido').sort((a, b) => b.atraso - a.atraso);
+                const atrasados = por('atrasado').sort((a, b) => b.atraso - a.atraso);
+                const emDia = por('em_dia');
+                const nunca = por('nunca');
+                // ⭐ o que o usuário pediu primeiro: tem histórico, mas nada no mês passado
+                const semMesPassado = fichas.filter(f => f.compras > 0 && !f.comprouMesPassado)
+                                            .sort((a, b) => (b.diasSem || 0) - (a.diasSem || 0));
+                const ranking = fichas.filter(f => f.compras > 0).sort((a, b) => b.total - a.total);
+                const urgentes = [...sumidos, ...atrasados];
+                return { sumidos, atrasados, emDia, nunca, semMesPassado, ranking, urgentes, total: clients.length };
+            }, [fichas, clients]);
+
+            // Quem abordar hoje: ordenado por ATRASO (o quanto passou do próprio ritmo), não mais por
+            // variedade de produtos. A sugestão de item continua saindo do que ele ainda não comprou,
+            // rotacionando pela data pra não repetir a mesma oferta todo dia.
             const recs = useMemo(() => {
-                if (!clients.length || !products.length) return [];
+                if (!fichas.length) return [];
                 const today = new Date();
                 const daySeed = Number(`${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`);
                 const out = [];
-                clients.forEach(c => {
+                fichas.forEach(f => {
+                    const c = f.cliente;
                     const cat = categoryForClient(c);
-                    const bought = new Set((c.history || []).map(String));
-                    let cands = products.filter(p => !bought.has(String(p.code)) && matchesCategory(p.name, cat));
-                    if (!cands.length) cands = products.filter(p => !bought.has(String(p.code)));
-                    if (!cands.length) return;
-                    const idx = (daySeed + hashStr(c.code)) % cands.length;
-                    out.push({ client: c, product: cands[idx], cat, hist: (c.history || []).length });
+                    let product = null;
+                    if (products.length) {
+                        const bought = new Set((c.history || []).map(String));
+                        let cands = products.filter(p => !bought.has(String(p.code)) && matchesCategory(p.name, cat));
+                        if (!cands.length) cands = products.filter(p => !bought.has(String(p.code)));
+                        if (cands.length) product = cands[(daySeed + hashStr(c.code)) % cands.length];
+                    }
+                    out.push({ ficha: f, client: c, product: product, cat: cat });
                 });
-                // prioriza menos histórico (atenção); desempate rotativo pelo dia
-                out.sort((a, b) => (a.hist - b.hist) || ((hashStr(a.client.code) + daySeed) % 100) - ((hashStr(b.client.code) + daySeed) % 100));
+                // quem está mais atrasado primeiro; quem nunca comprou vai depois de quem já comprou e
+                // sumiu (cliente que já foi seu é mais fácil de trazer de volta que um que nunca comprou)
+                out.sort((a, b) => {
+                    const pa = a.ficha.compras ? 0 : 1, pb = b.ficha.compras ? 0 : 1;
+                    if (pa !== pb) return pa - pb;
+                    return b.ficha.atraso - a.ficha.atraso;
+                });
                 return out;
-            }, [clients, products]);
+            }, [fichas, products]);
 
             const abrirCliente = (c) => { window.localStorage.setItem('friganso_open_client_id', c.id); setActiveRoute('clients'); };
             const gerarOferta = (productCode) => {
@@ -6133,21 +6233,60 @@
                 <div className="animate-in fade-in space-y-6">
                     <div>
                         <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🎯</span> Radar de Clientes</h2>
-                        <p className="text-slate-500 text-sm">Controle situacional e recomendações inteligentes por perfil.</p>
+                        <p className="text-slate-500 text-sm">Quem está atrasado pro próprio ritmo de compra — e quem sumiu.</p>
                     </div>
 
+                    {loadingCompras && (
+                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-slate-500 text-sm font-medium">
+                            Carregando o histórico de compras...
+                        </div>
+                    )}
+                    {!loadingCompras && purchases.length === 0 && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-medium">
+                            ⚠️ Ainda não há compras registradas. O Radar precisa do histórico pra saber quem está atrasado —
+                            registre pedidos pelo Resumo ou importe o <b>Relatório de Vendas</b> do SPAmov.
+                        </div>
+                    )}
                     {products.length === 0 && (
                         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-medium">
-                            ⚠️ Carregue a <b>Tabela do Dia (PDF)</b> para liberar as recomendações de produtos.
+                            ⚠️ Carregue a <b>Tabela do Dia (PDF)</b> para liberar as sugestões de produto.
                         </div>
                     )}
 
-                    {/* Cards de situação */}
+                    {/* Cards de situação — agora por TEMPO, não por variedade de produtos */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                        <StatCard emoji="🔥" label="Top Compradores" value={stats.top.length} sub="9+ produtos diferentes" color="border-emerald-200" />
-                        <StatCard emoji="🙂" label="Compradores Médios" value={stats.medios.length} sub="4 a 8 produtos" color="border-blue-200" />
-                        <StatCard emoji="⚠️" label="Precisam de Atenção" value={stats.atencao.length} sub="1 a 3 produtos" color="border-amber-200" />
-                        <StatCard emoji="🚨" label="Inativos (não compraram)" value={stats.inativos.length} sub="sem histórico" color="border-rose-200" />
+                        <StatCard emoji="🚨" label="Sumidos" value={stats.sumidos.length} sub="passou 2x do ritmo dele" color="border-rose-200" />
+                        <StatCard emoji="⚠️" label="Atrasados" value={stats.atrasados.length} sub="já passou da hora de comprar" color="border-amber-200" />
+                        <StatCard emoji="✅" label="Em dia" value={stats.emDia.length} sub="dentro do ritmo normal" color="border-emerald-200" />
+                        <StatCard emoji="👤" label="Nunca compraram" value={stats.nunca.length} sub="cadastrados, sem nenhuma venda" color="border-slate-200" />
+                    </div>
+
+                    {/* ⭐ O corte que o usuário pediu: quem tem histórico mas não comprou no mês passado */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3">
+                            <div>
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>📅</span> Não compraram mês passado</h3>
+                                <p className="text-xs text-slate-400">Clientes que já compraram de você, mas ficaram fora do mês anterior</p>
+                            </div>
+                            <span className="text-3xl font-black text-slate-800 flex-shrink-0">{stats.semMesPassado.length}</span>
+                        </div>
+                        <div className="divide-y divide-slate-100 max-h-[320px] overflow-y-auto">
+                            {stats.semMesPassado.slice(0, 30).map((f, i) => (
+                                <button key={f.cliente.id || i} onClick={() => abrirCliente(f.cliente)} className="w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors text-left">
+                                    <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{f.cliente.code || '—'}</span>
+                                    <div className="min-w-0 flex-1">
+                                        <p className="font-bold text-sm text-slate-700 truncate">{f.cliente.name}</p>
+                                        <p className="text-xs text-slate-400 truncate">
+                                            Última compra {haQuanto(f.diasSem)}
+                                            {f.ritmo ? ` · costuma comprar a cada ${f.ritmo} dias` : ''}
+                                            {f.diaSemana ? ` · costuma comprar ${f.diaSemana}` : ''}
+                                        </p>
+                                    </div>
+                                    <span className="text-xs font-bold text-slate-400 flex-shrink-0">{brl(f.total)}</span>
+                                </button>
+                            ))}
+                            {stats.semMesPassado.length === 0 && <div className="p-8 text-center text-slate-400 text-sm">Todo mundo com histórico comprou mês passado. 🎉</div>}
+                        </div>
                     </div>
 
                     {/* Destaque do dia */}
@@ -6159,13 +6298,38 @@
                                 <span className="bg-white text-rose-800 px-2.5 py-1 rounded-lg font-mono font-black text-lg leading-none shadow-sm">{destaque.client.code || '—'}</span>
                                 <h3 className="text-2xl font-extrabold">{destaque.client.name}</h3>
                             </div>
-                            <p className="text-rose-200 text-sm mt-1">{catLabel[destaque.cat]} · {destaque.hist === 0 ? 'ainda não comprou nada' : `${destaque.hist} produto(s) no histórico`}</p>
-                            <div className="bg-white/15 backdrop-blur rounded-2xl p-4 mt-4 border border-white/20">
-                                <p className="text-xs text-rose-100">Ofereça hoje:</p>
-                                <p className="text-lg font-bold leading-tight mt-0.5">{destaque.product.code} — {destaque.product.name}</p>
-                            </div>
+                            <p className="text-rose-200 text-sm mt-1">
+                                {catLabel[destaque.cat]}
+                                {destaque.ficha.compras === 0
+                                    ? ' · ainda não comprou nada'
+                                    : ` · última compra ${haQuanto(destaque.ficha.diasSem)}${destaque.ficha.ritmo ? `, e costuma comprar a cada ${destaque.ficha.ritmo} dias` : ''}`}
+                            </p>
+                            {destaque.ficha.compras > 0 && (
+                                <div className="bg-black/20 rounded-2xl p-4 mt-4 border border-white/10 space-y-1.5">
+                                    {destaque.ficha.ultima && (destaque.ficha.ultima.itens || []).length > 0 && (
+                                        <p className="text-sm text-rose-50">
+                                            <span className="text-rose-200">Comprou {haQuanto(destaque.ficha.diasSem)}:</span>{' '}
+                                            <b>{(destaque.ficha.ultima.itens || []).slice(0, 3).map(i => i.name || i.code).join(', ')}</b>
+                                            {(destaque.ficha.ultima.itens || []).length > 3 ? ` +${(destaque.ficha.ultima.itens || []).length - 3}` : ''}
+                                        </p>
+                                    )}
+                                    {destaque.ficha.topProdutos.length > 0 && (
+                                        <p className="text-sm text-rose-50"><span className="text-rose-200">Costuma levar:</span> <b>{destaque.ficha.topProdutos.map(p => p.nome).join(', ')}</b></p>
+                                    )}
+                                    <p className="text-sm text-rose-50">
+                                        <span className="text-rose-200">{destaque.ficha.compras} compra(s) · ticket médio</span> <b>{brl(destaque.ficha.ticket)}</b>
+                                        {destaque.ficha.diaSemana ? <span className="text-rose-200"> · costuma comprar <b className="text-rose-50">{destaque.ficha.diaSemana}</b></span> : null}
+                                    </p>
+                                </div>
+                            )}
+                            {destaque.product && (
+                                <div className="bg-white/15 backdrop-blur rounded-2xl p-4 mt-3 border border-white/20">
+                                    <p className="text-xs text-rose-100">Sugestão de item que ele ainda não comprou:</p>
+                                    <p className="text-lg font-bold leading-tight mt-0.5">{destaque.product.code} — {destaque.product.name}</p>
+                                </div>
+                            )}
                             <div className="flex gap-2 mt-4">
-                                <button onClick={() => gerarOferta(destaque.product.code)} className="bg-white text-rose-800 font-bold px-4 py-2.5 rounded-xl text-sm shadow hover:bg-rose-50 transition-colors flex items-center gap-2"><div className="h-4 w-4"><IconWhatsApp/></div> Gerar Oferta no Zap</button>
+                                {destaque.product && <button onClick={() => gerarOferta(destaque.product.code)} className="bg-white text-rose-800 font-bold px-4 py-2.5 rounded-xl text-sm shadow hover:bg-rose-50 transition-colors flex items-center gap-2"><div className="h-4 w-4"><IconWhatsApp/></div> Gerar Oferta no Zap</button>}
                                 <button onClick={() => abrirCliente(destaque.client)} className="bg-white/20 hover:bg-white/30 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition-colors">Ver Perfil</button>
                             </div>
                         </div>
@@ -6178,16 +6342,23 @@
                             {recs.slice(1, 16).map((r, i) => (
                                 <div key={i} className="p-4 flex items-center justify-between gap-3 hover:bg-slate-50 transition-colors">
                                     <div className="min-w-0 flex-1">
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 flex-wrap">
                                             <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{r.client.code || '—'}</span>
                                             <p className="font-bold text-slate-800 text-sm truncate">{r.client.name}</p>
                                             <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full flex-shrink-0">{catLabel[r.cat]}</span>
-                                            {r.hist === 0 && <span className="text-[10px] font-bold bg-rose-100 text-rose-600 px-2 py-0.5 rounded-full flex-shrink-0">inativo</span>}
+                                            {r.ficha.situacao === 'sumido' && <span className="text-[10px] font-bold bg-rose-100 text-rose-600 px-2 py-0.5 rounded-full flex-shrink-0">sumido</span>}
+                                            {r.ficha.situacao === 'atrasado' && <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full flex-shrink-0">atrasado</span>}
+                                            {r.ficha.compras === 0 && <span className="text-[10px] font-bold bg-slate-200 text-slate-500 px-2 py-0.5 rounded-full flex-shrink-0">nunca comprou</span>}
                                         </div>
-                                        <p className="text-xs text-slate-500 truncate mt-0.5">Sugestão: <b className="text-slate-700">{r.product.code}</b> — {r.product.name}</p>
+                                        <p className="text-xs text-slate-500 truncate mt-0.5">
+                                            {r.ficha.compras === 0
+                                                ? 'Sem nenhuma compra registrada'
+                                                : <span>Comprou {haQuanto(r.ficha.diasSem)}{r.ficha.ritmo ? ` · costuma ser a cada ${r.ficha.ritmo} dias` : ''}{r.ficha.topProdutos.length ? ` · leva ${r.ficha.topProdutos[0].nome}` : ''}</span>}
+                                        </p>
+                                        {r.product && <p className="text-xs text-slate-400 truncate">Sugestão: <b className="text-slate-600">{r.product.code}</b> — {r.product.name}</p>}
                                     </div>
                                     <div className="flex gap-1.5 flex-shrink-0">
-                                        <button onClick={() => gerarOferta(r.product.code)} title="Gerar oferta" className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 h-9 w-9 rounded-lg flex items-center justify-center transition-colors"><div className="h-4 w-4"><IconWhatsApp/></div></button>
+                                        {r.product && <button onClick={() => gerarOferta(r.product.code)} title="Gerar oferta" className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 h-9 w-9 rounded-lg flex items-center justify-center transition-colors"><div className="h-4 w-4"><IconWhatsApp/></div></button>}
                                         <button onClick={() => abrirCliente(r.client)} title="Ver perfil" className="bg-slate-100 hover:bg-slate-200 text-slate-600 h-9 w-9 rounded-lg flex items-center justify-center transition-colors"><div className="h-4 w-4"><IconUser/></div></button>
                                     </div>
                                 </div>
@@ -6199,30 +6370,37 @@
                     {/* Ranking + listas situacionais */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-                            <div className="p-5 border-b border-slate-100"><h3 className="font-bold text-slate-800">🏆 Ranking de Compradores</h3></div>
+                            <div className="p-5 border-b border-slate-100"><h3 className="font-bold text-slate-800">🏆 Ranking de Compradores</h3><p className="text-xs text-slate-400">Por quanto cada um já comprou de verdade</p></div>
                             <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto">
-                                {stats.ranking.slice(0, 20).map((c, i) => (
-                                    <button key={c.id} onClick={() => abrirCliente(c)} className="w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors text-left">
+                                {stats.ranking.slice(0, 20).map((f, i) => (
+                                    <button key={f.cliente.id || i} onClick={() => abrirCliente(f.cliente)} className="w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors text-left">
                                         <span className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 ${i < 3 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>{i + 1}</span>
-                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{c.code || '—'}</span>
-                                        <span className="font-bold text-sm text-slate-700 truncate flex-1">{c.name}</span>
-                                        <span className="text-xs font-bold text-slate-400">{(c.history || []).length} itens</span>
+                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{f.cliente.code || '—'}</span>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="font-bold text-sm text-slate-700 truncate">{f.cliente.name}</p>
+                                            <p className="text-[11px] text-slate-400">{f.compras} compra(s) · ticket {brl(f.ticket)}</p>
+                                        </div>
+                                        <span className="text-xs font-black text-slate-600 flex-shrink-0">{brl(f.total)}</span>
                                     </button>
                                 ))}
+                                {stats.ranking.length === 0 && <div className="p-8 text-center text-slate-400 text-sm">Sem compras registradas ainda.</div>}
                             </div>
                         </div>
                         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-                            <div className="p-5 border-b border-slate-100"><h3 className="font-bold text-slate-800">🚨 Clientes para resgatar</h3><p className="text-xs text-slate-400">Inativos e de baixa compra — foco de atenção</p></div>
+                            <div className="p-5 border-b border-slate-100"><h3 className="font-bold text-slate-800">🚨 Clientes para resgatar</h3><p className="text-xs text-slate-400">Já passaram do dobro do próprio ritmo sem comprar</p></div>
                             <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto">
-                                {[...stats.inativos, ...stats.atencao].slice(0, 20).map(c => (
-                                    <button key={c.id} onClick={() => abrirCliente(c)} className="w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors text-left">
-                                        <span className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${(c.history || []).length === 0 ? 'bg-rose-500' : 'bg-amber-400'}`}></span>
-                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{c.code || '—'}</span>
-                                        <span className="font-bold text-sm text-slate-700 truncate flex-1">{c.name}</span>
-                                        <span className="text-xs font-bold text-slate-400">{(c.history || []).length === 0 ? 'nunca comprou' : `${(c.history || []).length} itens`}</span>
+                                {stats.sumidos.slice(0, 20).map((f, i) => (
+                                    <button key={f.cliente.id || i} onClick={() => abrirCliente(f.cliente)} className="w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors text-left">
+                                        <span className="h-2.5 w-2.5 rounded-full flex-shrink-0 bg-rose-500"></span>
+                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{f.cliente.code || '—'}</span>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="font-bold text-sm text-slate-700 truncate">{f.cliente.name}</p>
+                                            <p className="text-[11px] text-slate-400 truncate">{haQuanto(f.diasSem)}{f.ritmo ? ` · comprava a cada ${f.ritmo} dias` : ''}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-rose-600 flex-shrink-0">{Math.round(f.atraso * 10) / 10}x</span>
                                     </button>
                                 ))}
-                                {stats.inativos.length === 0 && stats.atencao.length === 0 && <div className="p-8 text-center text-slate-400 text-sm">Nenhum cliente precisando de atenção. 🎉</div>}
+                                {stats.sumidos.length === 0 && <div className="p-8 text-center text-slate-400 text-sm">Ninguém sumido. 🎉</div>}
                             </div>
                         </div>
                     </div>
