@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.8.4.1058
+// @version      2026.8.4.1545
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -65,6 +65,16 @@
                 if (Date.now() - (pend.ts || 0) > 10 * 60 * 1000) { chrome.storage.local.remove("friganso_relatorio_vendas_pendente"); return; }
                 chrome.storage.local.remove("friganso_relatorio_vendas_pendente");
                 try { window.postMessage({ source: "friganso-ext", type: "RELATORIO_VENDAS_PENDENTE", pedidos: pend.pedidos }, "*"); } catch (e) {}
+            });
+        } catch (e) {}
+        // 📋 Mesma ponte, pra FILA de pedidos lida no SPAmov (vários pedidos de uma vez).
+        try {
+            chrome.storage.local.get(["friganso_fila_pendente"], function (r) {
+                const pend = r && r.friganso_fila_pendente;
+                if (!pend || !pend.pedidos || !pend.pedidos.length) return;
+                if (Date.now() - (pend.ts || 0) > 60 * 60 * 1000) { chrome.storage.local.remove("friganso_fila_pendente"); return; } // fila dura 1h
+                chrome.storage.local.remove("friganso_fila_pendente");
+                try { window.postMessage({ source: "friganso-ext", type: "FILA_PENDENTE", pedidos: pend.pedidos }, "*"); } catch (e) {}
             });
         } catch (e) {}
         // 👥 Mesma ponte, pro cadastro de clientes lido da tela "Procura de Pessoas".
@@ -329,6 +339,88 @@
         return { cliente: c.code, clienteNome: c.nome, spamov: sp, itens: itens, condicaoPagamento: cond ? cond.texto : '', condicaoPagamentoValor: cond ? cond.valor : '' };
     }
     function temPedidoLeitura(p) { return p && (p.cliente || p.spamov || (p.itens && p.itens.length > 0)); }
+    // ================= FILA DE PEDIDOS =================
+    // O vendedor lança VÁRIOS pedidos seguidos no SPAmov. Antes, cada leitura já pulava pro app —
+    // então ele ficava indo e voltando site→app→site a cada pedido. Agora o botão SOMA o pedido numa
+    // fila e ele continua no SPAmov; só quando termina tudo é que vai pro app, com a fila inteira.
+    // A fila vive no chrome.storage (compartilhado entre as abas da extensão) com queda pro
+    // localStorage quando não há extensão (Tampermonkey sem @grant).
+    const FILA_KEY = "friganso_fila_pedidos";
+    function lerFila(cb) {
+        try {
+            if (window.chrome && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.get([FILA_KEY], function (r) { cb((r && r[FILA_KEY]) || []); });
+                return;
+            }
+        } catch (e) {}
+        try { cb(JSON.parse(window.localStorage.getItem(FILA_KEY) || "[]")); } catch (e) { cb([]); }
+    }
+    function salvarFila(fila, cb) {
+        try {
+            if (window.chrome && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ [FILA_KEY]: fila }, function () { cb && cb(); });
+                return;
+            }
+        } catch (e) {}
+        try { window.localStorage.setItem(FILA_KEY, JSON.stringify(fila)); } catch (e) {}
+        cb && cb();
+    }
+    function atualizarRotulosFila(fila) {
+        const n = fila.length;
+        const bAdd = document.getElementById("friganso-erp-btn");
+        if (bAdd) bAdd.textContent = n ? "📋 Somar à fila (" + n + " na fila)" : "📋 Somar pedido à fila";
+        const bFim = document.getElementById("friganso-fila-btn");
+        if (bFim) {
+            bFim.style.display = n ? "" : "none";
+            bFim.textContent = "✅ Finalizar e abrir o app (" + n + ")";
+        }
+    }
+    function somarPedidoNaFila() {
+        const p = montarPedidoLeitura(true);
+        if (!temPedidoLeitura(p) || p.itens.length === 0) { alert("Não consegui ler o pedido nesta tela."); return; }
+        lerFila(function (fila) {
+            // 🧾 Mesmo SPAmov = mesmo pedido. Se reler a mesma tela (ou corrigir um item e ler de novo),
+            // SUBSTITUI o que já estava na fila em vez de duplicar o pedido.
+            const sp = String(p.spamov || "").trim();
+            // ⚠️ o SPAmov mora em x.pedido.spamov, NÃO em x.spamov — procurar no lugar errado fazia o
+            // findIndex nunca casar e a fila duplicava o pedido a cada releitura da mesma tela
+            const idx = sp ? fila.findIndex(function (x) { return String((x.pedido && x.pedido.spamov) || "").trim() === sp; }) : -1;
+            const registro = { pedido: p, ts: Date.now() };
+            let msg;
+            if (idx >= 0) { fila[idx] = registro; msg = "Pedido do SPAmov " + sp + " ATUALIZADO na fila."; }
+            else { fila.push(registro); msg = "Pedido somado à fila."; }
+            salvarFila(fila, function () {
+                atualizarRotulosFila(fila);
+                const nome = p.clienteNome ? (" — " + p.clienteNome) : "";
+                alert("✅ " + msg + nome + "\n\nItens: " + p.itens.length + "\nNa fila agora: " + fila.length +
+                      "\n\nPode lançar o próximo pedido. Quando terminar, toque em \"Finalizar e abrir o app\".");
+            });
+        });
+    }
+    function finalizarFila() {
+        lerFila(function (fila) {
+            if (!fila.length) { alert("A fila está vazia. Leia ao menos um pedido antes de finalizar."); return; }
+            const pedidos = fila.map(function (x) { return x.pedido; });
+            const irPro = function (url) {
+                const ehCelular = (navigator.maxTouchPoints || 0) > 0;
+                if (ehCelular) { try { (window.top || window).location.href = url; } catch (e) { window.location.href = url; } return; }
+                try { const w = (window.top || window).open(url, "friganso_erp_app"); if (w && w.focus) w.focus(); }
+                catch (e) { window.open(url, "friganso_erp_app"); }
+            };
+            // limpa a fila só DEPOIS de entregar, pra não perder pedido se algo falhar no meio
+            try {
+                if (window.chrome && chrome.storage && chrome.storage.local) {
+                    chrome.storage.local.set({ friganso_fila_pendente: { pedidos: pedidos, ts: Date.now() } }, function () {
+                        salvarFila([], function () { atualizarRotulosFila([]); irPro(APP_URL + "?fila=pendente"); });
+                    });
+                    return;
+                }
+            } catch (e) {}
+            const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(pedidos))));
+            salvarFila([], function () { atualizarRotulosFila([]); irPro(APP_URL + "?filaJson=" + encodeURIComponent(b64)); });
+        });
+    }
+
     function enviarParaApp() {
         const p = montarPedidoLeitura(true);
         if (!temPedidoLeitura(p) || p.itens.length === 0) { alert("Não consegui ler o pedido nesta tela."); return; }
@@ -1878,7 +1970,19 @@
         botao("friganso-etapas-btn", "🪜 Etapas", "#b45309", "320px", abrirPopupEtapas);
         criarBotaoOcultar("220px");
     }
-    if (temLeitura) botao("friganso-erp-btn", "📋 Enviar pro Friganso ERP", "#e11d48", "18px", enviarParaApp);
+    // 📋 O botão principal agora SOMA à fila em vez de pular direto pro app — o vendedor lança vários
+    // pedidos seguidos e só vai pro app no fim. Segurar SHIFT ao clicar mantém o jeito antigo (vai
+    // direto pro app com esse pedido só), pra quando for um pedido avulso.
+    if (temLeitura) {
+        botao("friganso-erp-btn", "📋 Somar pedido à fila", "#e11d48", "18px", function (ev) {
+            if (ev && ev.shiftKey) { enviarParaApp(); return; }
+            somarPedidoNaFila();
+        });
+        botao("friganso-fila-btn", "✅ Finalizar e abrir o app", "#15803d", "270px", finalizarFila);
+        const bFim = document.getElementById("friganso-fila-btn");
+        if (bFim) bFim.style.display = "none";
+        lerFila(atualizarRotulosFila);
+    }
     // 🔍 "Ler Página": disponível em QUALQUER tela do SPAmov (não só pedido), pra usar como ferramenta
     // de exploração — ex.: Lista de Preços, Histórico, etc. — na hora de criar uma automação nova.
     botao("friganso-diag-btn", "🔍 Ler Página", "#0f172a", "170px", gerarDiagnostico);

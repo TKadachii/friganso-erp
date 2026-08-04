@@ -344,7 +344,11 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 170;
+        const APP_BUILD_VERSION = 171;
+        // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
+        // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
+        const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
+        const FILA_ATUAL = 'friganso_fila_atual';   // índice do pedido que está aberto no Resumo agora
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -3174,11 +3178,34 @@
                                                 if (!ok) return;
                                             }
                                         }
-                                        navigator.clipboard.writeText(generateWhatsAppText());
+                                        const textoResumo = generateWhatsAppText();
+                                        navigator.clipboard.writeText(textoResumo);
                                         // 🧾 Grava na ficha do cliente (todo pedido confirmado passa por aqui)
                                         if (orderSummary && orderSummary.customerCode) {
                                             const itens = (orderSummary.items || []).map(it => { const a = itemAtual(it); return { code: a.code, name: a.name, qty: Number(getQty(it)), peso: Number(a.peso) || 0, valorKg: Number(a.valorKg) || 0 }; });
                                             registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user, orderSummary.spamov, condicaoAtual);
+                                        }
+                                        // 📋 Veio da Fila de Pedidos? Guarda o texto JÁ com preço/desconto aplicados e
+                                        // marca como conferido, depois volta pra fila pro próximo pedido. O texto é
+                                        // gerado AQUI de propósito: é esta tela que sabe aplicar preço e desconto.
+                                        let voltouPraFila = false;
+                                        try {
+                                            const idxFila = window.localStorage.getItem(FILA_ATUAL);
+                                            if (idxFila !== null && idxFila !== '') {
+                                                const f = JSON.parse(window.localStorage.getItem(FILA_ATIVA) || '[]');
+                                                const i = Number(idxFila);
+                                                if (f[i]) {
+                                                    f[i].feito = true; f[i].texto = textoResumo;
+                                                    window.localStorage.setItem(FILA_ATIVA, JSON.stringify(f));
+                                                    window.localStorage.removeItem(FILA_ATUAL);
+                                                    voltouPraFila = true;
+                                                }
+                                            }
+                                        } catch (e) {}
+                                        if (voltouPraFila) {
+                                            showMessage('Conferido e copiado! Voltando pra fila. 📋', 'success');
+                                            setActiveRoute && setActiveRoute('fila');
+                                            return;
                                         }
                                         showMessage('Copiado pro Zap e salvo na ficha do cliente! 🧾', 'success');
                                     }} className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-4 py-2 rounded-xl text-sm font-bold transition-colors">Copiar Resumo</button>
@@ -5374,6 +5401,14 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.12.0', data: '04/08/2026', areas: ['site', 'extensao', 'app'], itens: [
+                '📋 FILA DE PEDIDOS: chega de ir e voltar do site a cada pedido. No site da Friganso o botão vermelho agora é "Somar pedido à fila" — lance quantos pedidos quiser, tocando nele a cada um. O contador mostra quantos já estão na fila',
+                'Quando terminar tudo, toque em "✅ Finalizar e abrir o app" e todos os pedidos aparecem juntos na nova tela Fila de Pedidos',
+                'Na fila você abre um por um em "Conferir": o pedido carrega no Resumo normal (com preço e desconto certos), você confere, toca em Copiar Resumo e ele volta sozinho pra fila já marcado com ✓ — pronto pro próximo',
+                '🎈 No celular, o botão "Abrir balão" manda os resumos pelo balão flutuante do WhatsApp, UMA MENSAGEM POR PEDIDO pro mesmo número (não junta tudo num texto só). É o mesmo balão dos Disparos, então funciona no aplicativo que você já tem — sem precisar instalar APK novo',
+                'Reler a mesma tela do SPAmov ATUALIZA o pedido na fila em vez de duplicar (usa o número do SPAmov pra saber que é o mesmo)',
+                'Precisa mandar um pedido avulso, direto, como era antes? Segure SHIFT ao clicar no botão',
+            ]},
             { versao: '2.11.2', data: '04/08/2026', areas: ['site'], itens: [
                 '🔎 NOVA "Conferência do cadastro" no bloco Meus Clientes: mostra quantos clientes vieram da importação do SPAmov e quantos entraram por outro caminho, listando quem são. Serve pra explicar aquele "importei 60 mas aparecem 66"',
                 'O app cria cliente sozinho ("Cadastro Automático") quando chega um pedido de um código que não está no cadastro — normalmente é daí que vêm os clientes a mais',
@@ -6243,6 +6278,162 @@
         );
 
         // ===== RADAR DE CLIENTES: controle situacional + recomendações diárias =====
+        // ===== 📋 FILA DE PEDIDOS =====
+        // O vendedor lança vários pedidos seguidos no SPAmov. Em vez de voltar pro app a cada um, a
+        // extensão vai somando numa fila e entrega tudo aqui. Nesta tela ele abre um por um no Resumo
+        // (que é quem sabe aplicar preço/desconto de verdade), confere e copia. Cada resumo copiado
+        // fica guardado aqui pra, no fim, sair pelo balão do WhatsApp — uma mensagem por pedido.
+        const FilaScreen = ({ showMessage, setActiveRoute }) => {
+            const [fila, setFila] = useState([]);
+            const [zap, setZap] = useState(() => { try { return window.localStorage.getItem('friganso_fila_zap') || ''; } catch (e) { return ''; } });
+
+            const salvar = (itens) => { try { window.localStorage.setItem(FILA_ATIVA, JSON.stringify(itens)); } catch (e) {} };
+
+            useEffect(() => {
+                // fila NOVA chegando da extensão? senão, retoma a que já estava em andamento
+                let nova = null;
+                try {
+                    const raw = window.sessionStorage.getItem('friganso_fila_json');
+                    if (raw) { window.sessionStorage.removeItem('friganso_fila_json'); nova = JSON.parse(raw); }
+                } catch (e) {}
+                if (Array.isArray(nova) && nova.length) {
+                    const itens = nova.map(p => ({ pedido: p, feito: false, texto: '' }));
+                    setFila(itens); salvar(itens);
+                } else {
+                    try { setFila(JSON.parse(window.localStorage.getItem(FILA_ATIVA) || '[]')); } catch (e) { setFila([]); }
+                }
+                try { window.localStorage.removeItem(FILA_ATUAL); } catch (e) {}
+            }, []);
+
+            useEffect(() => { try { window.localStorage.setItem('friganso_fila_zap', zap); } catch (e) {} }, [zap]);
+
+            const abrirNoResumo = (i) => {
+                const it = fila[i];
+                if (!it) return;
+                try {
+                    window.sessionStorage.setItem('friganso_pedido_json', JSON.stringify(it.pedido));
+                    window.localStorage.setItem(FILA_ATUAL, String(i));
+                } catch (e) {}
+                setActiveRoute('resumo');
+            };
+            const removerDaFila = (i) => {
+                const nova = fila.filter((_, k) => k !== i);
+                setFila(nova); salvar(nova);
+            };
+            const limparFila = () => {
+                if (!window.confirm('Limpar a fila inteira? Os pedidos já copiados continuam salvos na ficha do cliente.')) return;
+                setFila([]); salvar([]);
+                try { window.localStorage.removeItem(FILA_ATUAL); } catch (e) {}
+            };
+
+            const waNum = (t) => { let d = String(t || '').replace(/\D/g, ''); if (!d) return ''; if (d.length <= 11) d = '55' + d; return d; };
+            const prontos = fila.filter(f => f.feito && f.texto);
+
+            // 🎈 Balão flutuante: MESMO plugin nativo que os Disparos já usam, então funciona no APK que
+            // você já tem instalado — não precisa de app novo. Cada pedido vira uma mensagem separada
+            // (mesmo número, textos diferentes), que é como o usuário pediu: não juntar tudo num texto só.
+            const abrirBalao = () => {
+                if (!prontos.length) { showMessage('Copie ao menos um resumo antes de abrir o balão.', 'error'); return; }
+                const tel = waNum(zap);
+                if (!tel) { showMessage('Preencha o número de WhatsApp que vai receber os resumos.', 'error'); return; }
+                const ZB = (isCapacitor && window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.ZapBolha : null;
+                if (!ZB || !ZB.iniciar) { showMessage('O balão flutuante só existe no aplicativo Android. No PC, use o botão Copiar de cada pedido.', 'error'); return; }
+                const contatos = prontos.map((f, i) => ({
+                    nome: `Pedido ${i + 1}${f.pedido.clienteNome ? ' — ' + f.pedido.clienteNome : ''}`,
+                    telefone: tel,
+                    mensagem: f.texto
+                }));
+                ZB.iniciar({ contatos }).then(res => {
+                    if (res && res.semPermissao) showMessage('Ative "Exibir sobre outros apps" pro Friganso (abriu a tela) e toque de novo. 🎈', 'error');
+                    else showMessage(`Balão ativado com ${contatos.length} resumo(s)! Vá pro WhatsApp e toque no balão pra mandar um por um. 🎈`, 'success');
+                }).catch(() => showMessage('Não consegui ativar o balão.', 'error'));
+            };
+
+            const copiarUm = (f) => {
+                navigator.clipboard.writeText(f.texto);
+                showMessage('Resumo copiado!', 'success');
+            };
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>📋</span> Fila de Pedidos</h2>
+                        <p className="text-slate-500 text-sm">Os pedidos que você leu no SPAmov, um embaixo do outro. Abra cada um, confira e copie.</p>
+                    </div>
+
+                    {fila.length === 0 && (
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-10 text-center">
+                            <p className="text-5xl mb-3">📋</p>
+                            <p className="font-bold text-slate-700">A fila está vazia</p>
+                            <p className="text-sm text-slate-500 mt-2 max-w-md mx-auto">
+                                No site da Friganso, lance o pedido e toque em <b>"📋 Somar pedido à fila"</b>. Faça isso em quantos
+                                pedidos quiser — quando terminar, toque em <b>"✅ Finalizar e abrir o app"</b> e eles aparecem aqui.
+                            </p>
+                        </div>
+                    )}
+
+                    {fila.length > 0 && (
+                        <>
+                            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
+                                    <p className="text-sm font-bold text-slate-700">
+                                        {prontos.length} de {fila.length} conferido(s)
+                                    </p>
+                                    <button onClick={limparFila} className="text-xs font-bold text-slate-500 hover:text-rose-600 transition-colors">Limpar fila</button>
+                                </div>
+                                <div className="divide-y divide-slate-100">
+                                    {fila.map((f, i) => (
+                                        <div key={i} className={`p-4 flex items-center gap-3 ${f.feito ? 'bg-emerald-50/50' : ''}`}>
+                                            <span className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-black flex-shrink-0 ${f.feito ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                                {f.feito ? '✓' : i + 1}
+                                            </span>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="font-bold text-slate-800 text-sm truncate">
+                                                    {f.pedido.clienteNome || `Cliente ${f.pedido.cliente || '?'}`}
+                                                </p>
+                                                <p className="text-xs text-slate-500 truncate">
+                                                    {f.pedido.spamov ? `SPAmov ${f.pedido.spamov} · ` : ''}{(f.pedido.itens || []).length} item(ns)
+                                                    {f.pedido.condicaoPagamento ? ` · ${f.pedido.condicaoPagamento}` : ''}
+                                                </p>
+                                            </div>
+                                            <div className="flex gap-1.5 flex-shrink-0">
+                                                {f.feito && <button onClick={() => copiarUm(f)} title="Copiar de novo" className="bg-slate-100 hover:bg-slate-200 text-slate-600 h-9 px-3 rounded-lg text-xs font-bold transition-colors">Copiar</button>}
+                                                <button onClick={() => abrirNoResumo(i)} className={`h-9 px-3 rounded-lg text-xs font-bold transition-colors ${f.feito ? 'bg-slate-100 hover:bg-slate-200 text-slate-600' : 'bg-rose-600 hover:bg-rose-700 text-white'}`}>
+                                                    {f.feito ? 'Rever' : 'Conferir'}
+                                                </button>
+                                                <button onClick={() => removerDaFila(i)} title="Tirar da fila" className="bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 h-9 w-9 rounded-lg flex items-center justify-center transition-colors">✕</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* 🎈 Envio pelo balão — uma mensagem por pedido, todas pro mesmo número */}
+                            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-1"><span>🎈</span> Mandar os resumos pelo WhatsApp</h3>
+                                <p className="text-xs text-slate-500 mb-4">
+                                    Cada pedido vai como uma <b>mensagem separada</b> pro mesmo número — não junta tudo num texto só.
+                                    {!isCapacitor && <span className="text-amber-600"> (o balão só funciona no aplicativo Android; aqui no PC use o Copiar de cada pedido)</span>}
+                                </p>
+                                <div className="flex flex-col sm:flex-row gap-3">
+                                    <input
+                                        type="tel" inputMode="numeric" value={zap} onChange={e => setZap(e.target.value)}
+                                        placeholder="Número do WhatsApp (ex: 22999998888)"
+                                        className="flex-1 border border-slate-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+                                    />
+                                    <button onClick={abrirBalao} disabled={!prontos.length}
+                                        className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold px-5 py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors">
+                                        <div className="h-4 w-4"><IconWhatsApp/></div> Abrir balão com {prontos.length} resumo(s)
+                                    </button>
+                                </div>
+                                {prontos.length === 0 && <p className="text-xs text-slate-400 mt-2">Confira e copie ao menos um pedido pra liberar o envio.</p>}
+                            </div>
+                        </>
+                    )}
+                </div>
+            );
+        };
+
         const RadarScreen = ({ clients, products, setActiveRoute, showMessage }) => {
             // 📈 Compras reais. O Radar era a ÚNICA tela do app que não olhava a coleção `purchases`:
             // classificava cliente pela VARIEDADE de produtos ("9+ = Top"), sem nenhuma noção de tempo.
@@ -8337,6 +8528,7 @@
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} valorMaximo={valorMaximo} setValorMaximoProduto={setValorMaximoProduto} />;
                     case 'cardapio': return <CardapioScreen products={products} produtoFotos={produtoFotos} showMessage={showMessage} catalogoContatos={catalogoContatos} salvarCatalogoContatos={salvarCatalogoContatos} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
+                    case 'fila': return <FilaScreen showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'historico': return <HistoricoScreen user={user} showMessage={showMessage} />;
                     case 'importarVendas': return <RelatorioVendasScreen user={user} clients={clients} showMessage={showMessage} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
@@ -8447,6 +8639,7 @@
                             <NavButton route="pedido" icon={IconReceipt} label="Fazer Pedido" />
                             {(isElectron || isCapacitor) && <NavButton route="navegador" icon={IconWhatsApp} label="🌐 Site da Friganso" />}
                             <NavButton route="resumo" icon={IconReceipt} label="Resumo de Pedido" />
+                            <NavButton route="fila" icon={IconReceipt} label="📋 Fila de Pedidos" />
                             <NavButton route="historico" icon={IconFileText} label="🧾 Histórico de Vendas" />
                             <NavButton route="importarVendas" icon={IconCloudUpload} label="📊 Importar Vendas Reais" />
                             <NavButton route="orcamentos" icon={IconWhatsApp} label="Gerador de Zap" />
@@ -8587,6 +8780,17 @@
                 window.sessionStorage.setItem('friganso_initial_route', 'importarVendas');
                 if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
             }
+            // 📋 Fila de pedidos lida no SPAmov (vários pedidos numa tacada só)
+            const filaJson = p.get('filaJson');
+            if (filaJson) {
+                try { window.sessionStorage.setItem('friganso_fila_json', decodeURIComponent(escape(atob(filaJson)))); } catch (e) { window.sessionStorage.setItem('friganso_fila_json', filaJson); }
+                window.sessionStorage.setItem('friganso_initial_route', 'fila');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            } else if (p.get('fila') === 'pendente') {
+                // A fila vem por postMessage (extensão) em vez de ir na URL — só prepara a rota aqui.
+                window.sessionStorage.setItem('friganso_initial_route', 'fila');
+                if (window.history.replaceState) window.history.replaceState({}, '', window.location.pathname);
+            }
             // 👥 Cadastro de clientes lido DIRETO da tela "Procura de Pessoas" do SPAmov
             const cliJson = p.get('clientesJson');
             if (cliJson) {
@@ -8617,6 +8821,14 @@
                 try {
                     window.sessionStorage.setItem('friganso_relatorio_vendas_json', JSON.stringify(d.pedidos));
                     window.sessionStorage.setItem('friganso_initial_route', 'importarVendas');
+                } catch (err) {}
+                return;
+            }
+            // 📋 Fila de pedidos entregue pela extensão (vários pedidos lidos de uma vez no SPAmov)
+            if (d && d.source === 'friganso-ext' && d.type === 'FILA_PENDENTE' && d.pedidos) {
+                try {
+                    window.sessionStorage.setItem('friganso_fila_json', JSON.stringify(d.pedidos));
+                    window.sessionStorage.setItem('friganso_initial_route', 'fila');
                 } catch (err) {}
                 return;
             }
