@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.8.4.1028
+// @version      2026.8.4.1034
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
@@ -560,19 +560,77 @@
         } catch (e) {}
         return { clientes: clientes, faixa: faixa };
     }
+    // 🔢 Campo "Pessoas por Página" e botão "Procurar" da Procura de Pessoas. Ancorados no RÓTULO e no
+    // value do botão (não em X fixo — ver a lição do X fixo no CONTEXTO-DO-PROJETO.md).
+    function acharCampoPorPagina() {
+        let rot = null;
+        document.querySelectorAll("td, th, b, font, span, div, nobr, label").forEach(function (el) {
+            if (rot) return;
+            for (var k = 0; k < el.children.length; k++) { if (el.children[k].tagName !== "BR") return; }
+            const t = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+            if (!/pessoas\s+por\s+p[áa]gina/i.test(t)) return;
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            rot = { x: r.left, y: r.top };
+        });
+        if (!rot) return null;
+        let melhor = null, melhorD = 1e9;
+        document.querySelectorAll("input").forEach(function (el) {
+            const tipo = (el.type || "text").toLowerCase();
+            if (tipo !== "text") return;
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            const d = Math.abs(r.left - rot.x) + Math.abs(r.top - rot.y);
+            if (d < melhorD && d < 400) { melhorD = d; melhor = el; }
+        });
+        return melhor;
+    }
+    function acharBotaoProcurar() {
+        let achado = null;
+        document.querySelectorAll("input").forEach(function (el) {
+            if (achado) return;
+            const tipo = (el.type || "").toLowerCase();
+            if (tipo !== "submit" && tipo !== "button") return;
+            if (/procurar/i.test(el.value || "")) achado = el;
+        });
+        return achado;
+    }
     function enviarClientesParaApp() {
         const r = extrairClientes();
         const clientes = r.clientes;
         if (!clientes.length) { alert("Não consegui ler a lista de clientes nesta tela.\n\nAbra o relatório de Procura de Pessoas e clique em Procurar antes de usar este botão."); return; }
-        // ⚠️ Avisa se provavelmente tem mais gente além desta página. Como a tela não informa o total,
-        // o critério é: começou no 1 e leu exatamente o tamanho da página -> quase certo que há mais.
-        if (r.faixa && r.faixa.de === 1 && clientes.length >= (r.faixa.ate - r.faixa.de + 1)) {
-            const segue = confirm(
-                "Li " + clientes.length + " cliente(s) — mas isso é só a página atual (De: " + r.faixa.de + " à " + r.faixa.ate + ").\n\n" +
-                "Se você tem mais clientes que isso, cancele, aumente o campo \"Pessoas por Página\" (ex.: 1000), " +
-                "clique em Procurar de novo e use este botão outra vez.\n\nQuer enviar assim mesmo?"
-            );
-            if (!segue) return;
+        // ⚠️ A tela NÃO informa o total de pessoas — só "De: 1 à N". Então quando o tanto lido bate
+        // exatamente com o limite de "Pessoas por Página", pode ter mais gente na página seguinte.
+        // Em vez de só avisar (o que encheria o saco de quem tem ~60 clientes e página de 60), o botão
+        // se oferece pra aumentar o limite e refazer a busca sozinho.
+        const campoPP = acharCampoPorPagina();
+        const porPagina = campoPP ? parseInt(String(campoPP.value).replace(/\D/g, ""), 10) : 0;
+        const limite = porPagina || (r.faixa ? (r.faixa.ate - r.faixa.de + 1) : 0);
+        if (limite && clientes.length >= limite) {
+            const btnProcurar = acharBotaoProcurar();
+            if (campoPP && btnProcurar) {
+                const aumentar = confirm(
+                    "Li " + clientes.length + " cliente(s) — exatamente o limite de \"Pessoas por Página\" (" + limite + ").\n\n" +
+                    "Pode ter mais gente nas próximas páginas, e eu não tenho como saber daqui.\n\n" +
+                    "OK = aumento pra 1000 e refaço a busca (depois é só clicar no botão de novo)\n" +
+                    "Cancelar = enviar só estes " + clientes.length + " mesmo"
+                );
+                if (aumentar) {
+                    try {
+                        campoPP.value = "1000";
+                        campoPP.dispatchEvent(new Event("change", { bubbles: true }));
+                        btnProcurar.click();
+                    } catch (e) { alert("Não consegui refazer a busca sozinho. Aumente o campo \"Pessoas por Página\" na mão e clique em Procurar."); }
+                    return;
+                }
+            } else {
+                const segue = confirm(
+                    "Li " + clientes.length + " cliente(s) — mas isso pode ser só a página atual.\n\n" +
+                    "Se você tem mais clientes que isso, cancele, aumente o campo \"Pessoas por Página\" (ex.: 1000), " +
+                    "clique em Procurar de novo e use este botão outra vez.\n\nQuer enviar assim mesmo?"
+                );
+                if (!segue) return;
+            }
         }
         const payload = { clientes: clientes, ts: Date.now() };
         try {
