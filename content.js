@@ -56,6 +56,27 @@
                 try { chrome.storage.local.set({ friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: !!d.autoLogin, irVendas: !!d.irVendas } }); } catch (err) {}
                 return;
             }
+            // 📋 A tela de Fila PEDE a fila em vez de só esperar. Duas situações resolvidas de uma vez:
+            //  1. o usuário somou pedidos mas não tocou em "Finalizar" — a fila ficou aqui parada, e
+            //     agora ele consegue puxar do próprio app;
+            //  2. corrida de tempo: a tela montava antes da entrega automática chegar e via fila vazia.
+            if (d.type === "PEDIR_FILA") {
+                try {
+                    chrome.storage.local.get(["friganso_fila_pendente", "friganso_fila_pedidos"], function (r) {
+                        let pedidos = [];
+                        const pend = r && r.friganso_fila_pendente;
+                        if (pend && pend.pedidos && pend.pedidos.length) pedidos = pend.pedidos;
+                        else {
+                            const fila = (r && r.friganso_fila_pedidos) || [];
+                            pedidos = fila.map(function (x) { return x && x.pedido; }).filter(Boolean);
+                        }
+                        if (!pedidos.length) { try { window.postMessage({ source: "friganso-ext", type: "FILA_VAZIA" }, "*"); } catch (e2) {} return; }
+                        chrome.storage.local.remove(["friganso_fila_pendente", "friganso_fila_pedidos"]);
+                        try { window.postMessage({ source: "friganso-ext", type: "FILA_PENDENTE", pedidos: pedidos }, "*"); } catch (e2) {}
+                    });
+                } catch (err) {}
+                return;
+            }
             // ⚡ TUDO automático: guarda credenciais (login + ir pra vendas) + pedido pendente
             if (d.type === "LANCAR_AUTO" && d.pedido) {
                 try {

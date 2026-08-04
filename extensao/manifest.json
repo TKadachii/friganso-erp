@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Friganso ERP - Resumo Rápido",
-  "version": "2.12.171",
-  "version_name": "2.12.0 - build 171",
+  "version": "2.12.172",
+  "version_name": "2.12.1 - build 172",
   "description": "Lê o pedido do SPAmov para o Resumo e lança pedidos montados no app, direto no SPAmov.",
   "icons": {
     "16": "icon16.png",

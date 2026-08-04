@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 171;
+        const APP_BUILD_VERSION = 172;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -5401,6 +5401,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.12.1', data: '04/08/2026', areas: ['site', 'extensao'], itens: [
+                'Corrigido: a Fila aparecia vazia mesmo depois de você somar pedidos no site. Faltavam duas coisas — se você somasse mas não tocasse em "Finalizar e abrir o app", os pedidos ficavam presos na extensão; e, mesmo tocando, a tela às vezes montava antes da entrega chegar e via a fila vazia',
+                'Agora a tela BUSCA a fila sozinha ao abrir, e continua ouvindo caso a entrega chegue depois. Se ainda assim aparecer vazia, tem o botão "🔄 Buscar fila que ficou no site"',
+            ]},
             { versao: '2.12.0', data: '04/08/2026', areas: ['site', 'extensao', 'app'], itens: [
                 '📋 FILA DE PEDIDOS: chega de ir e voltar do site a cada pedido. No site da Friganso o botão vermelho agora é "Somar pedido à fila" — lance quantos pedidos quiser, tocando nele a cada um. O contador mostra quantos já estão na fila',
                 'Quando terminar tudo, toque em "✅ Finalizar e abrir o app" e todos os pedidos aparecem juntos na nova tela Fila de Pedidos',
@@ -6285,9 +6289,24 @@
         // fica guardado aqui pra, no fim, sair pelo balão do WhatsApp — uma mensagem por pedido.
         const FilaScreen = ({ showMessage, setActiveRoute }) => {
             const [fila, setFila] = useState([]);
+            const [buscando, setBuscando] = useState(false);
             const [zap, setZap] = useState(() => { try { return window.localStorage.getItem('friganso_fila_zap') || ''; } catch (e) { return ''; } });
 
             const salvar = (itens) => { try { window.localStorage.setItem(FILA_ATIVA, JSON.stringify(itens)); } catch (e) {} };
+            const aplicarPedidos = (pedidos) => {
+                if (!Array.isArray(pedidos) || !pedidos.length) return false;
+                const itens = pedidos.map(p => ({ pedido: p, feito: false, texto: '' }));
+                setFila(itens); salvar(itens);
+                return true;
+            };
+            // 📨 Pede a fila pra extensão. Cobre o caso de o usuário ter somado pedidos e NÃO ter tocado
+            // em "Finalizar" (a fila fica guardada na extensão), e também a corrida de tempo em que a
+            // tela montava antes da entrega automática chegar.
+            const pedirFilaPraExtensao = () => {
+                setBuscando(true);
+                try { window.postMessage({ source: 'friganso-app', type: 'PEDIR_FILA' }, '*'); } catch (e) {}
+                setTimeout(() => setBuscando(false), 2500);
+            };
 
             useEffect(() => {
                 // fila NOVA chegando da extensão? senão, retoma a que já estava em andamento
@@ -6296,13 +6315,27 @@
                     const raw = window.sessionStorage.getItem('friganso_fila_json');
                     if (raw) { window.sessionStorage.removeItem('friganso_fila_json'); nova = JSON.parse(raw); }
                 } catch (e) {}
-                if (Array.isArray(nova) && nova.length) {
-                    const itens = nova.map(p => ({ pedido: p, feito: false, texto: '' }));
-                    setFila(itens); salvar(itens);
-                } else {
-                    try { setFila(JSON.parse(window.localStorage.getItem(FILA_ATIVA) || '[]')); } catch (e) { setFila([]); }
+                let tinha = false;
+                if (Array.isArray(nova) && nova.length) { aplicarPedidos(nova); tinha = true; }
+                else {
+                    let salva = [];
+                    try { salva = JSON.parse(window.localStorage.getItem(FILA_ATIVA) || '[]'); } catch (e) {}
+                    setFila(salva);
+                    tinha = salva.length > 0;
                 }
                 try { window.localStorage.removeItem(FILA_ATUAL); } catch (e) {}
+
+                // fica ouvindo: se a entrega da extensão chegar depois da tela montar, entra assim mesmo
+                const onMsg = (e) => {
+                    const d = e.data;
+                    if (!d || d.source !== 'friganso-ext') return;
+                    if (d.type === 'FILA_PENDENTE' && d.pedidos) { aplicarPedidos(d.pedidos); setBuscando(false); }
+                    if (d.type === 'FILA_VAZIA') { setBuscando(false); }
+                };
+                window.addEventListener('message', onMsg);
+                // nada em mãos? pergunta pra extensão se sobrou fila lá
+                if (!tinha) setTimeout(pedirFilaPraExtensao, 150);
+                return () => window.removeEventListener('message', onMsg);
             }, []);
 
             useEffect(() => { try { window.localStorage.setItem('friganso_fila_zap', zap); } catch (e) {} }, [zap]);
@@ -6368,6 +6401,14 @@
                             <p className="text-sm text-slate-500 mt-2 max-w-md mx-auto">
                                 No site da Friganso, lance o pedido e toque em <b>"📋 Somar pedido à fila"</b>. Faça isso em quantos
                                 pedidos quiser — quando terminar, toque em <b>"✅ Finalizar e abrir o app"</b> e eles aparecem aqui.
+                            </p>
+                            <button onClick={pedirFilaPraExtensao} disabled={buscando}
+                                className="mt-5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold px-5 py-2.5 rounded-xl text-sm transition-colors">
+                                {buscando ? 'Procurando...' : '🔄 Buscar fila que ficou no site'}
+                            </button>
+                            <p className="text-xs text-slate-400 mt-3 max-w-md mx-auto">
+                                Somou os pedidos mas esqueceu de tocar em "Finalizar"? Eles continuam guardados na extensão —
+                                esse botão traz eles pra cá. (Só funciona com a extensão instalada e nesta aba do app.)
                             </p>
                         </div>
                     )}
