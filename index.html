@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 174;
+        const APP_BUILD_VERSION = 175;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -5454,6 +5454,11 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.13.1', data: '04/08/2026', areas: ['site', 'app'], itens: [
+                '☁️ A Fila de Pedidos agora SINCRONIZA entre o computador e o celular. Monte a fila no PC (que é onde roda a extensão do SPAmov) e ela aparece sozinha no aplicativo, pra você mandar o WhatsApp do celular',
+                'Vale nos dois sentidos: copiou um pedido no celular, ele já aparece marcado com ✓ no PC. Limpar ou tirar um pedido da fila também vale nos dois',
+                'A fila continua zerando às 19h, agora também na nuvem',
+            ]},
             { versao: '2.13.0', data: '04/08/2026', areas: ['site'], itens: [
                 '📋 A Fila agora resolve TUDO numa tela só: a lista dos pedidos de um lado e o resumo pronto do outro. Toca no pedido, o texto aparece na hora, você copia e toca no próximo — sem ficar trocando de aba',
                 'Depois de copiar, ele já pula sozinho pro próximo pedido que falta conferir',
@@ -6366,11 +6371,31 @@
             const [selecionado, setSelecionado] = useState(null);
             const [limpouOntem, setLimpouOntem] = useState(0);
             const [buscando, setBuscando] = useState(false);
+            // ⏱️ quando ESTA fila nasceu — é o que decide o corte das 19h. Precisa sobreviver a cada
+            // "copiar"/"remover": se fosse reiniciado a cada gravação, a fila nunca expiraria.
+            const criadaRef = useRef(Date.now());
             const [zap, setZap] = useState(() => { try { return window.localStorage.getItem('friganso_fila_zap') || ''; } catch (e) { return ''; } });
             const [zapDestino, setZapDestino] = useState(lerZapDestino);
 
+            // ☁️ A fila vive no Firestore pra aparecer nos DOIS lugares: ele monta no PC (é lá que roda
+            // a extensão do SPAmov) mas manda o WhatsApp pelo celular. O localStorage vira só um cache
+            // local, pra tela não ficar vazia enquanto a nuvem responde.
+            // Guardo como STRING JSON de propósito: a fila é um array de mapas com array dentro, e
+            // serializar evita qualquer briga com os tipos aceitos pelo Firestore.
+            const filaDoc = () => db.collection('system_data').doc('fila_' + ((user && user.code) ? String(user.code) : 'geral'));
+            const ultimaGravacaoRef = useRef(0);
+            const salvarNuvem = (itens, criadaEm) => {
+                const agora = Date.now();
+                ultimaGravacaoRef.current = agora;
+                try { filaDoc().set({ json: JSON.stringify(itens || []), criadaEm: criadaEm || agora, atualizadoEm: agora }, { merge: true }); } catch (e) {}
+            };
             // guarda junto o momento em que a fila foi criada, pra saber se ela é de antes das 19h
-            const salvar = (itens) => { try { window.localStorage.setItem(FILA_ATIVA, JSON.stringify({ criadaEm: Date.now(), itens: itens })); } catch (e) {} };
+            const salvar = (itens, opts) => {
+                if (opts && opts.novaFila) criadaRef.current = Date.now();   // só ao RECEBER uma fila nova
+                const criadaEm = criadaRef.current;
+                try { window.localStorage.setItem(FILA_ATIVA, JSON.stringify({ criadaEm: criadaEm, itens: itens })); } catch (e) {}
+                if (!(opts && opts.soLocal)) salvarNuvem(itens, criadaEm);
+            };
             const carregar = () => {
                 let bruto = null;
                 try { bruto = JSON.parse(window.localStorage.getItem(FILA_ATIVA) || 'null'); } catch (e) { return { itens: [], expirou: 0 }; }
@@ -6382,12 +6407,13 @@
                     try { window.localStorage.removeItem(FILA_ATIVA); } catch (e) {}
                     return { itens: [], expirou: itens.length };
                 }
+                if (bruto.criadaEm) criadaRef.current = bruto.criadaEm;
                 return { itens: itens, expirou: 0 };
             };
             const aplicarPedidos = (pedidos) => {
                 if (!Array.isArray(pedidos) || !pedidos.length) return false;
                 const itens = pedidos.map(p => ({ pedido: p, feito: false, texto: '' }));
-                setFila(itens); salvar(itens); setSelecionado(0);
+                setFila(itens); salvar(itens, { novaFila: true }); setSelecionado(0);
                 return true;
             };
             // 📨 Pede a fila pra extensão. Cobre o caso de o usuário ter somado pedidos e NÃO ter tocado
@@ -6427,7 +6453,36 @@
                 window.addEventListener('message', onMsg);
                 // nada em mãos? pergunta pra extensão se sobrou fila lá
                 if (!tinha) setTimeout(pedirFilaPraExtensao, 150);
-                return () => window.removeEventListener('message', onMsg);
+
+                // ☁️ Escuta a fila na nuvem — é o que faz o que foi montado no PC aparecer no celular.
+                // `hasPendingWrites` filtra o eco da nossa própria gravação, senão a tela se
+                // sobrescreveria sozinha logo depois de cada "copiar".
+                let unsubNuvem = () => {};
+                try {
+                    unsubNuvem = filaDoc().onSnapshot(d => {
+                        if (!d || !d.exists) return;
+                        if (d.metadata && d.metadata.hasPendingWrites) return;
+                        const dados = d.data() || {};
+                        let itensNuvem = [];
+                        try { itensNuvem = JSON.parse(dados.json || '[]'); } catch (e) { return; }
+                        // fila de antes das 19h não entra (mesma regra do cache local)
+                        if (dados.criadaEm && dados.criadaEm < ultimoCorteFila()) return;
+                        // 🕰️ Só aceita o que vier da nuvem se for MAIS NOVO que a última gravação feita
+                        // aqui. Assim "Limpar fila" no PC também limpa no celular (a nuvem é mais nova),
+                        // mas uma fila que acabou de chegar da extensão neste aparelho não é apagada por
+                        // um estado velho que ainda estava na nuvem.
+                        if (dados.atualizadoEm && dados.atualizadoEm <= ultimaGravacaoRef.current) return;
+                        if (dados.criadaEm) criadaRef.current = dados.criadaEm;
+                        setFila(prev => {
+                            if (JSON.stringify(prev) === JSON.stringify(itensNuvem)) return prev;
+                            try { window.localStorage.setItem(FILA_ATIVA, JSON.stringify({ criadaEm: criadaRef.current, itens: itensNuvem })); } catch (e) {}
+                            return itensNuvem;
+                        });
+                        setSelecionado(s => (s === null && itensNuvem.length) ? 0 : s);
+                    }, () => {});
+                } catch (e) {}
+
+                return () => { window.removeEventListener('message', onMsg); unsubNuvem(); };
             }, []);
 
             useEffect(() => { try { window.localStorage.setItem('friganso_fila_zap', zap); } catch (e) {} }, [zap]);
