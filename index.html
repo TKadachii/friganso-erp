@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 173;
+        const APP_BUILD_VERSION = 174;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -525,6 +525,42 @@
             return 'outro';
         };
         const LABEL_CONDICAO = { avista: 'À Vista', cartao: 'Cartão', prazo: 'A Prazo', parcelado: 'Prazo Parcelado', outro: 'Outra' };
+
+        // 💳 Preço do item conforme a condição de pagamento. Cartão usa o preço de cartão (sem
+        // desconto), Parcelado usa o teto (SEM desconto), e o resto (à vista / prazo simples) pode ter
+        // até 3% de desconto. Função PURA — só depende dos argumentos.
+        // ⚠️ Vive aqui no escopo global de propósito: o Resumo de Pedido e a Fila de Pedidos precisam
+        // chegar EXATAMENTE no mesmo preço. Duplicar essa conta é garantir que as duas telas divirjam
+        // no dia em que a regra mudar.
+        const precoParaCondicao = (p, condicao) => {
+            const cat = normalizarCondicaoPagamento(condicao);
+            if (cat === 'parcelado') return Number(p.originalPrice) || 0;
+            if (cat === 'cartao') return p.precoCartao != null ? Number(p.precoCartao) : (Number(p.originalPrice) || 0);
+            const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
+            return unitFinalPrice || 0;
+        };
+
+        // 📝 Texto do resumo pro WhatsApp. Também global e pelo mesmo motivo: é ele que o Resumo de
+        // Pedido manda e é ele que a Fila mostra — tem que ser o mesmo texto, letra por letra.
+        // `itens` = [{ code, qty, precoFallback }]; `overrides` carrega o que o vendedor editou na mão
+        // no Resumo (preço e quantidade), que na Fila simplesmente vem vazio.
+        const montarTextoResumo = ({ clienteCode, spamov, condicao, itens }, products, overrides) => {
+            const precos = (overrides && overrides.precos) || {};
+            const qtds = (overrides && overrides.qtds) || {};
+            let txt = '';
+            if (clienteCode) txt += `ID: ${clienteCode}\n`;
+            if (spamov) txt += `SPAmov: ${spamov}\n`;
+            if (condicao) txt += `Condição: ${condicao}\n`;
+            if (txt !== '') txt += '\n';
+            (itens || []).forEach(it => {
+                const rp = (products || []).find(p => String(p.code) === String(it.code));
+                const calculado = rp ? precoParaCondicao(rp, condicao) : (Number(it.precoFallback) || 0);
+                const preco = precos[it.code] !== undefined ? precos[it.code] : calculado;
+                const qty = qtds[it.code] !== undefined ? qtds[it.code] : it.qty;
+                txt += `${it.code} - ${qty}x - ${formatPrice(preco)}\n`;
+            });
+            return txt.trim();
+        };
         // Opções pro seletor manual — os textos batem com o que o SPAmov usa (pra normalizarCondicaoPagamento
         // reconhecer igualzinho), + "Prazo Parcelado" que só existe aqui (arranjo manual do vendedor).
         const OPCOES_CONDICAO_MANUAL = ['À Vista / PIX', 'Cartao Credito', '07 Dias', '14 Dias', '21 Dias', '28 Dias', '30 Dias', '35 Dias', '45 Dias', 'Prazo Parcelado'];
@@ -2548,13 +2584,9 @@
             // quanto com o texto cru vindo do SPAmov (ex.: "7/14/21 Dias" = parcelado, "21 Dias" = prazo
             // simples). Cartão usa o preço de cartão (sem desconto), Parcelado usa o teto (SEM desconto),
             // e tudo o mais (à vista / a prazo simples) pode ter até 3% de desconto, igual sempre.
-            const precoParaCondicaoMp = (p, condicao) => {
-                const cat = normalizarCondicaoPagamento(condicao);
-                if (cat === 'parcelado') return Number(p.originalPrice) || 0;
-                if (cat === 'cartao') return p.precoCartao != null ? Number(p.precoCartao) : (Number(p.originalPrice) || 0);
-                const { unitFinalPrice } = checkDiscountRules(p.code, p.name, p.originalPrice);
-                return unitFinalPrice || 0;
-            };
+            // agora mora no escopo global (precoParaCondicao), pra Fila e Resumo usarem a MESMA conta.
+            // O apelido fica pra não mexer nos vários pontos desta tela que já chamavam por este nome.
+            const precoParaCondicaoMp = precoParaCondicao;
             const addMpItem = (p) => {
                 const preco = precoParaCondicaoMp(p, mpCondicao);
                 setMpItens(prev => {
@@ -2831,19 +2863,21 @@
                 return { ...it, name: rp.name, unitFinalPrice: unitFinalPrice, naTabela: true, valorKg: unitFinalPrice || it.precoKg || 0 };
             };
 
+            // Delega pro montarTextoResumo global — a MESMA função que a Fila de Pedidos usa, pra não
+            // existirem duas contas de preço que possam divergir. O que é próprio desta tela (preço e
+            // quantidade editados na mão) vai como overrides.
             const generateWhatsAppText = () => {
                 if (!orderSummary) return '';
-                let txt = '';
-                if (orderSummary.customerCode) txt += `ID: ${orderSummary.customerCode}\n`;
-                if (orderSummary.spamov) txt += `SPAmov: ${orderSummary.spamov}\n`;
-                if (condicaoAtual) txt += `Condição: ${condicaoAtual}\n`;
-                if (txt !== '') txt += '\n';
-                orderSummary.items.forEach(it0 => {
-                    const item = itemAtual(it0); // nome+preço da Tabela do Dia, na hora
-                    const price = editedPrices[item.code] !== undefined ? editedPrices[item.code] : item.unitFinalPrice;
-                    txt += `${item.code} - ${getQty(item)}x - ${formatPrice(price)}\n`;
-                });
-                return txt.trim();
+                return montarTextoResumo({
+                    clienteCode: orderSummary.customerCode,
+                    spamov: orderSummary.spamov,
+                    condicao: condicaoAtual,
+                    itens: (orderSummary.items || []).map(it => ({
+                        code: it.code,
+                        qty: it.quantity,
+                        precoFallback: it.unitFinalPrice || 0   // igual ao que o itemAtual devolvia fora da tabela
+                    }))
+                }, products, { precos: editedPrices, qtds: editedQty });
             };
 
             return (
@@ -5420,6 +5454,13 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.13.0', data: '04/08/2026', areas: ['site'], itens: [
+                '📋 A Fila agora resolve TUDO numa tela só: a lista dos pedidos de um lado e o resumo pronto do outro. Toca no pedido, o texto aparece na hora, você copia e toca no próximo — sem ficar trocando de aba',
+                'Depois de copiar, ele já pula sozinho pro próximo pedido que falta conferir',
+                'Copiar aqui salva a venda na ficha do cliente igual o Resumo sempre fez — o histórico, o Painel e o Radar continuam recebendo tudo',
+                'Precisa mudar preço ou quantidade de algum item? O botão "Editar" abre aquele pedido no Resumo completo, como antes',
+                '🕖 A fila ZERA TODO DIA ÀS 19h. Pedido de ontem não fica mais misturado com o de hoje — quando isso acontece, aparece um aviso dizendo quantos foram limpos',
+            ]},
             { versao: '2.12.2', data: '04/08/2026', areas: ['site'], itens: [
                 '💬 Agora você escolhe se o WhatsApp abre no APLICATIVO do PC ou no NAVEGADOR (WhatsApp Web). A opção fica na Fila de Pedidos, é lembrada e vale também pros Disparos',
                 'Antes o app usava links "wa.me", que são ambíguos: o Windows decidia sozinho e às vezes ainda passava por uma tela de "Continuar para o chat". Escolhendo Aplicativo ou Navegador, vai direto pro lugar certo',
@@ -6311,17 +6352,42 @@
         // extensão vai somando numa fila e entrega tudo aqui. Nesta tela ele abre um por um no Resumo
         // (que é quem sabe aplicar preço/desconto de verdade), confere e copia. Cada resumo copiado
         // fica guardado aqui pra, no fim, sair pelo balão do WhatsApp — uma mensagem por pedido.
-        const FilaScreen = ({ showMessage, setActiveRoute }) => {
+        // 🕖 A fila é do DIA DE TRABALHO, que vira às 19h. Sem isso, pedido de ontem ficaria misturado
+        // com o de hoje e o vendedor se confunde na hora de mandar. Devolve o horário do último corte
+        // que já passou: se ainda não deu 19h, o corte válido é o de ontem.
+        const ultimoCorteFila = () => {
+            const agora = new Date();
+            const corte = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate(), 19, 0, 0, 0);
+            if (agora.getTime() < corte.getTime()) corte.setDate(corte.getDate() - 1);
+            return corte.getTime();
+        };
+        const FilaScreen = ({ showMessage, setActiveRoute, products, clients, user }) => {
             const [fila, setFila] = useState([]);
+            const [selecionado, setSelecionado] = useState(null);
+            const [limpouOntem, setLimpouOntem] = useState(0);
             const [buscando, setBuscando] = useState(false);
             const [zap, setZap] = useState(() => { try { return window.localStorage.getItem('friganso_fila_zap') || ''; } catch (e) { return ''; } });
             const [zapDestino, setZapDestino] = useState(lerZapDestino);
 
-            const salvar = (itens) => { try { window.localStorage.setItem(FILA_ATIVA, JSON.stringify(itens)); } catch (e) {} };
+            // guarda junto o momento em que a fila foi criada, pra saber se ela é de antes das 19h
+            const salvar = (itens) => { try { window.localStorage.setItem(FILA_ATIVA, JSON.stringify({ criadaEm: Date.now(), itens: itens })); } catch (e) {} };
+            const carregar = () => {
+                let bruto = null;
+                try { bruto = JSON.parse(window.localStorage.getItem(FILA_ATIVA) || 'null'); } catch (e) { return { itens: [], expirou: 0 }; }
+                if (!bruto) return { itens: [], expirou: 0 };
+                // formato antigo (array puro) — trata como fila sem data, ou seja, do dia
+                if (Array.isArray(bruto)) return { itens: bruto, expirou: 0 };
+                const itens = bruto.itens || [];
+                if (bruto.criadaEm && bruto.criadaEm < ultimoCorteFila()) {
+                    try { window.localStorage.removeItem(FILA_ATIVA); } catch (e) {}
+                    return { itens: [], expirou: itens.length };
+                }
+                return { itens: itens, expirou: 0 };
+            };
             const aplicarPedidos = (pedidos) => {
                 if (!Array.isArray(pedidos) || !pedidos.length) return false;
                 const itens = pedidos.map(p => ({ pedido: p, feito: false, texto: '' }));
-                setFila(itens); salvar(itens);
+                setFila(itens); salvar(itens); setSelecionado(0);
                 return true;
             };
             // 📨 Pede a fila pra extensão. Cobre o caso de o usuário ter somado pedidos e NÃO ter tocado
@@ -6343,10 +6409,11 @@
                 let tinha = false;
                 if (Array.isArray(nova) && nova.length) { aplicarPedidos(nova); tinha = true; }
                 else {
-                    let salva = [];
-                    try { salva = JSON.parse(window.localStorage.getItem(FILA_ATIVA) || '[]'); } catch (e) {}
-                    setFila(salva);
-                    tinha = salva.length > 0;
+                    const { itens, expirou } = carregar();
+                    setFila(itens);
+                    if (expirou) setLimpouOntem(expirou);
+                    if (itens.length) setSelecionado(0);
+                    tinha = itens.length > 0;
                 }
                 try { window.localStorage.removeItem(FILA_ATUAL); } catch (e) {}
 
@@ -6407,8 +6474,41 @@
                 }).catch(() => showMessage('Não consegui ativar o balão.', 'error'));
             };
 
+            // 📝 O texto sai da MESMA função que o Resumo de Pedido usa (montarTextoResumo global),
+            // com os preços da Tabela do Dia e a condição de pagamento do próprio pedido.
+            const textoDe = (f) => {
+                if (!f) return '';
+                return montarTextoResumo({
+                    clienteCode: f.pedido.cliente,
+                    spamov: f.pedido.spamov,
+                    condicao: f.pedido.condicaoPagamento,
+                    itens: (f.pedido.itens || []).map(it => ({ code: it.code, qty: it.qty, precoFallback: Number(it.valorUnit) || 0 }))
+                }, products);
+            };
+            // Copiar aqui faz exatamente o que o "Copiar Resumo" fazia: copia E grava na ficha do
+            // cliente. Sem isso a venda deixaria de entrar no histórico e o Radar/Painel ficariam cegos.
+            const copiarEConfirmar = (i) => {
+                const f = fila[i];
+                if (!f) return;
+                const txt = textoDe(f);
+                navigator.clipboard.writeText(txt);
+                try {
+                    const itens = (f.pedido.itens || []).map(it => {
+                        const rp = (products || []).find(p => String(p.code) === String(it.code));
+                        const preco = rp ? precoParaCondicao(rp, f.pedido.condicaoPagamento) : (Number(it.valorUnit) || 0);
+                        return { code: String(it.code), name: rp ? rp.name : (it.nome || ('Produto ' + it.code)), qty: Number(it.qty) || 1, peso: Number(it.peso) || 0, valorKg: preco };
+                    });
+                    if (f.pedido.cliente) registrarCompra(f.pedido.cliente, itens, null, 'fila', clients, user, f.pedido.spamov, f.pedido.condicaoPagamento);
+                } catch (e) {}
+                const nova = fila.map((x, k) => k === i ? { ...x, feito: true, texto: txt } : x);
+                setFila(nova); salvar(nova);
+                // já pula pro próximo que falta conferir — é o ritmo de quem tem 10 pedidos pra mandar
+                const prox = nova.findIndex((x, k) => k > i && !x.feito);
+                setSelecionado(prox >= 0 ? prox : i);
+                showMessage('Copiado e salvo na ficha do cliente! 🧾', 'success');
+            };
             const copiarUm = (f) => {
-                navigator.clipboard.writeText(f.texto);
+                navigator.clipboard.writeText(f.texto || textoDe(f));
                 showMessage('Resumo copiado!', 'success');
             };
             // 💬 No PC não existe balão: abre o WhatsApp direto, já com o texto do pedido, respeitando
@@ -6416,17 +6516,25 @@
             // ignora o ?text= quando a conversa ainda não estava aberta — assim é só colar.
             const abrirNoZap = (f) => {
                 const tel = waNum(zap);
-                if (!tel) { showMessage('Preencha o número do WhatsApp primeiro.', 'error'); return; }
-                try { navigator.clipboard.writeText(f.texto); } catch (e) {}
-                window.open(zapUrl(tel, f.texto), '_blank');
+                if (!tel) { showMessage('Preencha o número do WhatsApp lá embaixo primeiro.', 'error'); return; }
+                const txt = f.texto || textoDe(f);
+                try { navigator.clipboard.writeText(txt); } catch (e) {}
+                window.open(zapUrl(tel, txt), '_blank');
             };
 
             return (
                 <div className="animate-in fade-in space-y-6">
                     <div>
                         <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>📋</span> Fila de Pedidos</h2>
-                        <p className="text-slate-500 text-sm">Os pedidos que você leu no SPAmov, um embaixo do outro. Abra cada um, confira e copie.</p>
+                        <p className="text-slate-500 text-sm">Toque no pedido, confira o resumo ao lado e copie. A fila zera todo dia às 19h.</p>
                     </div>
+
+                    {limpouOntem > 0 && (
+                        <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 text-slate-600 text-sm">
+                            🕖 {limpouOntem} pedido(s) do dia anterior foram limpos automaticamente — a fila zera às 19h pra não misturar
+                            com os de hoje. As vendas que você já tinha copiado continuam salvas na ficha dos clientes.
+                        </div>
+                    )}
 
                     {fila.length === 0 && (
                         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-10 text-center">
@@ -6456,31 +6564,58 @@
                                     </p>
                                     <button onClick={limparFila} className="text-xs font-bold text-slate-500 hover:text-rose-600 transition-colors">Limpar fila</button>
                                 </div>
-                                <div className="divide-y divide-slate-100">
-                                    {fila.map((f, i) => (
-                                        <div key={i} className={`p-4 flex items-center gap-3 ${f.feito ? 'bg-emerald-50/50' : ''}`}>
-                                            <span className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-black flex-shrink-0 ${f.feito ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                                                {f.feito ? '✓' : i + 1}
-                                            </span>
-                                            <div className="min-w-0 flex-1">
-                                                <p className="font-bold text-slate-800 text-sm truncate">
-                                                    {f.pedido.clienteNome || `Cliente ${f.pedido.cliente || '?'}`}
-                                                </p>
-                                                <p className="text-xs text-slate-500 truncate">
-                                                    {f.pedido.spamov ? `SPAmov ${f.pedido.spamov} · ` : ''}{(f.pedido.itens || []).length} item(ns)
-                                                    {f.pedido.condicaoPagamento ? ` · ${f.pedido.condicaoPagamento}` : ''}
-                                                </p>
-                                            </div>
-                                            <div className="flex gap-1.5 flex-shrink-0">
-                                                {f.feito && <button onClick={() => copiarUm(f)} title="Copiar de novo" className="bg-slate-100 hover:bg-slate-200 text-slate-600 h-9 px-3 rounded-lg text-xs font-bold transition-colors">Copiar</button>}
-                                                {f.feito && !isCapacitor && <button onClick={() => abrirNoZap(f)} title="Abrir no WhatsApp com este resumo" className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 h-9 w-9 rounded-lg flex items-center justify-center transition-colors"><div className="h-4 w-4"><IconWhatsApp/></div></button>}
-                                                <button onClick={() => abrirNoResumo(i)} className={`h-9 px-3 rounded-lg text-xs font-bold transition-colors ${f.feito ? 'bg-slate-100 hover:bg-slate-200 text-slate-600' : 'bg-rose-600 hover:bg-rose-700 text-white'}`}>
-                                                    {f.feito ? 'Rever' : 'Conferir'}
-                                                </button>
-                                                <button onClick={() => removerDaFila(i)} title="Tirar da fila" className="bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 h-9 w-9 rounded-lg flex items-center justify-center transition-colors">✕</button>
-                                            </div>
-                                        </div>
-                                    ))}
+                                {/* 👈 lista à esquerda, texto à direita — tudo na MESMA tela, sem ir e voltar */}
+                                <div className="grid grid-cols-1 lg:grid-cols-2">
+                                    <div className="divide-y divide-slate-100 border-r border-slate-100 max-h-[520px] overflow-y-auto">
+                                        {fila.map((f, i) => (
+                                            <button key={i} onClick={() => setSelecionado(i)}
+                                                className={`w-full text-left p-4 flex items-center gap-3 transition-colors ${selecionado === i ? 'bg-rose-50' : (f.feito ? 'bg-emerald-50/40 hover:bg-emerald-50' : 'hover:bg-slate-50')}`}>
+                                                <span className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-black flex-shrink-0 ${f.feito ? 'bg-emerald-500 text-white' : (selecionado === i ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-500')}`}>
+                                                    {f.feito ? '✓' : i + 1}
+                                                </span>
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="font-bold text-slate-800 text-sm truncate">
+                                                        {f.pedido.clienteNome || `Cliente ${f.pedido.cliente || '?'}`}
+                                                    </p>
+                                                    <p className="text-xs text-slate-500 truncate">
+                                                        {f.pedido.spamov ? `SPAmov ${f.pedido.spamov} · ` : ''}{(f.pedido.itens || []).length} item(ns)
+                                                        {f.pedido.condicaoPagamento ? ` · ${f.pedido.condicaoPagamento}` : ''}
+                                                    </p>
+                                                </div>
+                                                <span onClick={(e) => { e.stopPropagation(); removerDaFila(i); }} title="Tirar da fila"
+                                                    className="text-slate-300 hover:text-rose-600 h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors">✕</span>
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    {/* Painel do resumo — o texto já pronto, sem trocar de tela */}
+                                    <div className="p-4 bg-slate-50 flex flex-col">
+                                        {selecionado === null || !fila[selecionado] ? (
+                                            <p className="text-sm text-slate-400 text-center my-auto py-10">Toque num pedido da lista pra ver o resumo aqui.</p>
+                                        ) : (
+                                            <>
+                                                <div className="flex items-center justify-between gap-2 mb-2">
+                                                    <p className="font-bold text-slate-700 text-sm truncate">
+                                                        {fila[selecionado].pedido.clienteNome || `Cliente ${fila[selecionado].pedido.cliente || '?'}`}
+                                                    </p>
+                                                    {fila[selecionado].feito && <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full flex-shrink-0">já copiado</span>}
+                                                </div>
+                                                <div className="bg-[#e1ffc7] p-3 rounded-xl border border-[#d3f4b8] flex-1 overflow-y-auto max-h-[300px]">
+                                                    <pre className="font-mono text-sm whitespace-pre-wrap text-slate-800 font-medium">{textoDe(fila[selecionado])}</pre>
+                                                </div>
+                                                <div className="flex flex-wrap gap-2 mt-3">
+                                                    <button onClick={() => copiarEConfirmar(selecionado)} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition-colors">
+                                                        {fila[selecionado].feito ? 'Copiar de novo' : '📋 Copiar e marcar'}
+                                                    </button>
+                                                    {!isCapacitor && (
+                                                        <button onClick={() => abrirNoZap(fila[selecionado])} title="Abrir no WhatsApp" className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 px-3 py-2.5 rounded-xl flex items-center justify-center transition-colors"><div className="h-4 w-4"><IconWhatsApp/></div></button>
+                                                    )}
+                                                    <button onClick={() => abrirNoResumo(selecionado)} title="Abrir no Resumo pra editar preço ou quantidade" className="bg-white border border-slate-300 hover:bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-bold transition-colors">Editar</button>
+                                                </div>
+                                                <p className="text-[11px] text-slate-400 mt-2">Precisa mudar preço ou quantidade? Use o <b>Editar</b> — ele abre este pedido no Resumo completo.</p>
+                                            </>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 
@@ -8629,7 +8764,7 @@
                     case 'pdf': return <PdfScreen user={user} products={products} setProducts={setProducts} showMessage={showMessage} listaNegra={listaNegra} toggleListaNegra={toggleListaNegra} valorMaximo={valorMaximo} setValorMaximoProduto={setValorMaximoProduto} />;
                     case 'cardapio': return <CardapioScreen products={products} produtoFotos={produtoFotos} showMessage={showMessage} catalogoContatos={catalogoContatos} salvarCatalogoContatos={salvarCatalogoContatos} />;
                     case 'resumo': return <ResumoScreen key={resumoNonce} products={products} showMessage={showMessage} clients={clients} user={user} setActiveRoute={setActiveRoute} />;
-                    case 'fila': return <FilaScreen showMessage={showMessage} setActiveRoute={setActiveRoute} />;
+                    case 'fila': return <FilaScreen showMessage={showMessage} setActiveRoute={setActiveRoute} products={products} clients={clients} user={user} />;
                     case 'historico': return <HistoricoScreen user={user} showMessage={showMessage} />;
                     case 'importarVendas': return <RelatorioVendasScreen user={user} clients={clients} showMessage={showMessage} />;
                     case 'orcamentos': return <OrcamentosScreen products={products} showMessage={showMessage} activeRoute={activeRoute} listaNegra={listaNegra} />;
