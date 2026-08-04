@@ -228,6 +228,31 @@ diagnósticos reais completos (737-741 produtos) antes de publicar. Lição: qua
 "achar a coisa mais próxima de X" falha repetidas vezes sem explicação clara, e a ORDEM dos elementos é
 previsível, prefira extrair por ORDEM em vez de por DISTÂNCIA.
 
+## 👥 Cadastro de clientes lido do SPAmov (2026-08-04, v2.10.0)
+Botão **"👥 Atualizar Clientes do Site"** na tela **Procura de Pessoas** (`system.spadim`), mesmo
+padrão da Lista de Preços: `extrairClientes()` → `chrome.storage` → `APP_URL + "?clientes=pendente"`
+→ ponte posta `CLIENTES_PENDENTE` → `sessionStorage.friganso_clientes_json` → rota `clients`.
+
+Traz nome, CNPJ/CPF, endereço completo, telefone, status e **limite/saldo de crédito**.
+
+- **Mapeamento por X EXATO** (folga de 2px) contra o X da coluna do cabeçalho — nessa tela o
+  alinhamento é perfeito (conferido: 788 células, 60 clientes, zero desalinhamento), então NÃO usa
+  "achar o mais próximo". O cabeçalho é achado por CONTEÚDO ("Nome / Razão Social" + "CNPF / CNPJ"),
+  então sobrevive a reordenar/trocar as colunas do relatório.
+- O ID vem como `[j] 48016` (`j` = jurídica, `f` = física) — o mesmo formato que a importação por
+  planilha do site já entendia.
+- No site cai no **mesmo preview** da planilha (`importPreview` na `ClientsScreen`), com
+  `importOrigem: 'spamov'`. Quem já existe é **completado**, não ignorado: preenche só o que está
+  VAZIO (cnpj/phone/address) e atualiza limite/saldo/status, que são do SPAmov por natureza. Nunca
+  sobrescreve o que foi editado à mão. A importação por planilha segue com o comportamento antigo.
+- ⚠️ O preview **espera o `onSnapshot` do Firestore responder** (`clientesCarregados`) antes de
+  montar — senão todo mundo apareceria como "novo" e criaria cliente duplicado.
+- ⚠️ A tela **não informa o total** de pessoas. O botão avisa quando leu exatamente uma página cheia
+  começando do 1, sugerindo aumentar "Pessoas por Página" e procurar de novo.
+- Dado sujo conhecido: o município vem escrito de formas diferentes no SPAmov ("Armação dos Búzios",
+  "Armacao dos Buzios", "Armação dos Buzios"; "São Pedro da Aldeia" vs "sao Pedro da Aldeia").
+  Guardado **como veio** — se um dia for agrupar/filtrar por cidade, normalizar na hora de exibir.
+
 ## ⚠️ Lição aprendida (2026-08-03): posição X FIXA quebra a leitura — ancore numa coluna vizinha
 Continuação direta da lição de 04/07. `extrairListaPrecos()` achava o nome do produto com
 `c.x >= 100` — número fixo herdado de um layout antigo. Na tela real de Lista de Preços o **código
