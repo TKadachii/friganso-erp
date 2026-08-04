@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 168;
+        const APP_BUILD_VERSION = 169;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -1136,7 +1136,7 @@
             return { desde: null, ate: null, label: 'Todos' }; // modo === 0 (todos)
         };
 
-        const DashboardScreen = ({ user, clients, products }) => {
+        const DashboardScreen = ({ user, clients, products, setActiveRoute }) => {
             const [purchases, setPurchases] = useState([]);
             const [versions, setVersions] = useState([]);
             const [periodo, setPeriodo] = useState('mes'); // 'dia' | 'semana' | 'mes' | 90 | 365
@@ -1217,6 +1217,64 @@
                 </div>
             );
 
+            // ===== 👥 MEUS CLIENTES (mesma leitura do Radar, resumida aqui no painel) =====
+            // O usuário olha o painel, não o Radar — então o essencial do controle de cliente vem pra cá:
+            // quantos são, quem comprou este mês, quem ficou fora do mês passado e quem chamar hoje.
+            const crm = useMemo(() => {
+                const DIA = 24 * 60 * 60 * 1000;
+                const nc = (v) => String(v == null ? '' : v).replace(/[^0-9a-z]/gi, '').replace(/^0+/, '').toLowerCase();
+                const porCli = new Map();
+                purchases.forEach(p => {
+                    const k = nc(p.clienteCode);
+                    if (!k) return;
+                    if (!porCli.has(k)) porCli.set(k, []);
+                    porCli.get(k).push(p);
+                });
+                const agora = Date.now(), ag = new Date();
+                const iniMes = new Date(ag.getFullYear(), ag.getMonth(), 1).getTime();
+                const iniMesPass = new Date(ag.getFullYear(), ag.getMonth() - 1, 1).getTime();
+
+                const fichas = clients.map(c => {
+                    const ps = (porCli.get(nc(c.code)) || []).filter(p => p.ts).sort((a, b) => b.ts - a.ts);
+                    if (!ps.length) return { cliente: c, compras: 0, diasSem: null, ritmo: null, atraso: 0, ultima: null, top: null, comprouEsteMes: false, comprouMesPassado: false };
+                    const ultima = ps[0];
+                    const diasSem = Math.max(0, Math.floor((agora - ultima.ts) / DIA));
+                    const ritmo = ps.length >= 2 ? Math.max(1, Math.round(((ultima.ts - ps[ps.length - 1].ts) / DIA) / (ps.length - 1))) : null;
+                    const cont = new Map();
+                    ps.forEach(p => (p.itens || []).forEach(i => {
+                        const k = String(i.code);
+                        const at = cont.get(k) || { code: k, nome: i.name || ('Produto ' + i.code), vezes: 0 };
+                        at.vezes++; cont.set(k, at);
+                    }));
+                    const top = [...cont.values()].sort((a, b) => b.vezes - a.vezes)[0] || null;
+                    return {
+                        cliente: c, compras: ps.length, diasSem: diasSem, ritmo: ritmo,
+                        atraso: diasSem / (ritmo || 30), ultima: ultima, top: top,
+                        comprouEsteMes: ultima.ts >= iniMes,
+                        comprouMesPassado: ps.some(p => p.ts >= iniMesPass && p.ts < iniMes)
+                    };
+                });
+                const comHistorico = fichas.filter(f => f.compras > 0);
+                return {
+                    totalClientes: clients.length,
+                    comHistorico: comHistorico.length,
+                    compraramEsteMes: fichas.filter(f => f.comprouEsteMes).length,
+                    semMesPassado: comHistorico.filter(f => !f.comprouMesPassado).sort((a, b) => b.diasSem - a.diasSem),
+                    sumidos: comHistorico.filter(f => f.atraso >= 2).length,
+                    chamarHoje: comHistorico.filter(f => f.atraso >= 1.3).sort((a, b) => b.atraso - a.atraso),
+                    ultimoQueComprou: comHistorico.slice().sort((a, b) => b.ultima.ts - a.ultima.ts)[0] || null
+                };
+            }, [clients, purchases]);
+
+            // Botão de oferta: leva pro Orçamento já com o produto que ESSE cliente mais compra
+            // (pra quem está atrasado, o certo é oferecer o que ele já leva, não uma novidade).
+            const oferecerPara = (f) => {
+                const code = f.top ? f.top.code : null;
+                if (code) window.localStorage.setItem('friganso_offer_codes', JSON.stringify([String(code)]));
+                window.localStorage.setItem('friganso_open_client_id', f.cliente.id || '');
+                setActiveRoute && setActiveRoute('orcamentos');
+            };
+
             return (
                 <div className="animate-in fade-in space-y-6">
                     <div className="bg-slate-900 rounded-3xl p-7 text-white relative overflow-hidden shadow-xl border border-slate-800">
@@ -1253,6 +1311,61 @@
                         <Kpi icon="👥" cor="bg-blue-100" label="Clientes que compraram" valor={dados.cliCount} />
                         <Kpi icon="📦" cor="bg-amber-100" label="Itens vendidos" valor={dados.totalItens} />
                         <Kpi icon="🔥" cor="bg-purple-100" label="Melhor dia (R$)" valor={dados.melhorV > 0 ? (dados.melhorDiaV.slice(8, 10) + '/' + dados.melhorDiaV.slice(5, 7)) : '—'} />
+                    </div>
+
+                    {/* 👥 MEUS CLIENTES — controle de carteira direto no painel */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>👥</span> Meus Clientes</h3>
+                                <p className="text-xs text-slate-400">
+                                    {crm.ultimoQueComprou
+                                        ? <span>Última venda: <b className="text-slate-600">{crm.ultimoQueComprou.cliente.name}</b>, {crm.ultimoQueComprou.diasSem === 0 ? 'hoje' : (crm.ultimoQueComprou.diasSem === 1 ? 'ontem' : `há ${crm.ultimoQueComprou.diasSem} dias`)}</span>
+                                        : 'Nenhuma venda registrada ainda'}
+                                </p>
+                            </div>
+                            <button onClick={() => setActiveRoute && setActiveRoute('radar')} className="text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 px-3 py-2 rounded-xl transition-colors">Ver Radar completo →</button>
+                        </div>
+
+                        <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-slate-100">
+                            <div className="p-4 text-center"><p className="text-3xl font-black text-slate-800">{crm.totalClientes}</p><p className="text-xs font-bold text-slate-500 mt-1">Clientes cadastrados</p></div>
+                            <div className="p-4 text-center"><p className="text-3xl font-black text-emerald-600">{crm.compraramEsteMes}</p><p className="text-xs font-bold text-slate-500 mt-1">Compraram este mês</p></div>
+                            <div className="p-4 text-center"><p className="text-3xl font-black text-amber-600">{crm.semMesPassado.length}</p><p className="text-xs font-bold text-slate-500 mt-1">Não compraram mês passado</p></div>
+                            <div className="p-4 text-center"><p className="text-3xl font-black text-rose-600">{crm.sumidos}</p><p className="text-xs font-bold text-slate-500 mt-1">Sumidos</p></div>
+                        </div>
+
+                        <div className="p-5 border-t border-slate-100">
+                            <h4 className="font-bold text-slate-700 text-sm mb-3">📞 Quem chamar hoje</h4>
+                            <div className="space-y-2">
+                                {crm.chamarHoje.slice(0, 6).map((f, i) => (
+                                    <div key={f.cliente.id || i} className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl">
+                                        <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0">{f.cliente.code || '—'}</span>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="font-bold text-sm text-slate-800 truncate">{f.cliente.name}</p>
+                                            <p className="text-xs text-slate-500 truncate">
+                                                Comprou há {f.diasSem} dias{f.ritmo ? ` · costuma a cada ${f.ritmo}` : ''}{f.top ? ` · leva ${f.top.nome}` : ''}
+                                            </p>
+                                        </div>
+                                        {f.top && (
+                                            <button onClick={() => oferecerPara(f)} title={`Oferecer ${f.top.nome}`} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3 py-2 rounded-lg flex items-center gap-1.5 flex-shrink-0 transition-colors">
+                                                <div className="h-3.5 w-3.5"><IconWhatsApp/></div> Oferecer
+                                            </button>
+                                        )}
+                                    </div>
+                                ))}
+                                {crm.chamarHoje.length === 0 && (
+                                    <p className="text-sm text-slate-400 text-center py-4">
+                                        {crm.comHistorico === 0
+                                            ? 'Nenhum cliente com compra registrada ainda — o painel precisa do histórico pra saber quem está atrasado.'
+                                            : 'Ninguém atrasado. Todo mundo dentro do próprio ritmo. 🎉'}
+                                    </p>
+                                )}
+                            </div>
+                            <p className="text-[11px] text-slate-400 mt-3">
+                                {purchases.length} compra(s) registrada(s) · {crm.comHistorico} de {crm.totalClientes} clientes têm histórico
+                                {crm.totalClientes > 0 && crm.comHistorico === 0 && purchases.length > 0 && <b className="text-rose-600"> · ⚠️ nenhuma compra casou com o cadastro — os códigos podem estar diferentes</b>}
+                            </p>
+                        </div>
                     </div>
 
                     {/* 💵 Lucro estimado = faturamento × margem (1% ou 3%) */}
@@ -5204,6 +5317,12 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.11.1', data: '04/08/2026', areas: ['site'], itens: [
+                '👥 NOVO bloco "Meus Clientes" direto no Painel, sem precisar abrir o Radar: quantos clientes você tem, quantos compraram este mês, quantos ficaram fora do mês passado e quantos sumiram',
+                'Logo abaixo, "📞 Quem chamar hoje" — os clientes atrasados pro próprio ritmo, cada um com um botão ✅ Oferecer que já abre o orçamento com o produto que AQUELE cliente mais compra (pra quem está atrasado, o que funciona é oferecer o que ele já leva, não uma novidade)',
+                'No topo do bloco aparece a última venda: quem comprou e há quantos dias',
+                'O bloco também mostra quantas compras estão registradas e quantos clientes têm histórico — se aparecer aviso de que nenhuma compra casou com o cadastro, é sinal de que o código do cliente está diferente entre as duas partes',
+            ]},
             { versao: '2.11.0', data: '04/08/2026', areas: ['site'], itens: [
                 '🎯 O Radar de Clientes foi refeito e agora enxerga TEMPO. Antes ele classificava pela quantidade de produtos diferentes que cada um já tinha comprado — então quem comprou 10 itens há dois anos aparecia como "Top", e quem compra fiel toda semana o mesmo produto caía em "Precisa de Atenção". Era a única tela do app que nunca olhava o histórico de compras',
                 'NOVO "Não compraram mês passado": a lista de quem já é seu cliente mas ficou fora do mês anterior, com a última compra de cada um',
@@ -8143,7 +8262,7 @@
 
             const renderContent = () => {
                 switch(activeRoute) {
-                    case 'dashboard': return <DashboardScreen user={user} clients={clients} products={products} />;
+                    case 'dashboard': return <DashboardScreen user={user} clients={clients} products={products} setActiveRoute={setActiveRoute} />;
                     case 'clients': return <ClientsScreen products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'cadastrosProcesso': return <CadastrosProcessoScreen user={user} showMessage={showMessage} />;
                     case 'consultaCnpj': return <ConsultaCnpjScreen showMessage={showMessage} />;
