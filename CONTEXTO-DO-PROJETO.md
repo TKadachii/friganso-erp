@@ -236,6 +236,33 @@ diagnósticos reais completos (737-741 produtos) antes de publicar. Lição: qua
 "achar a coisa mais próxima de X" falha repetidas vezes sem explicação clara, e a ORDEM dos elementos é
 previsível, prefira extrair por ORDEM em vez de por DISTÂNCIA.
 
+## 📋 Fila de Pedidos (2026-08-04, v2.12.x)
+O vendedor lança MUITOS pedidos seguidos. Antes cada leitura pulava direto pro app, então ele ficava
+indo e voltando site→app→site o dia todo. Agora o botão vermelho **soma o pedido numa fila** (contador
+no próprio botão) e ele segue no SPAmov; **"✅ Finalizar e abrir o app"** entrega tudo de uma vez.
+SHIFT+clique mantém o jeito antigo (pedido avulso direto pro Resumo).
+
+- Fila no `chrome.storage` (`friganso_fila_pedidos`), com queda pro `localStorage` no Tampermonkey.
+- **Reler a mesma tela ATUALIZA** o pedido em vez de duplicar. ⚠️ O registro é `{ pedido, ts }` — o
+  SPAmov está em `x.pedido.spamov`, NÃO em `x.spamov` (esse foi um bug pego no teste antes de subir).
+- Na `FilaScreen`, "Conferir" carrega o pedido no **Resumo normal** (`friganso_pedido_json` +
+  rota `resumo`). É de propósito: só o Resumo sabe aplicar preço da Tabela do Dia, desconto de 3% e
+  condição de pagamento. Ao tocar em "Copiar Resumo", o texto pronto volta pra fila (`FILA_ATIVA`),
+  o item é marcado como feito e a tela volta pra fila. **Nunca recalcular preço em dois lugares.**
+- 🎈 "Abrir balão" reusa o **mesmo plugin nativo `ZapBolha`** dos Disparos, passando **uma entrada por
+  pedido** (mesmo telefone, mensagens diferentes) — então funciona no APK que já está instalado, sem
+  precisar de app novo (o projeto Android e a debug.keystore se perderam na formatação).
+
+⚠️ **Lição de entrega (2026-08-04):** a fila chegava vazia no app. A entrega via
+`chrome.storage` + `postMessage` depende do `content.js` estar VIVO na aba do app — e ele morre quando
+a extensão é recarregada ("Extension context invalidated"); como o `window.open` reaproveita a aba pelo
+nome, caía numa aba órfã e sumia sem erro. Além disso havia corrida de tempo: a tela montava, lia o
+`sessionStorage` vazio e desistia antes da mensagem chegar. **Conserto:** a tela **PEDE** a fila
+(`PEDIR_FILA` → o `content.js` responde com a entrega pendente ou com a fila de trabalho parada) e
+**continua ouvindo** depois de montada; sobra ainda um botão manual "Buscar fila que ficou no site".
+Considerei trocar a entrega pra URL (`?filaJson=`), mas medindo com pedido real (6 itens, nomes longos)
+só cabem ~6 pedidos em 6 KB — não resolve quem faz muitos pedidos, então **ficou no chrome.storage**.
+
 ## 👥 Cadastro de clientes lido do SPAmov (2026-08-04, v2.10.0)
 Botão **"👥 Atualizar Clientes do Site"** na tela **Procura de Pessoas** (`system.spadim`), mesmo
 padrão da Lista de Preços: `extrairClientes()` → `chrome.storage` → `APP_URL + "?clientes=pendente"`
