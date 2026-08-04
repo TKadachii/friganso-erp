@@ -247,8 +247,13 @@ Traz nome, CNPJ/CPF, endereço completo, telefone, status e **limite/saldo de cr
   sobrescreve o que foi editado à mão. A importação por planilha segue com o comportamento antigo.
 - ⚠️ O preview **espera o `onSnapshot` do Firestore responder** (`clientesCarregados`) antes de
   montar — senão todo mundo apareceria como "novo" e criaria cliente duplicado.
-- ⚠️ A tela **não informa o total** de pessoas. O botão avisa quando leu exatamente uma página cheia
-  começando do 1, sugerindo aumentar "Pessoas por Página" e procurar de novo.
+- ⚠️ A tela **não informa o total** de pessoas, só "De: 1 à N". O usuário tem **~60 clientes e o
+  campo "Pessoas por Página" vem com 60** — ou seja, um aviso simples de paginação dispararia toda
+  vez, e quando o cadastro passasse de 60 ele perderia gente sem perceber (o número sobe e desce
+  sempre). Por isso, quando o tanto lido bate exatamente com o limite da página, o botão se oferece
+  pra **pôr 1000 no campo e clicar em "Procurar" sozinho** — aí é só clicar no botão de novo. O campo
+  e o botão são achados pelo **rótulo** ("Pessoas por Página") e pelo **value** ("Procurar"), nunca
+  por X fixo; se algum dos dois não for encontrado, cai num alerta explicando o passo manual.
 - Dado sujo conhecido: o município vem escrito de formas diferentes no SPAmov ("Armação dos Búzios",
   "Armacao dos Buzios", "Armação dos Buzios"; "São Pedro da Aldeia" vs "sao Pedro da Aldeia").
   Guardado **como veio** — se um dia for agrupar/filtrar por cidade, normalizar na hora de exibir.
