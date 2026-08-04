@@ -96,7 +96,26 @@ $code = $code.Substring(0, $i + $marker.Length) + "`n" + $shim + $code.Substring
 [System.IO.File]::WriteAllText((Join-Path $repo "friganso.user.js"), $header + "`n" + $code, [System.Text.UTF8Encoding]::new($false))
 
 # ---------- 5) content.js da raiz (o que o WebUpdater do app baixa) ----------
-Copy-Item (Join-Path $ext "content.js") (Join-Path $repo "content.js") -Force
+# ⚠️ A FONTE é o extensao\content.js; o da raiz é CÓPIA. Mas é fácil (já aconteceu em 04/08/2026)
+# editar o da raiz por engano e perder tudo aqui, calado. Então: se os dois estiverem diferentes E o
+# da raiz for MAIS NOVO, para tudo e avisa, em vez de sobrescrever.
+$srcCjs  = Join-Path $ext "content.js"
+$raizCjs = Join-Path $repo "content.js"
+if (Test-Path $raizCjs) {
+    # normaliza a quebra de linha antes de comparar: o git desta maquina converte LF<->CRLF, e sem
+    # isso o alerta dispararia por diferenca que nao e de conteudo nenhum
+    $a = ([System.IO.File]::ReadAllText($srcCjs,  [System.Text.UTF8Encoding]::new($false))) -replace "`r`n", "`n"
+    $b = ([System.IO.File]::ReadAllText($raizCjs, [System.Text.UTF8Encoding]::new($false))) -replace "`r`n", "`n"
+    if ($a -ne $b -and (Get-Item $raizCjs).LastWriteTime -gt (Get-Item $srcCjs).LastWriteTime) {
+        throw @"
+PAREI: o content.js da RAIZ esta diferente e MAIS NOVO que o extensao\content.js.
+A fonte e o 'extensao\content.js' -- o da raiz e gerado a partir dele.
+Voce provavelmente editou o arquivo errado. Leve as mudancas pro extensao\content.js
+(ex.: copy content.js extensao\content.js) e rode de novo.
+"@
+    }
+}
+Copy-Item $srcCjs $raizCjs -Force
 
 # ---------- 6) o zip que o site entrega ----------
 $arquivos = "content.js","manifest.json","icon16.png","icon48.png","icon128.png","COMO-INSTALAR.txt" |

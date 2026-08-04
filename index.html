@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 166;
+        const APP_BUILD_VERSION = 167;
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
             // 🎯 Valor Máximo de Venda (Tabela): quando definido pro produto, o preço final é FIXO nesse
@@ -5204,6 +5204,11 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.10.2', data: '04/08/2026', areas: ['extensao'], itens: [
+                'Corrigido o "Não consegui ler a lista de clientes nesta tela": a leitura exigia que o relatório tivesse as colunas "Nome / Razão Social" E "CNPF / CNPJ". Montando o relatório com "Fantasia" no lugar do nome, ou sem o CNPJ, ela não achava a tabela e desistia',
+                'Agora a leitura se ancora no formato do ID ("[j] 48016"), que é o único ponto fixo — funciona com QUALQUER conjunto de colunas que você escolher no relatório. O nome do cliente vem da Razão Social; se ela não estiver marcada, usa a Fantasia/Apelido',
+                'O aviso de páginas ficou exato: o rodapé informa "Número de Pessoas", então agora aparece "Li 30 de 60 clientes" em vez de um palpite — e o botão traz o resto sozinho',
+            ]},
             { versao: '2.10.1', data: '04/08/2026', areas: ['extensao'], itens: [
                 'A extensão agora mostra a versão certa em chrome://extensions — ficava travada em "2.0.0" desde sempre, então não dava pra saber se o que estava instalado era o novo ou o antigo. Passa a aparecer como "2.10.0 - build 166", e o número do build sobe a cada publicação do site',
                 'Pra conferir se sua extensão está atualizada: chrome://extensions → Friganso ERP → o build que aparece ali tem que bater com o da aba Atualizações do app',

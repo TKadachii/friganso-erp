@@ -445,19 +445,30 @@
         });
         return cels;
     }
-    // Acha a linha de cabeçalho do resultado: a que tem "Nome / Razão Social" E "CNPF / CNPJ" juntas.
-    // É por conteúdo, não por posição, então continua achando se o usuário mudar as colunas do relatório.
+    // Acha a linha de cabeçalho do resultado ANCORANDO NOS DADOS, não em nomes de coluna.
+    // ⚠️ A 1ª versão exigia "Nome / Razão Social" E "CNPF / CNPJ" no cabeçalho — e quebrou na hora em
+    // que o usuário montou o relatório com "Fantasia" no lugar do nome e sem o CNPJ. O relatório é
+    // TOTALMENTE configurável (o usuário escolhe quais colunas quer), então o único ponto fixo é o
+    // formato do ID: "[j] 48016" / "[f] 41984". Então: acha a 1ª linha de dados por esse padrão e
+    // pega como cabeçalho a última linha ACIMA dela que tenha um "ID" na mesma coluna.
     function acharCabecalhoClientes(cels) {
         const porY = {};
         cels.forEach(function (c) { (porY[c.y] = porY[c.y] || []).push(c); });
+        const ys = Object.keys(porY).map(Number).sort(function (a, b) { return a - b; });
+
+        let yDados = null, xId = null;
+        for (var i = 0; i < ys.length; i++) {
+            const cand = porY[ys[i]].filter(function (c) { return /^\[[a-z]\]\s*\d{3,}$/i.test(c.t); });
+            if (cand.length) { yDados = ys[i]; xId = cand[0].x; break; }
+        }
+        if (yDados === null) return null;
+
         let melhor = null;
-        Object.keys(porY).forEach(function (y) {
-            const linha = porY[y];
-            const temNome = linha.some(function (c) { return /raz[ãa]o\s*social/i.test(c.t); });
-            const temDoc = linha.some(function (c) { return /cn?p[fj]\s*\/\s*cnpj/i.test(c.t); });
-            if (!temNome || !temDoc) return;
-            if (!melhor || Number(y) < melhor.y) melhor = { y: Number(y), cols: linha.slice() };
-        });
+        for (var k = 0; k < ys.length; k++) {
+            if (ys[k] >= yDados) break;
+            const temId = porY[ys[k]].some(function (c) { return /^id$/i.test(c.t) && Math.abs(c.x - xId) <= 30; });
+            if (temId) melhor = { y: ys[k], cols: porY[ys[k]].slice() };
+        }
         return melhor;
     }
     function ehTelaClientes() {
@@ -477,6 +488,13 @@
         }
         // pega o valor da coluna cujo TÍTULO casa com a regex (o usuário pode reordenar as colunas)
         function val(o, re) { for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k) && re.test(k)) return (o[k] || "").trim(); } return ""; }
+        // tenta várias regras em ORDEM DE PREFERÊNCIA e devolve a primeira que tiver valor — o
+        // relatório é configurável, então o nome pode vir como "Nome / Razão Social" OU como
+        // "Fantasia / Apelido", dependendo do que o usuário marcou
+        function valPref(o) {
+            for (var i = 1; i < arguments.length; i++) { const v = val(o, arguments[i]); if (v) return v; }
+            return "";
+        }
 
         const porY = {};
         cels.forEach(function (c) { if (c.y > cab.y) (porY[c.y] = porY[c.y] || []).push(c); });
@@ -498,7 +516,8 @@
             clientes.push({
                 code: code,
                 tipo: mTipo ? mTipo[1].toLowerCase() : "",
-                name: val(o, /raz[ãa]o\s*social|^nome/i),
+                // preferência: razão social > nome > fantasia/apelido (o que o usuário tiver marcado)
+                name: valPref(o, /raz[ãa]o\s*social/i, /^nome/i, /fantasia|apelido/i),
                 cnpj: val(o, /cn?p[fj]/i),
                 status: val(o, /^status$/i),
                 uf: val(o, /^uf$/i),
@@ -513,14 +532,17 @@
             });
         });
 
-        // "De: 1 à 60" — serve pra avisar que pode haver mais páginas (o relatório pagina por
-        // "Pessoas por Página"). Não dá pra saber o TOTAL por aqui: a tela não mostra esse número.
-        let faixa = null;
+        // 🔢 O rodapé às vezes traz "Número de Pessoas: 60, De: 1 à 30" — quando traz, o total é CERTO
+        // e não precisa ser adivinhado pelo tamanho da página (era o que a 1ª versão fazia).
+        let faixa = null, total = 0;
         try {
-            const m = ((document.body && document.body.innerText) || "").match(/De:\s*(\d+)\s*[àaá]\s*(\d+)/i);
-            if (m) faixa = { de: Number(m[1]), ate: Number(m[2]) };
+            const txt = (document.body && document.body.innerText) || "";
+            const mF = txt.match(/De:\s*(\d+)\s*[àaá]\s*(\d+)/i);
+            if (mF) faixa = { de: Number(mF[1]), ate: Number(mF[2]) };
+            const mT = txt.match(/N[úu]mero\s+de\s+Pessoas:\s*(\d+)/i);
+            if (mT) total = Number(mT[1]);
         } catch (e) {}
-        return { clientes: clientes, faixa: faixa };
+        return { clientes: clientes, faixa: faixa, total: total };
     }
     // 🔢 Campo "Pessoas por Página" e botão "Procurar" da Procura de Pessoas. Ancorados no RÓTULO e no
     // value do botão (não em X fixo — ver a lição do X fixo no CONTEXTO-DO-PROJETO.md).
@@ -560,26 +582,39 @@
     function enviarClientesParaApp() {
         const r = extrairClientes();
         const clientes = r.clientes;
-        if (!clientes.length) { alert("Não consegui ler a lista de clientes nesta tela.\n\nAbra o relatório de Procura de Pessoas e clique em Procurar antes de usar este botão."); return; }
-        // ⚠️ A tela NÃO informa o total de pessoas — só "De: 1 à N". Então quando o tanto lido bate
-        // exatamente com o limite de "Pessoas por Página", pode ter mais gente na página seguinte.
-        // Em vez de só avisar (o que encheria o saco de quem tem ~60 clientes e página de 60), o botão
-        // se oferece pra aumentar o limite e refazer a busca sozinho.
+        if (!clientes.length) {
+            alert(
+                "Não consegui ler a lista de clientes nesta tela.\n\n" +
+                "Confira se:\n" +
+                "• você já clicou em Procurar (a lista precisa estar aparecendo);\n" +
+                "• a coluna ID está marcada — é ela que identifica cada cliente (aparece como \"[j] 48016\").\n\n" +
+                "Se a lista está na tela e mesmo assim deu isso, use o 🔍 Ler Página e me mande o arquivo."
+            );
+            return;
+        }
+        // ⚠️ Ficou gente de fora? Duas formas de descobrir, nessa ordem:
+        //  1. o rodapé às vezes traz "Número de Pessoas: 60, De: 1 à 30" — aí o total é CERTO;
+        //  2. quando esse texto não aparece (depende de como o relatório foi montado), sobra o
+        //     indício de sempre: leu exatamente o tanto de "Pessoas por Página" -> provavelmente há mais.
+        const total = r.total || 0;
         const campoPP = acharCampoPorPagina();
         const porPagina = campoPP ? parseInt(String(campoPP.value).replace(/\D/g, ""), 10) : 0;
-        const limite = porPagina || (r.faixa ? (r.faixa.ate - r.faixa.de + 1) : 0);
-        if (limite && clientes.length >= limite) {
+        const faltaGente = total ? (clientes.length < total) : (porPagina > 0 && clientes.length >= porPagina);
+        if (faltaGente) {
+            const quanto = total
+                ? "Li " + clientes.length + " de " + total + " clientes — o resto está nas próximas páginas."
+                : "Li " + clientes.length + " cliente(s), exatamente o limite de \"Pessoas por Página\" — pode ter mais gente nas próximas páginas.";
             const btnProcurar = acharBotaoProcurar();
             if (campoPP && btnProcurar) {
                 const aumentar = confirm(
-                    "Li " + clientes.length + " cliente(s) — exatamente o limite de \"Pessoas por Página\" (" + limite + ").\n\n" +
-                    "Pode ter mais gente nas próximas páginas, e eu não tenho como saber daqui.\n\n" +
-                    "OK = aumento pra 1000 e refaço a busca (depois é só clicar no botão de novo)\n" +
-                    "Cancelar = enviar só estes " + clientes.length + " mesmo"
+                    quanto + "\n\n" +
+                    "OK = trago todos de uma vez (aumento \"Pessoas por Página\" e refaço a busca; depois é só clicar no botão de novo)\n" +
+                    "Cancelar = enviar só estes " + clientes.length
                 );
                 if (aumentar) {
                     try {
-                        campoPP.value = "1000";
+                        // folga boa em cima do total, pra não precisar mexer nisso a cada cliente novo
+                        campoPP.value = String(Math.max(1000, total * 2));
                         campoPP.dispatchEvent(new Event("change", { bubbles: true }));
                         btnProcurar.click();
                     } catch (e) { alert("Não consegui refazer a busca sozinho. Aumente o campo \"Pessoas por Página\" na mão e clique em Procurar."); }
@@ -587,9 +622,9 @@
                 }
             } else {
                 const segue = confirm(
-                    "Li " + clientes.length + " cliente(s) — mas isso pode ser só a página atual.\n\n" +
-                    "Se você tem mais clientes que isso, cancele, aumente o campo \"Pessoas por Página\" (ex.: 1000), " +
-                    "clique em Procurar de novo e use este botão outra vez.\n\nQuer enviar assim mesmo?"
+                    quanto + "\n\n" +
+                    "Pra trazer todos: aumente o campo \"Pessoas por Página\", clique em Procurar e use este botão de novo.\n\n" +
+                    "Quer enviar só estes " + clientes.length + " mesmo?"
                 );
                 if (!segue) return;
             }
