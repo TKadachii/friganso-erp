@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 175;
+        const APP_BUILD_VERSION = 176;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -5454,6 +5454,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.13.2', data: '04/08/2026', areas: ['app'], itens: [
+                '🎈 Corrigido: "Abrir balão" só mandava os pedidos que você tinha conferido um por um. Agora ele manda a FILA INTEIRA de uma vez — quem ainda não foi conferido é confirmado automaticamente ao abrir o balão, sem precisar clicar pedido por pedido antes',
+                'Continua sendo uma mensagem separada por pedido, pro mesmo número — nunca junta tudo num texto só',
+            ]},
             { versao: '2.13.1', data: '04/08/2026', areas: ['site', 'app'], itens: [
                 '☁️ A Fila de Pedidos agora SINCRONIZA entre o computador e o celular. Monte a fila no PC (que é onde roda a extensão do SPAmov) e ela aparece sozinha no aplicativo, pra você mandar o WhatsApp do celular',
                 'Vale nos dois sentidos: copiou um pedido no celular, ele já aparece marcado com ✓ no PC. Limpar ou tirar um pedido da fila também vale nos dois',
@@ -6509,26 +6513,6 @@
             const waNum = (t) => { let d = String(t || '').replace(/\D/g, ''); if (!d) return ''; if (d.length <= 11) d = '55' + d; return d; };
             const prontos = fila.filter(f => f.feito && f.texto);
 
-            // 🎈 Balão flutuante: MESMO plugin nativo que os Disparos já usam, então funciona no APK que
-            // você já tem instalado — não precisa de app novo. Cada pedido vira uma mensagem separada
-            // (mesmo número, textos diferentes), que é como o usuário pediu: não juntar tudo num texto só.
-            const abrirBalao = () => {
-                if (!prontos.length) { showMessage('Copie ao menos um resumo antes de abrir o balão.', 'error'); return; }
-                const tel = waNum(zap);
-                if (!tel) { showMessage('Preencha o número de WhatsApp que vai receber os resumos.', 'error'); return; }
-                const ZB = (isCapacitor && window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.ZapBolha : null;
-                if (!ZB || !ZB.iniciar) { showMessage('O balão flutuante só existe no aplicativo Android. No PC, use o botão Copiar de cada pedido.', 'error'); return; }
-                const contatos = prontos.map((f, i) => ({
-                    nome: `Pedido ${i + 1}${f.pedido.clienteNome ? ' — ' + f.pedido.clienteNome : ''}`,
-                    telefone: tel,
-                    mensagem: f.texto
-                }));
-                ZB.iniciar({ contatos }).then(res => {
-                    if (res && res.semPermissao) showMessage('Ative "Exibir sobre outros apps" pro Friganso (abriu a tela) e toque de novo. 🎈', 'error');
-                    else showMessage(`Balão ativado com ${contatos.length} resumo(s)! Vá pro WhatsApp e toque no balão pra mandar um por um. 🎈`, 'success');
-                }).catch(() => showMessage('Não consegui ativar o balão.', 'error'));
-            };
-
             // 📝 O texto sai da MESMA função que o Resumo de Pedido usa (montarTextoResumo global),
             // com os preços da Tabela do Dia e a condição de pagamento do próprio pedido.
             const textoDe = (f) => {
@@ -6540,13 +6524,13 @@
                     itens: (f.pedido.itens || []).map(it => ({ code: it.code, qty: it.qty, precoFallback: Number(it.valorUnit) || 0 }))
                 }, products);
             };
-            // Copiar aqui faz exatamente o que o "Copiar Resumo" fazia: copia E grava na ficha do
-            // cliente. Sem isso a venda deixaria de entrar no histórico e o Radar/Painel ficariam cegos.
-            const copiarEConfirmar = (i) => {
-                const f = fila[i];
-                if (!f) return;
+            // "Confirmar" um pedido = gerar o texto final E gravar a venda na ficha do cliente — exatamente
+            // o que o "Copiar Resumo" sempre fez. Sem isso a venda sumiria do histórico e o Radar/Painel
+            // ficariam cegos. Extraído à parte pra ser usado tanto na confirmação individual quanto na
+            // confirmação em lote (pro balão pegar todos os pedidos da fila de uma vez).
+            const confirmarPedido = (f) => {
+                if (f.feito) return f;
                 const txt = textoDe(f);
-                navigator.clipboard.writeText(txt);
                 try {
                     const itens = (f.pedido.itens || []).map(it => {
                         const rp = (products || []).find(p => String(p.code) === String(it.code));
@@ -6555,12 +6539,44 @@
                     });
                     if (f.pedido.cliente) registrarCompra(f.pedido.cliente, itens, null, 'fila', clients, user, f.pedido.spamov, f.pedido.condicaoPagamento);
                 } catch (e) {}
-                const nova = fila.map((x, k) => k === i ? { ...x, feito: true, texto: txt } : x);
+                return { ...f, feito: true, texto: txt };
+            };
+            const copiarEConfirmar = (i) => {
+                const f = fila[i];
+                if (!f) return;
+                const atualizado = confirmarPedido(f);
+                navigator.clipboard.writeText(atualizado.texto);
+                const nova = fila.map((x, k) => k === i ? atualizado : x);
                 setFila(nova); salvar(nova);
                 // já pula pro próximo que falta conferir — é o ritmo de quem tem 10 pedidos pra mandar
                 const prox = nova.findIndex((x, k) => k > i && !x.feito);
                 setSelecionado(prox >= 0 ? prox : i);
                 showMessage('Copiado e salvo na ficha do cliente! 🧾', 'success');
+            };
+
+            // 🎈 Balão flutuante: MESMO plugin nativo que os Disparos já usam, então funciona no APK que
+            // você já tem instalado — não precisa de app novo. Cada pedido vira uma mensagem separada
+            // (mesmo número, textos diferentes) — nada de juntar tudo num texto só.
+            // ⚠️ Manda a FILA INTEIRA de uma vez, confirmando na hora quem ainda não tinha sido conferido —
+            // antes só ia quem já estava marcado individualmente, e como marcar era um por um, abrir o
+            // balão sem ter clicado em cada pedido mandava só 1 resumo. Agora um clique resolve tudo.
+            const abrirBalao = () => {
+                if (!fila.length) { showMessage('A fila está vazia.', 'error'); return; }
+                const tel = waNum(zap);
+                if (!tel) { showMessage('Preencha o número de WhatsApp que vai receber os resumos.', 'error'); return; }
+                const ZB = (isCapacitor && window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.ZapBolha : null;
+                if (!ZB || !ZB.iniciar) { showMessage('O balão flutuante só existe no aplicativo Android. No PC, use o botão Copiar de cada pedido.', 'error'); return; }
+                const nova = fila.map(confirmarPedido);
+                setFila(nova); salvar(nova);
+                const contatos = nova.map((f, i) => ({
+                    nome: `Pedido ${i + 1}${f.pedido.clienteNome ? ' — ' + f.pedido.clienteNome : ''}`,
+                    telefone: tel,
+                    mensagem: f.texto
+                }));
+                ZB.iniciar({ contatos }).then(res => {
+                    if (res && res.semPermissao) showMessage('Ative "Exibir sobre outros apps" pro Friganso (abriu a tela) e toque de novo. 🎈', 'error');
+                    else showMessage(`Balão ativado com ${contatos.length} resumo(s)! Vá pro WhatsApp e toque no balão pra mandar um por um. 🎈`, 'success');
+                }).catch(() => showMessage('Não consegui ativar o balão.', 'error'));
             };
             const copiarUm = (f) => {
                 navigator.clipboard.writeText(f.texto || textoDe(f));
@@ -6674,11 +6690,13 @@
                                 </div>
                             </div>
 
-                            {/* 🎈 Envio pelo balão — uma mensagem por pedido, todas pro mesmo número */}
+                            {/* 🎈 Envio pelo balão — TODA a fila de uma vez, uma mensagem por pedido */}
                             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
-                                <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-1"><span>🎈</span> Mandar os resumos pelo WhatsApp</h3>
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-1"><span>🎈</span> Mandar todos os resumos pelo WhatsApp</h3>
                                 <p className="text-xs text-slate-500 mb-4">
-                                    Cada pedido vai como uma <b>mensagem separada</b> pro mesmo número — não junta tudo num texto só.
+                                    Manda a fila <b>inteira</b> de uma vez — cada pedido vira uma <b>mensagem separada</b> pro mesmo número
+                                    (não junta tudo num texto só). Não precisa conferir um por um antes: quem ainda não foi confirmado é
+                                    confirmado na hora.
                                     {!isCapacitor && <span className="text-amber-600"> (o balão só funciona no aplicativo Android; aqui no PC use o Copiar de cada pedido)</span>}
                                 </p>
                                 <div className="flex flex-col sm:flex-row gap-3">
@@ -6687,12 +6705,14 @@
                                         placeholder="Número do WhatsApp (ex: 22999998888)"
                                         className="flex-1 border border-slate-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
                                     />
-                                    <button onClick={abrirBalao} disabled={!prontos.length}
+                                    <button onClick={abrirBalao} disabled={!fila.length}
                                         className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold px-5 py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors">
-                                        <div className="h-4 w-4"><IconWhatsApp/></div> Abrir balão com {prontos.length} resumo(s)
+                                        <div className="h-4 w-4"><IconWhatsApp/></div> Abrir balão com todos ({fila.length})
                                     </button>
                                 </div>
-                                {prontos.length === 0 && <p className="text-xs text-slate-400 mt-2">Confira e copie ao menos um pedido pra liberar o envio.</p>}
+                                {prontos.length > 0 && prontos.length < fila.length && (
+                                    <p className="text-xs text-slate-400 mt-2">{prontos.length} já conferido(s) manualmente · {fila.length - prontos.length} serão confirmados ao abrir o balão.</p>
+                                )}
 
                                 {/* 💬 App x navegador: o usuário usa os dois, e cada link se comporta diferente */}
                                 {!isCapacitor && (
