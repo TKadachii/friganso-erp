@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 178;
+        const APP_BUILD_VERSION = 179;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -2130,9 +2130,38 @@
                     const byCode = new Map(); // dedup por código: se repetir, fica com o nome mais "de produto"
                     const letterScore = (s) => ((s || '').match(/[A-Za-zÀ-ú]/g) || []).length;
 
+                    // 📐 Colunas DETECTADAS PELO CABEÇALHO, não cravadas em X fixo (desde 2026-08-07).
+                    // O relatório "Tabela de Preço" do SPAmov mudou: antes tinha UMA coluna de preço na
+                    // direita (à vista), agora tem NOVE — à vista/PIX, cartão e 7 prazos. Com os X fixos
+                    // antigos (`col(535, 99999)`) o app pegava só a ÚLTIMA coluna, o preço de 45 DIAS, e
+                    // mostrava como se fosse o à vista: ~8% acima do real em 764 dos 765 produtos. Todas as
+                    // outras colunas também estavam deslocadas (o nome vinha com peso/peças/estoque grudados).
+                    // ⚠️ O cabeçalho completo só aparece na 1ª página — por isso guarda o que já achou e
+                    // reaproveita nas demais (as outras só repetem a faixa "À Vista / PIX...").
+                    const COLS = { un: null, peso: null, unid: null, est: null, preco: null };
+                    const acharCabecalho = (its) => {
+                        its.forEach(it => {
+                            const t = (it.str || '').replace(/\s+/g, ' ').trim(), tl = t.toLowerCase(), x = it.transform[4];
+                            if (COLS.un === null && t === 'UN.') COLS.un = x;
+                            else if (COLS.peso === null && tl.indexOf('peso') !== -1 && tl.indexOf('liq') !== -1) COLS.peso = x;
+                            else if (COLS.unid === null && tl.indexOf('unidade') === 0) COLS.unid = x;
+                            else if (COLS.est === null && tl.indexOf('est-venda') !== -1) COLS.est = x;
+                            else if (COLS.preco === null && tl.indexOf('vista') !== -1) COLS.preco = x;
+                        });
+                    };
+                    // ordem das 9 colunas de preço: [à vista, cartão, depois estes prazos] — igual ao content.js
+                    const DIAS_PRAZO = [7, 14, 21, 28, 30, 35, 45];
+                    // "12.29" / "11165.00" / "1.234,56" — 2 casas obrigatórias, então NÃO casa com "14.7 Kg" nem "529.2"
+                    const ehPreco = (s) => /^\d{1,7}[.,]\d{2}$/.test((s || '').trim()) || /^\d{1,3}(?:\.\d{3})+,\d{2}$/.test((s || '').trim());
+
                     for (let i = 1; i <= pdf.numPages; i++) {
                         const page = await pdf.getPage(i);
                         const textContent = await page.getTextContent();
+                        acharCabecalho(textContent.items);
+                        // layout novo = deu pra localizar a faixa de preços e as colunas da esquerda pelo cabeçalho.
+                        // Sem isso (PDF antigo, de uma coluna só) mantém os X fixos que sempre funcionaram.
+                        const novoLayout = COLS.preco !== null && COLS.un !== null && COLS.peso !== null && COLS.unid !== null && COLS.est !== null;
+                        const M = 4; // folga: o texto do cabeçalho começa alguns pontos à direita da coluna
                         const linesMap = new Map();
                         
                         textContent.items.forEach(item => {
@@ -2160,14 +2189,41 @@
                                     .sort((a, b) => (Math.round(b.transform[5]) - Math.round(a.transform[5])) || (a.transform[4] - b.transform[4]))
                                     .map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
 
-                                let finalName = col(60, 305);                 // 🔴 nome inteiro
-                                const tipo = col(305, 325);                    // 🟤 CX / PC / UN / FD / SC...
-                                const meio = col(325, 412);                    // 🟢 peso + 🩷 peças (separa por marcador Kg/Pç)
+                                let finalName = col(...(novoLayout ? [50, COLS.un - M] : [60, 305]));   // 🔴 nome inteiro
+                                if (novoLayout) finalName = finalName.replace(/^[-\s]+/, '');            // tira o "-" da linha separadora
+                                const tipo = col(...(novoLayout ? [COLS.un - M, COLS.peso - M] : [305, 325]));   // 🟤 CX / PC / UN / FD / SC...
+                                const meio = col(...(novoLayout ? [COLS.peso - M, COLS.unid - M] : [325, 412])); // 🟢 peso + 🩷 peças (separa por marcador Kg/Pç)
                                 const pesoItem = (meio.match(/[\d.,]+(?:\s*à\s*[\d.,]+)?\s*Kg/i) || [''])[0].trim();
                                 const pcsItem = (meio.match(/[\d.,]+(?:\s*à\s*[\d.,]+)?\s*P[çc]/i) || [''])[0].trim();
-                                const unidade = col(412, 456);                 // Kg [L] / UN / Kg [B]
-                                const kgUn = col(456, 535);                    // 🟣 ex: 459.25 Kg/23 Un
-                                const rawPrice = parsePrice(col(535, 99999)) || 0; // ⬛ preço à vista (corrige o 00,00 do morango)
+                                const unidade = col(...(novoLayout ? [COLS.unid - M, COLS.est - M] : [412, 456]));  // Kg [L] / UN / Kg [B]
+                                const kgUn = col(...(novoLayout ? [COLS.est - M, COLS.preco - M] : [456, 535]));    // 🟣 ex: 459.25 Kg/23 Un
+
+                                // 💲 Os preços da linha na ordem X: [à vista, cartão, 07d, 14d, 21d, 28d, 30d, 35d, 45d].
+                                // ⚠️ Agrupa por LINHA (y) ANTES de ordenar por X: a janela de 3 linhas às vezes abraça
+                                // DOIS produtos, e ordenar tudo junto misturaria os preços de um com os do outro — foi
+                                // isso que fazia o FILE MIGNON aparecer com o preço do FILE BOVINO da linha de cima.
+                                const xPreco = novoLayout ? COLS.preco - M : 535;
+                                const itemCodigo = lineItems.filter(it => (it.str || '').trim() === code)[0];
+                                const yCod = Math.round(itemCodigo ? itemCodigo.transform[5] : y);
+                                const grupos = new Map();
+                                janela.forEach(it => {
+                                    if (it.transform[4] < xPreco || !ehPreco(it.str)) return;
+                                    const yy = Math.round(it.transform[5]);
+                                    if (!grupos.has(yy)) grupos.set(yy, []);
+                                    grupos.get(yy).push(it);
+                                });
+                                let alvo = null;
+                                grupos.forEach((arr, yy) => {
+                                    const d = Math.abs(yy - yCod);
+                                    if (!alvo || d < alvo.d || (d === alvo.d && arr.length > alvo.arr.length)) alvo = { d: d, arr: arr };
+                                });
+                                const valores = alvo
+                                    ? alvo.arr.sort((a, b) => a.transform[4] - b.transform[4]).map(it => parsePrice((it.str || '').trim()))
+                                    : [];
+                                const rawPrice = (valores.length ? valores[0] : parsePrice(col(xPreco, 99999))) || 0; // ⬛ à vista / PIX
+                                const precoCartao = valores.length > 1 ? valores[1] : null;                            // 💳 cartão de crédito
+                                const precosPrazo = {};                                                                // 📅 07..45 dias
+                                DIAS_PRAZO.forEach((n, idx) => { const v = valores[2 + idx]; if (v !== undefined && v !== null) precosPrazo[n] = v; });
 
                                 // fallback (jeito antigo) só se a coluna do nome vier vazia
                                 if (!finalName) {
@@ -2178,7 +2234,10 @@
                                 }
 
                                 const { hasDiscount, unitFinalPrice } = checkDiscountRules(code, finalName, rawPrice);
-                                const cand = { code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice, tipo, pesoItem, pcsItem, unidade, kgUn };
+                                // ⚠️ precoCartao/precosPrazo PRECISAM sair daqui com o mesmo formato do caminho do
+                                // SPAmov (processarTabela) — sem eles, `precoParaCondicao` cai no fallback e cobra o
+                                // preço à vista no CARTÃO, e o modo "A Prazo" fica vazio.
+                                const cand = { code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice, tipo, pesoItem, pcsItem, unidade, kgUn, precoCartao: precoCartao, precosPrazo: Object.keys(precosPrazo).length ? precosPrazo : null };
                                 const prev = byCode.get(code);
                                 // código repetido = um deles é fragmento mal lido: fica com o de nome mais "de produto" (mais letras)
                                 if (!prev || letterScore(cand.name) > letterScore(prev.name)) byCode.set(code, cand);
@@ -5473,6 +5532,12 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.14.2', data: '07/08/2026', areas: ['site', 'app'], itens: [
+                '🛠️ CORRIGIDO um erro GRAVE de preço no "Ler PDF Local" da Tabela do Dia: o relatório do SPAmov passou a ter 9 colunas de preço (à vista/PIX, cartão e 7 prazos) e o app estava lendo a ÚLTIMA delas — o preço de 45 DIAS — como se fosse o à vista. Dava cerca de 8% A MAIS em praticamente todos os produtos',
+                '💳 A tabela lida por PDF agora traz também o preço de CARTÃO e os preços A PRAZO (7, 14, 21, 28, 30, 35 e 45 dias) — antes só o SPAmov/extensão trazia. Por isso o botão "Cartão" mostrava o preço à vista e o "A Prazo" ficava vazio quando a tabela vinha de PDF',
+                'As colunas agora são encontradas pelo CABEÇALHO do relatório, e não por posição fixa — se a Friganso mexer no layout de novo, o app se ajusta em vez de ler a coluna errada calado',
+                'Corrigido também o nome do produto, que vinha com peso, peças e estoque grudados no final, e o caso em que o preço de um produto era lido na linha do produto de cima',
+            ]},
             { versao: '2.14.1', data: '04/08/2026', areas: ['site'], itens: [
                 '👥 NOVO campo "Associados" na ficha do cliente (aba CRM & Rotas → editar cliente): cadastre outras pessoas que recebem a MESMA oferta desse cliente, cada uma no seu WhatsApp — ex.: um mercado onde 2-3 açougueiros também precisam receber a tabela',
                 'Nos Disparos, cada associado com telefone vira uma mensagem própria (mesmo conteúdo, número diferente) — selo "👥 +N associado(s)" aparece na lista de clientes selecionados',
