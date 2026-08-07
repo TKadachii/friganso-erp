@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 178;
+        const APP_BUILD_VERSION = 175;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -5049,11 +5049,7 @@
             const handleUpdateClient = async () => {
                 if(!editForm.code) { showMessage("O ID não pode ficar vazio.", "error"); return; }
                 try {
-                    // só grava associado com telefone preenchido — linha em branco no meio da edição some sozinha
-                    const associadosLimpos = (editForm.associados || [])
-                        .map(a => ({ id: a.id || ('as_' + Date.now() + Math.random().toString(36).slice(2)), nome: (a.nome || '').trim(), phone: (a.phone || '').trim() }))
-                        .filter(a => a.phone);
-                    await db.collection('clients').doc(selectedClient.id).update({ name: editForm.name, contactName: editForm.contactName || '', code: editForm.code, cnpj: editForm.cnpj || '', phone: editForm.phone || '', address: editForm.address || '', mapLocation: editForm.mapLocation || '', associados: associadosLimpos });
+                    await db.collection('clients').doc(selectedClient.id).update({ name: editForm.name, contactName: editForm.contactName || '', code: editForm.code, cnpj: editForm.cnpj || '', phone: editForm.phone || '', address: editForm.address || '', mapLocation: editForm.mapLocation || '' });
                     showMessage("Alterações salvas!", "success");
                 } catch(e) { showMessage("Erro ao atualizar.", "error"); }
             };
@@ -5156,21 +5152,6 @@
                                                     <div><label className="text-xs font-bold text-slate-500">CNPJ</label><input type="text" value={editForm.cnpj || ''} onChange={e => setEditForm({...editForm, cnpj: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm outline-none focus:border-rose-500"/></div>
                                                 </div>
                                                 <div><label className="text-xs font-bold text-slate-500">WhatsApp</label><input type="text" value={editForm.phone || ''} onChange={e => setEditForm({...editForm, phone: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm outline-none focus:border-rose-500"/></div>
-                                                {/* 👥 Associados: outras pessoas que recebem a MESMA oferta desse cliente, cada uma no seu
-                                                    número — ex.: um mercado onde 2-3 açougueiros também precisam receber a tabela. Nos
-                                                    Disparos, cada associado vira uma mensagem própria (mesmo conteúdo, número diferente). */}
-                                                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                                                    <label className="text-xs font-bold text-slate-500 flex items-center gap-1 mb-1">👥 Outras pessoas que recebem (associados)</label>
-                                                    <p className="text-[10px] text-slate-400 mb-2">Pra quando mais de uma pessoa desse cliente precisa receber a mesma oferta — ex.: outros açougueiros do mesmo mercado.</p>
-                                                    {(editForm.associados || []).map((a, i) => (
-                                                        <div key={a.id || i} className="flex gap-1.5 mb-1.5">
-                                                            <input type="text" value={a.nome || ''} onChange={e => { const arr = [...(editForm.associados || [])]; arr[i] = { ...arr[i], nome: e.target.value }; setEditForm({ ...editForm, associados: arr }); }} placeholder="Nome" className="flex-1 min-w-0 p-2 bg-white border rounded-lg text-xs outline-none focus:border-rose-500"/>
-                                                            <input type="text" value={a.phone || ''} onChange={e => { const arr = [...(editForm.associados || [])]; arr[i] = { ...arr[i], phone: e.target.value }; setEditForm({ ...editForm, associados: arr }); }} placeholder="WhatsApp" className="w-28 flex-shrink-0 p-2 bg-white border rounded-lg text-xs outline-none focus:border-rose-500"/>
-                                                            <button type="button" onClick={() => setEditForm({ ...editForm, associados: (editForm.associados || []).filter((_, k) => k !== i) })} className="text-slate-400 hover:text-rose-600 px-2 rounded-lg flex-shrink-0">✕</button>
-                                                        </div>
-                                                    ))}
-                                                    <button type="button" onClick={() => setEditForm({ ...editForm, associados: [...(editForm.associados || []), { id: 'as_' + Date.now(), nome: '', phone: '' }] })} className="text-xs font-bold text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded-lg">+ Adicionar associado</button>
-                                                </div>
                                                 <div><label className="text-xs font-bold text-slate-500">Endereço</label><textarea value={editForm.address || ''} onChange={e => setEditForm({...editForm, address: e.target.value})} className="w-full p-2.5 bg-slate-50 border rounded-lg text-sm resize-none outline-none focus:border-rose-500" rows="2"></textarea></div>
                                                 <div>
                                                     <label className="text-xs font-bold text-slate-500 flex items-center gap-1">📍 Localização no Mapa</label>
@@ -5473,21 +5454,6 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
-            { versao: '2.14.1', data: '04/08/2026', areas: ['site'], itens: [
-                '👥 NOVO campo "Associados" na ficha do cliente (aba CRM & Rotas → editar cliente): cadastre outras pessoas que recebem a MESMA oferta desse cliente, cada uma no seu WhatsApp — ex.: um mercado onde 2-3 açougueiros também precisam receber a tabela',
-                'Nos Disparos, cada associado com telefone vira uma mensagem própria (mesmo conteúdo, número diferente) — selo "👥 +N associado(s)" aparece na lista de clientes selecionados',
-                'Os dois sentidos funcionam juntos: um cliente pode mandar pra vários números (associados) E, ao mesmo tempo, vários clientes com o mesmo telefone continuam sendo juntados numa mensagem só (várias lojas, 1 dono)',
-            ]},
-            { versao: '2.14.0', data: '04/08/2026', areas: ['site'], itens: [
-                '🔗 Nos Disparos, clientes com o MESMO telefone (várias lojas do mesmo dono, códigos diferentes) agora viram UMA mensagem só, em vez de mandar a campanha repetida pra cada código. As ofertas consideram o que a pessoa já comprou em qualquer uma das lojas',
-                'A lista de clientes mostra um selo "🔗 N lojas" em quem está agrupado, e o resumo antes de iniciar a campanha mostra quantas mensagens serão realmente enviadas',
-                'Detecta o mesmo número mesmo escrito diferente — "22999998888" e "(22) 99999-8888" contam como o mesmo telefone',
-                'Se um dos cadastros do grupo tiver o "Nome de Contato" preenchido (ex.: "Antônio"), a mensagem usa esse nome; senão usa o nome do primeiro cadastro',
-            ]},
-            { versao: '2.13.2', data: '04/08/2026', areas: ['app'], itens: [
-                '🎈 Corrigido: "Abrir balão" só mandava os pedidos que você tinha conferido um por um. Agora ele manda a FILA INTEIRA de uma vez — quem ainda não foi conferido é confirmado automaticamente ao abrir o balão, sem precisar clicar pedido por pedido antes',
-                'Continua sendo uma mensagem separada por pedido, pro mesmo número — nunca junta tudo num texto só',
-            ]},
             { versao: '2.13.1', data: '04/08/2026', areas: ['site', 'app'], itens: [
                 '☁️ A Fila de Pedidos agora SINCRONIZA entre o computador e o celular. Monte a fila no PC (que é onde roda a extensão do SPAmov) e ela aparece sozinha no aplicativo, pra você mandar o WhatsApp do celular',
                 'Vale nos dois sentidos: copiou um pedido no celular, ele já aparece marcado com ✓ no PC. Limpar ou tirar um pedido da fila também vale nos dois',
@@ -6543,6 +6509,26 @@
             const waNum = (t) => { let d = String(t || '').replace(/\D/g, ''); if (!d) return ''; if (d.length <= 11) d = '55' + d; return d; };
             const prontos = fila.filter(f => f.feito && f.texto);
 
+            // 🎈 Balão flutuante: MESMO plugin nativo que os Disparos já usam, então funciona no APK que
+            // você já tem instalado — não precisa de app novo. Cada pedido vira uma mensagem separada
+            // (mesmo número, textos diferentes), que é como o usuário pediu: não juntar tudo num texto só.
+            const abrirBalao = () => {
+                if (!prontos.length) { showMessage('Copie ao menos um resumo antes de abrir o balão.', 'error'); return; }
+                const tel = waNum(zap);
+                if (!tel) { showMessage('Preencha o número de WhatsApp que vai receber os resumos.', 'error'); return; }
+                const ZB = (isCapacitor && window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.ZapBolha : null;
+                if (!ZB || !ZB.iniciar) { showMessage('O balão flutuante só existe no aplicativo Android. No PC, use o botão Copiar de cada pedido.', 'error'); return; }
+                const contatos = prontos.map((f, i) => ({
+                    nome: `Pedido ${i + 1}${f.pedido.clienteNome ? ' — ' + f.pedido.clienteNome : ''}`,
+                    telefone: tel,
+                    mensagem: f.texto
+                }));
+                ZB.iniciar({ contatos }).then(res => {
+                    if (res && res.semPermissao) showMessage('Ative "Exibir sobre outros apps" pro Friganso (abriu a tela) e toque de novo. 🎈', 'error');
+                    else showMessage(`Balão ativado com ${contatos.length} resumo(s)! Vá pro WhatsApp e toque no balão pra mandar um por um. 🎈`, 'success');
+                }).catch(() => showMessage('Não consegui ativar o balão.', 'error'));
+            };
+
             // 📝 O texto sai da MESMA função que o Resumo de Pedido usa (montarTextoResumo global),
             // com os preços da Tabela do Dia e a condição de pagamento do próprio pedido.
             const textoDe = (f) => {
@@ -6554,13 +6540,13 @@
                     itens: (f.pedido.itens || []).map(it => ({ code: it.code, qty: it.qty, precoFallback: Number(it.valorUnit) || 0 }))
                 }, products);
             };
-            // "Confirmar" um pedido = gerar o texto final E gravar a venda na ficha do cliente — exatamente
-            // o que o "Copiar Resumo" sempre fez. Sem isso a venda sumiria do histórico e o Radar/Painel
-            // ficariam cegos. Extraído à parte pra ser usado tanto na confirmação individual quanto na
-            // confirmação em lote (pro balão pegar todos os pedidos da fila de uma vez).
-            const confirmarPedido = (f) => {
-                if (f.feito) return f;
+            // Copiar aqui faz exatamente o que o "Copiar Resumo" fazia: copia E grava na ficha do
+            // cliente. Sem isso a venda deixaria de entrar no histórico e o Radar/Painel ficariam cegos.
+            const copiarEConfirmar = (i) => {
+                const f = fila[i];
+                if (!f) return;
                 const txt = textoDe(f);
+                navigator.clipboard.writeText(txt);
                 try {
                     const itens = (f.pedido.itens || []).map(it => {
                         const rp = (products || []).find(p => String(p.code) === String(it.code));
@@ -6569,44 +6555,12 @@
                     });
                     if (f.pedido.cliente) registrarCompra(f.pedido.cliente, itens, null, 'fila', clients, user, f.pedido.spamov, f.pedido.condicaoPagamento);
                 } catch (e) {}
-                return { ...f, feito: true, texto: txt };
-            };
-            const copiarEConfirmar = (i) => {
-                const f = fila[i];
-                if (!f) return;
-                const atualizado = confirmarPedido(f);
-                navigator.clipboard.writeText(atualizado.texto);
-                const nova = fila.map((x, k) => k === i ? atualizado : x);
+                const nova = fila.map((x, k) => k === i ? { ...x, feito: true, texto: txt } : x);
                 setFila(nova); salvar(nova);
                 // já pula pro próximo que falta conferir — é o ritmo de quem tem 10 pedidos pra mandar
                 const prox = nova.findIndex((x, k) => k > i && !x.feito);
                 setSelecionado(prox >= 0 ? prox : i);
                 showMessage('Copiado e salvo na ficha do cliente! 🧾', 'success');
-            };
-
-            // 🎈 Balão flutuante: MESMO plugin nativo que os Disparos já usam, então funciona no APK que
-            // você já tem instalado — não precisa de app novo. Cada pedido vira uma mensagem separada
-            // (mesmo número, textos diferentes) — nada de juntar tudo num texto só.
-            // ⚠️ Manda a FILA INTEIRA de uma vez, confirmando na hora quem ainda não tinha sido conferido —
-            // antes só ia quem já estava marcado individualmente, e como marcar era um por um, abrir o
-            // balão sem ter clicado em cada pedido mandava só 1 resumo. Agora um clique resolve tudo.
-            const abrirBalao = () => {
-                if (!fila.length) { showMessage('A fila está vazia.', 'error'); return; }
-                const tel = waNum(zap);
-                if (!tel) { showMessage('Preencha o número de WhatsApp que vai receber os resumos.', 'error'); return; }
-                const ZB = (isCapacitor && window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.ZapBolha : null;
-                if (!ZB || !ZB.iniciar) { showMessage('O balão flutuante só existe no aplicativo Android. No PC, use o botão Copiar de cada pedido.', 'error'); return; }
-                const nova = fila.map(confirmarPedido);
-                setFila(nova); salvar(nova);
-                const contatos = nova.map((f, i) => ({
-                    nome: `Pedido ${i + 1}${f.pedido.clienteNome ? ' — ' + f.pedido.clienteNome : ''}`,
-                    telefone: tel,
-                    mensagem: f.texto
-                }));
-                ZB.iniciar({ contatos }).then(res => {
-                    if (res && res.semPermissao) showMessage('Ative "Exibir sobre outros apps" pro Friganso (abriu a tela) e toque de novo. 🎈', 'error');
-                    else showMessage(`Balão ativado com ${contatos.length} resumo(s)! Vá pro WhatsApp e toque no balão pra mandar um por um. 🎈`, 'success');
-                }).catch(() => showMessage('Não consegui ativar o balão.', 'error'));
             };
             const copiarUm = (f) => {
                 navigator.clipboard.writeText(f.texto || textoDe(f));
@@ -6720,13 +6674,11 @@
                                 </div>
                             </div>
 
-                            {/* 🎈 Envio pelo balão — TODA a fila de uma vez, uma mensagem por pedido */}
+                            {/* 🎈 Envio pelo balão — uma mensagem por pedido, todas pro mesmo número */}
                             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
-                                <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-1"><span>🎈</span> Mandar todos os resumos pelo WhatsApp</h3>
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-1"><span>🎈</span> Mandar os resumos pelo WhatsApp</h3>
                                 <p className="text-xs text-slate-500 mb-4">
-                                    Manda a fila <b>inteira</b> de uma vez — cada pedido vira uma <b>mensagem separada</b> pro mesmo número
-                                    (não junta tudo num texto só). Não precisa conferir um por um antes: quem ainda não foi confirmado é
-                                    confirmado na hora.
+                                    Cada pedido vai como uma <b>mensagem separada</b> pro mesmo número — não junta tudo num texto só.
                                     {!isCapacitor && <span className="text-amber-600"> (o balão só funciona no aplicativo Android; aqui no PC use o Copiar de cada pedido)</span>}
                                 </p>
                                 <div className="flex flex-col sm:flex-row gap-3">
@@ -6735,14 +6687,12 @@
                                         placeholder="Número do WhatsApp (ex: 22999998888)"
                                         className="flex-1 border border-slate-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
                                     />
-                                    <button onClick={abrirBalao} disabled={!fila.length}
+                                    <button onClick={abrirBalao} disabled={!prontos.length}
                                         className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold px-5 py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 transition-colors">
-                                        <div className="h-4 w-4"><IconWhatsApp/></div> Abrir balão com todos ({fila.length})
+                                        <div className="h-4 w-4"><IconWhatsApp/></div> Abrir balão com {prontos.length} resumo(s)
                                     </button>
                                 </div>
-                                {prontos.length > 0 && prontos.length < fila.length && (
-                                    <p className="text-xs text-slate-400 mt-2">{prontos.length} já conferido(s) manualmente · {fila.length - prontos.length} serão confirmados ao abrir o balão.</p>
-                                )}
+                                {prontos.length === 0 && <p className="text-xs text-slate-400 mt-2">Confira e copie ao menos um pedido pra liberar o envio.</p>}
 
                                 {/* 💬 App x navegador: o usuário usa os dois, e cada link se comporta diferente */}
                                 {!isCapacitor && (
@@ -7943,80 +7893,15 @@
             const limparSel = () => setSelecionados(new Set());
 
             const alvos = clients.filter(c => selecionados.has(c.id));
-
-            // 👥📤🔗 Dois casos de "mais de um número por trás de um cliente", que precisam de tratamento
-            // OPOSTO:
-            //  • ASSOCIADOS: um cliente (ex.: um mercado) tem VÁRIAS pessoas que recebem a oferta (o
-            //    dono + 2 açougueiros) — cada um no seu número. É um LEQUE: 1 cliente → N mensagens.
-            //  • MESMO TELEFONE em cadastros diferentes: um dono tem VÁRIAS lojas/códigos, todos com o
-            //    MESMO telefone no cadastro. Sem juntar, a pessoa recebe a campanha repetida. É o
-            //    CONTRÁRIO: N clientes → 1 mensagem.
-            // Os dois casos se resolvem com a mesma ideia: monta um "canal" (telefone + quem recebe)
-            // por cliente selecionado — o telefone principal dele, mais cada associado — e depois
-            // AGRUPA POR TELEFONE. Números que só um canal usa viram 1 mensagem cada (leque preservado);
-            // números que vários canais usam (de clientes diferentes, ou associados de clientes
-            // diferentes) viram 1 mensagem só, com o histórico de todo mundo somado.
-            const canaisDoCliente = (c) => {
-                const canais = [];
-                if (waNumber(c.phone)) canais.push({ telefoneNorm: waNumber(c.phone), telefoneCru: c.phone, nome: c.name, cliente: c });
-                (c.associados || []).forEach(a => {
-                    const t = waNumber(a.phone);
-                    if (t) canais.push({ telefoneNorm: t, telefoneCru: a.phone, nome: a.nome || c.name, cliente: c });
-                });
-                return canais;
-            };
-            const comTelefone = alvos.filter(c => canaisDoCliente(c).length > 0);
-            const semTelefone = alvos.filter(c => canaisDoCliente(c).length === 0);
-
-            // quantos clientes selecionados distintos caem em cada número — usado pro selo "🔗 agrupado"
-            const clientesPorTelefone = useMemo(() => {
-                const m = new Map();
-                alvos.forEach(c => canaisDoCliente(c).forEach(canal => {
-                    if (!m.has(canal.telefoneNorm)) m.set(canal.telefoneNorm, new Set());
-                    m.get(canal.telefoneNorm).add(c.id);
-                }));
-                return m;
-            }, [alvos]);
-
-            const comTelefoneAgrupado = useMemo(() => {
-                const porTel = new Map();
-                alvos.forEach(c => canaisDoCliente(c).forEach(canal => {
-                    if (!porTel.has(canal.telefoneNorm)) porTel.set(canal.telefoneNorm, []);
-                    porTel.get(canal.telefoneNorm).push(canal);
-                }));
-                return [...porTel.values()].map(canais => {
-                    // clientes DISTINTOS que desembocam nesse número (1 se for só leque de associados
-                    // do mesmo cliente; 2+ se for o caso de várias lojas com o mesmo telefone)
-                    const clientesUnicos = [...new Map(canais.map(c => [c.cliente.id, c.cliente])).values()];
-                    const historyUnido = [...new Set(clientesUnicos.flatMap(c => c.history || []))];
-                    const comContato = clientesUnicos.find(c => (c.contactName || '').trim());
-                    // 1 canal só: usa o nome de QUEM recebe (o associado, ou o próprio cliente).
-                    // Vários canais no mesmo número: prefere o contactName; senão o nome do 1º cliente.
-                    const nomeDestino = canais.length === 1 ? canais[0].nome : ((comContato && comContato.contactName) || clientesUnicos[0].name);
-                    return {
-                        id: 'grp_' + canais[0].telefoneNorm,
-                        code: clientesUnicos.map(c => c.code).filter(Boolean).join(' + '),
-                        name: nomeDestino,
-                        phone: canais[0].telefoneCru,
-                        history: historyUnido,
-                        tipo: clientesUnicos[0].tipo,
-                        profile: clientesUnicos[0].profile,
-                        _canais: canais,                              // quem (nome) + de qual cliente veio cada canal
-                        _multiCliente: clientesUnicos.length > 1       // true = caso "várias lojas, 1 telefone"
-                    };
-                });
-            }, [alvos]);
-
-            // pra explicar pro usuário, no resumo, o que a campanha vai fazer de diferente do "1 cliente = 1 mensagem"
-            const houveFanOut = alvos.some(c => canaisDoCliente(c).length > 1);       // algum cliente tem associado(s)
-            const houveAgrupamento = comTelefoneAgrupado.some(g => g._multiCliente);  // alguma loja compartilha telefone
+            const comTelefone = alvos.filter(c => waNumber(c.phone));
+            const semTelefone = alvos.filter(c => !waNumber(c.phone));
 
             const iniciar = () => {
                 if (comTelefone.length === 0) { showMessage('Selecione ao menos 1 cliente com telefone cadastrado.', 'error'); return; }
                 // 📱 APP ANDROID: usa o balão flutuante (overlay) — você toca e ele abre cada cliente no WhatsApp
                 const ZB = (isCapacitor && window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.ZapBolha : null;
                 if (ZB && ZB.iniciar) {
-                    const contatos = comTelefoneAgrupado.map(c => ({ nome: c.name || ('Cliente ' + (c.code || '')), telefone: waNumber(c.phone), mensagem: personalizar(c) }));
+                    const contatos = comTelefone.map(c => ({ nome: c.name || ('Cliente ' + (c.code || '')), telefone: waNumber(c.phone), mensagem: personalizar(c) }));
                     ZB.iniciar({ contatos }).then(res => {
                         if (res && res.semPermissao) showMessage('Ative "Exibir sobre outros apps" pro Friganso (abriu a tela) e toque em Iniciar de novo. 🎈', 'error');
                         else showMessage('Balão ativado! Vá pro WhatsApp e toque no balão verde pra ir enviando, um por um. 🎈', 'success');
@@ -8025,10 +7910,10 @@
                 }
                 setIdx(0); setEnviados(new Set()); setEmCampanha(true);
             };
-            const atual = comTelefoneAgrupado[idx];
+            const atual = comTelefone[idx];
             const avancar = (marcarEnviado) => {
                 if (marcarEnviado && atual) { const s = new Set(enviados); s.add(atual.id); setEnviados(s); }
-                if (idx + 1 >= comTelefoneAgrupado.length) { setEmCampanha(false); showMessage(`Campanha concluída! ${marcarEnviado ? enviados.size + 1 : enviados.size} enviada(s).`, 'success'); }
+                if (idx + 1 >= comTelefone.length) { setEmCampanha(false); showMessage(`Campanha concluída! ${marcarEnviado ? enviados.size + 1 : enviados.size} enviada(s).`, 'success'); }
                 else setIdx(idx + 1);
             };
             const voltar = () => { if (idx > 0) setIdx(idx - 1); };
@@ -8064,20 +7949,20 @@
             const [rodandoAuto, setRodandoAuto] = useState(false);
             const pararRef = useRef(false);
             const enviarIndice = (i) => new Promise(res => {
-                const cli = comTelefoneAgrupado[i]; if (!cli || !window.__frigZap) { res(false); return; }
+                const cli = comTelefone[i]; if (!cli || !window.__frigZap) { res(false); return; }
                 window.__frigZap.enviar(waNumber(cli.phone), personalizar(cli), ok => res(ok));
             });
             const rodarAuto = async () => {
-                if (rodandoAuto || comTelefoneAgrupado.length === 0) return;
+                if (rodandoAuto || comTelefone.length === 0) return;
                 setRodandoAuto(true); pararRef.current = false;
                 let i = idx, okCount = 0;
-                while (i < comTelefoneAgrupado.length && !pararRef.current) {
+                while (i < comTelefone.length && !pararRef.current) {
                     setIdx(i); setEnviando(true);
                     const ok = await enviarIndice(i);
                     setEnviando(false);
-                    if (ok) { okCount++; setEnviados(prev => { const s = new Set(prev); s.add(comTelefoneAgrupado[i].id); return s; }); }
+                    if (ok) { okCount++; setEnviados(prev => { const s = new Set(prev); s.add(comTelefone[i].id); return s; }); }
                     i++;
-                    if (i < comTelefoneAgrupado.length && !pararRef.current) await new Promise(r => setTimeout(r, 2000)); // respiro entre envios
+                    if (i < comTelefone.length && !pararRef.current) await new Promise(r => setTimeout(r, 2000)); // respiro entre envios
                 }
                 setRodandoAuto(false);
                 if (pararRef.current) showMessage('Envio automático pausado em ' + okCount + ' enviada(s).', 'success');
@@ -8094,8 +7979,8 @@
                             <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><div className="h-6 w-6 text-emerald-600"><IconWhatsApp/></div> Campanha em andamento</h2>
                             <button onClick={() => setEmCampanha(false)} className="text-slate-500 font-medium px-4 py-2 bg-slate-200 rounded-lg text-sm">Encerrar</button>
                         </div>
-                        <div className="bg-slate-200 rounded-full h-2 mb-1 overflow-hidden"><div className="bg-emerald-500 h-full transition-all" style={{ width: `${((idx) / comTelefoneAgrupado.length) * 100}%` }}></div></div>
-                        <p className="text-xs text-slate-500 mb-4 text-center">Mensagem {idx + 1} de {comTelefoneAgrupado.length} · {enviados.size} enviada(s)</p>
+                        <div className="bg-slate-200 rounded-full h-2 mb-1 overflow-hidden"><div className="bg-emerald-500 h-full transition-all" style={{ width: `${((idx) / comTelefone.length) * 100}%` }}></div></div>
+                        <p className="text-xs text-slate-500 mb-4 text-center">Cliente {idx + 1} de {comTelefone.length} · {enviados.size} enviada(s)</p>
 
                         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
                             <div className="flex items-center gap-3 mb-4">
@@ -8105,17 +7990,6 @@
                                     <p className="text-xs text-slate-500">📱 {atual.phone}</p>
                                 </div>
                             </div>
-                            {atual._multiCliente && (
-                                <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 mb-3 text-xs text-sky-700">
-                                    <span className="font-bold">🔗 Mesmo número em mais de um cadastro, juntados numa mensagem só:</span>{' '}
-                                    {[...new Map(atual._canais.map(c => [c.cliente.id, c.cliente])).values()].map(cl => `${cl.code || '—'} (${cl.name})`).join(', ')}
-                                </div>
-                            )}
-                            {atual._canais && atual._canais.length === 1 && atual._canais[0].nome !== atual._canais[0].cliente.name && (
-                                <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 mb-3 text-xs text-amber-700">
-                                    <span className="font-bold">👤 Indo pro associado:</span> {atual._canais[0].nome} (do cliente {atual._canais[0].cliente.code || '—'} — {atual._canais[0].cliente.name})
-                                </div>
-                            )}
                             {prodsRec.length > 0 && <div className="bg-rose-50 border border-rose-100 rounded-xl p-3 mb-3 text-xs text-rose-700"><span className="font-bold">{prodsRec.length} oferta(s) incluídas:</span> {prodsRec.map(p => p.code).join(', ')}</div>}
                             <div className="bg-[#e1ffc7] rounded-2xl p-4 border border-[#d3f4b8] mb-4">
                                 <pre className="font-sans text-sm whitespace-pre-wrap text-slate-800">{personalizar(atual)}</pre>
@@ -8127,7 +8001,7 @@
                                 </button>
                             ) : (
                                 <button onClick={rodarAuto} className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
-                                    🤖 Enviar todos sozinho ({comTelefoneAgrupado.length - idx} restante{comTelefoneAgrupado.length - idx > 1 ? 's' : ''})
+                                    🤖 Enviar todos sozinho ({comTelefone.length - idx} restante{comTelefone.length - idx > 1 ? 's' : ''})
                                 </button>
                             ))}
                             <button disabled={enviando || rodandoAuto} onClick={() => {
@@ -8144,7 +8018,7 @@
                             </button>
                             <div className="flex items-center gap-2">
                                 <button onClick={voltar} disabled={idx === 0 || rodandoAuto} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-600 font-black text-xl rounded-xl transition-colors flex items-center justify-center gap-2" title="Voltar">← <span className="text-sm font-bold">Voltar</span></button>
-                                <span className="text-xs font-bold text-slate-400 px-1 flex-shrink-0">{idx + 1}/{comTelefoneAgrupado.length}</span>
+                                <span className="text-xs font-bold text-slate-400 px-1 flex-shrink-0">{idx + 1}/{comTelefone.length}</span>
                                 <button onClick={() => avancar(false)} disabled={rodandoAuto} className="flex-1 py-3 bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white font-black text-xl rounded-xl transition-colors flex items-center justify-center gap-2" title="Avançar (pular)"><span className="text-sm font-bold">Avançar</span> →</button>
                             </div>
                             {isElectron && (
@@ -8298,12 +8172,6 @@
                                                 <span onClick={() => toggle(c.id)} className="bg-rose-700 text-white px-2 py-0.5 rounded font-mono font-black text-xs flex-shrink-0 cursor-pointer">{c.code || '—'}</span>
                                                 <span onClick={() => toggle(c.id)} className="text-sm font-bold text-slate-700 truncate flex-1 cursor-pointer">{c.name}</span>
                                                 {semHist && <span className="text-[10px] font-bold bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full flex-shrink-0" title="Sem produtos para ofertar">sem oferta</span>}
-                                                {!semTel && selecionados.has(c.id) && (clientesPorTelefone.get(waNumber(c.phone)) || new Set()).size > 1 && (
-                                                    <span className="text-[10px] font-bold bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full flex-shrink-0" title="Esse telefone também está em outro cliente selecionado — vira 1 mensagem só, não uma pra cada">🔗 agrupado</span>
-                                                )}
-                                                {selecionados.has(c.id) && (c.associados || []).filter(a => waNumber(a.phone)).length > 0 && (
-                                                    <span className="text-[10px] font-bold bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full flex-shrink-0" title={'Também manda pra: ' + (c.associados || []).filter(a => waNumber(a.phone)).map(a => a.nome || 'sem nome').join(', ')}>👥 +{(c.associados || []).filter(a => waNumber(a.phone)).length} associado(s)</span>
-                                                )}
                                                 {semTel
                                                     ? (!editando && <button onClick={() => { setPhoneEditId(c.id); setPhoneInput(''); }} className="text-[10px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-700 px-2 py-1 rounded-full flex-shrink-0 transition-colors flex items-center gap-1">+ telefone</button>)
                                                     : (!editando && <button onClick={() => { setPhoneEditId(c.id); setPhoneInput(c.phone || ''); }} title="Clique para corrigir o número" className="text-[10px] text-emerald-600 font-mono flex-shrink-0 hover:bg-emerald-50 px-1.5 py-1 rounded transition-colors flex items-center gap-1">📱 {c.phone} <span className="text-emerald-400">✎</span></button>)}
@@ -8326,17 +8194,11 @@
                     {/* Resumo + iniciar */}
                     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
                         <div className="text-sm text-slate-600">
-                            <p><b className="text-emerald-700">{comTelefoneAgrupado.length}</b> mensage(ns) serão enviadas.</p>
-                            {houveAgrupamento && (
-                                <p className="text-sky-600 text-xs mt-1">🔗 Lojas com o mesmo telefone foram juntadas numa mensagem só, pra não repetir a mesma pessoa.</p>
-                            )}
-                            {houveFanOut && (
-                                <p className="text-violet-600 text-xs mt-1">👥 Clientes com associado(s) mandam a mesma oferta pra cada número, em mensagens separadas.</p>
-                            )}
+                            <p><b className="text-emerald-700">{comTelefone.length}</b> cliente(s) prontos para receber.</p>
                             {semTelefone.length > 0 && <p className="text-amber-600 text-xs mt-1">⚠️ {semTelefone.length} selecionado(s) sem telefone serão pulados. Toque em "+ telefone" na lista para cadastrar na hora.</p>}
                         </div>
                         <button onClick={iniciar} disabled={comTelefone.length === 0} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold py-3.5 px-8 rounded-2xl shadow-md transition-colors flex items-center gap-2 w-full sm:w-auto justify-center">
-                            <div className="h-5 w-5"><IconWhatsApp/></div> Iniciar Campanha ({comTelefoneAgrupado.length})
+                            <div className="h-5 w-5"><IconWhatsApp/></div> Iniciar Campanha ({comTelefone.length})
                         </button>
                     </div>
                 </div>
