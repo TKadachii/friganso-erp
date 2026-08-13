@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 175;
+        const APP_BUILD_VERSION = 176;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -4588,6 +4588,688 @@
             );
         };
 
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        // 🎯 PROSPECÇÃO EM MASSA (Leads) — 2026-08-13
+        // Objetivo: aumentar a carteira abordando o MÁXIMO de estabelecimento pelo WhatsApp.
+        //
+        // De onde vem a base: planilha (CSV/XLSX) de dados PÚBLICOS de CNPJ da Receita Federal —
+        // exportada do Casa dos Dados / CNPJ.biz, ou gerada pelo script da base aberta. Os dois sites
+        // revendem o MESMO arquivo da Receita, então o telefone e o email que eles mostram são os
+        // campos `telefone_1` e `correio_eletronico` do cadastro — a tela aceita qualquer um dos dois.
+        //
+        // ⚠️ O importador acha cada campo pelo NOME do cabeçalho, nunca por posição fixa de coluna
+        // (mesma lição do cadastro de clientes do SPAmov e da Lista de Preços): se a fonte mudar a
+        // ordem ou o conjunto de colunas, continua lendo.
+        //
+        // ⚠️ Chave natural = CNPJ: o id do documento no Firestore É o CNPJ. Então reimportar a mesma
+        // planilha ATUALIZA o lead em vez de duplicar, e nunca apaga o que já foi abordado.
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        const LEAD_SEGMENTOS = {
+            restaurante: { label: 'Restaurante / Lanchonete', emoji: '🍽️', cnaes: ['5611', '5612'] },
+            mercado:     { label: 'Mercado / Mercearia',      emoji: '🛒', cnaes: ['4711', '4712', '4713'] },
+            acougue:     { label: 'Açougue / Peixaria',       emoji: '🥩', cnaes: ['4722'] },
+            padaria:     { label: 'Padaria / Confeitaria',    emoji: '🥐', cnaes: ['4721', '1091'] },
+            hotel:       { label: 'Hotel / Pousada',          emoji: '🏨', cnaes: ['5510', '5590'] },
+            eventos:     { label: 'Buffet / Eventos',         emoji: '🎉', cnaes: ['5620'] },
+        };
+        const LEAD_STATUS = {
+            novo:       { label: 'Novo',       emoji: '🆕', cor: 'bg-slate-100 text-slate-600' },
+            abordado:   { label: 'Abordado',   emoji: '📤', cor: 'bg-sky-100 text-sky-700' },
+            respondeu:  { label: 'Respondeu',  emoji: '💬', cor: 'bg-amber-100 text-amber-700' },
+            cliente:    { label: 'Virou cliente', emoji: '🎉', cor: 'bg-emerald-100 text-emerald-700' },
+            descartado: { label: 'Descartado', emoji: '🚫', cor: 'bg-red-100 text-red-600' },
+        };
+        const soDigitos = (s) => String(s || '').replace(/\D/g, '');
+        // 📱 Celular tem 9 dígitos e começa com 9 (fixo tem 8). É o filtro que separa o telefone que
+        // na prática é o CELULAR DO DONO — em empresa pequena é ele que fica no cadastro da Receita.
+        const ehCelular = (tel) => {
+            let d = soDigitos(tel);
+            if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+            if (d.length === 11) return d[2] === '9';
+            if (d.length === 9) return d[0] === '9';
+            return false;
+        };
+        const telValido = (tel) => { const d = soDigitos(tel); return d.length >= 10; };
+        // 📧 Email de escritório de contabilidade — quase nunca chega no dono. Só sinaliza, não descarta.
+        const emailDeContador = (email) => /contab|cont[aá]bil|contador|escrit[oó]rio|assessoria|fiscal/i.test(String(email || ''));
+        const segmentoPorCnae = (cnae) => {
+            const d = soDigitos(cnae).slice(0, 4);
+            if (!d) return '';
+            for (const k of Object.keys(LEAD_SEGMENTOS)) {
+                if (LEAD_SEGMENTOS[k].cnaes.some(c => d.startsWith(c))) return k;
+            }
+            return '';
+        };
+        // Quando a planilha não traz CNAE, tenta pelo nome (mesma ideia do Radar/Disparos)
+        const segmentoPorNome = (nome) => {
+            const n = String(nome || '').toLowerCase();
+            if (/a[cç]ougue|carnes|peixaria|frigor/.test(n)) return 'acougue';
+            if (/supermerc|mercad|mercear|minimerc|atacad|empor/.test(n)) return 'mercado';
+            if (/restaurante|churrasc|lanchonete|petiscaria|espeto|gril|pizza|bar\b|buteco|hamburg|sushi|self.?service/.test(n)) return 'restaurante';
+            if (/padaria|confeitaria|panific|doceria/.test(n)) return 'padaria';
+            if (/hotel|pousada|resort|hostel/.test(n)) return 'hotel';
+            if (/buffet|bufê|eventos|festas/.test(n)) return 'eventos';
+            return '';
+        };
+        const formatarCnpjCurto = (cnpj) => {
+            const d = soDigitos(cnpj).padStart(14, '0');
+            if (d.length !== 14) return cnpj || '';
+            return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;
+        };
+        const formatarTelBonito = (tel) => {
+            let d = soDigitos(tel);
+            if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+            if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+            if (d.length === 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+            return tel || '';
+        };
+        const normalizarNomeLead = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+        const LeadsScreen = ({ user, clients, products, showMessage, setActiveRoute, listaNegra }) => {
+            const [leads, setLeads] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [importPreview, setImportPreview] = useState(null);
+            const [importBusy, setImportBusy] = useState(false);
+            const [busca, setBusca] = useState('');
+            const [fMunicipio, setFMunicipio] = useState('todos');
+            const [fSegmento, setFSegmento] = useState('todos');
+            const [fStatus, setFStatus] = useState('nao_abordados');
+            const [soCelular, setSoCelular] = useState(true);
+            const [esconderClientes, setEsconderClientes] = useState(true);
+            const [selecionados, setSelecionados] = useState(new Set());
+            const [salvandoId, setSalvandoId] = useState(null);
+
+            // ---- mensagem ----
+            const TEMPLATE_LEAD_PADRAO = '{saudacao}, tudo bem? 😊\n\nAqui é o {vendedor}, da *Friganso* — somos distribuidora de carnes aqui na região.\n\nVi que vocês são do ramo em {cidade} e queria te mandar nossa tabela de preços, sem compromisso. Trabalhamos com entrega e preço de atacado.\n\nPosso te mandar as ofertas da semana? 🥩';
+            const [template, setTemplate] = useState(() => { try { return window.localStorage.getItem('friganso_leads_template') || TEMPLATE_LEAD_PADRAO; } catch (e) { return TEMPLATE_LEAD_PADRAO; } });
+            useEffect(() => { try { window.localStorage.setItem('friganso_leads_template', template); } catch (e) {} }, [template]);
+            const [incluirOfertas, setIncluirOfertas] = useState(false);
+            const [produtosVitrine, setProdutosVitrine] = useState(new Set());
+            const [buscaProd, setBuscaProd] = useState('');
+            const [estiloZap, setEstiloZap] = useState(getEstiloZapSalvo());
+            useEffect(() => { try { window.localStorage.setItem(ESTILO_ZAP_KEY, estiloZap); } catch (e) {} }, [estiloZap]);
+            const [vendedorCustom, setVendedorCustom] = useState('');
+
+            // ---- campanha ----
+            const [emCampanha, setEmCampanha] = useState(false);
+            const [idx, setIdx] = useState(0);
+            const [enviando, setEnviando] = useState(false);
+            const [rodandoAuto, setRodandoAuto] = useState(false);
+            const pararRef = useRef(false);
+            const [respiro, setRespiro] = useState(8); // segundos entre um envio e outro
+
+            useEffect(() => {
+                const unsub = db.collection('leads').onSnapshot(snap => {
+                    setLeads(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                    setLoading(false);
+                }, err => { console.error(err); setLoading(false); });
+                return () => unsub();
+            }, []);
+
+            // 🔗 Cruzamento com a carteira: por CNPJ (exato) e por nome normalizado, pra não abordar
+            // quem já compra de você. O CNPJ manda; o nome é só rede de segurança.
+            const cnpjsClientes = useMemo(() => new Set((clients || []).map(c => soDigitos(c.cnpj)).filter(d => d.length === 14)), [clients]);
+            const nomesClientes = useMemo(() => (clients || []).map(c => normalizarNomeLead(c.name)).filter(n => n.length > 4), [clients]);
+            const jaECliente = (lead) => {
+                if (lead.cnpj && cnpjsClientes.has(soDigitos(lead.cnpj))) return true;
+                const n = normalizarNomeLead(lead.nomeFantasia || lead.razaoSocial);
+                if (n.length <= 4) return false;
+                return nomesClientes.some(cn => n.includes(cn) || cn.includes(n));
+            };
+
+            const municipios = useMemo(() => {
+                const s = new Set(leads.map(l => l.municipio).filter(Boolean));
+                return [...s].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            }, [leads]);
+
+            const lista = useMemo(() => {
+                const termo = normalizarNomeLead(busca);
+                return leads.filter(l => {
+                    if (l.naoPerturbe) return false;
+                    if (soCelular && !ehCelular(l.telefone)) return false;
+                    if (!telValido(l.telefone)) return false;
+                    if (fMunicipio !== 'todos' && l.municipio !== fMunicipio) return false;
+                    if (fSegmento !== 'todos' && (l.segmento || '') !== fSegmento) return false;
+                    if (fStatus === 'nao_abordados' && l.status && l.status !== 'novo') return false;
+                    if (fStatus !== 'todos' && fStatus !== 'nao_abordados' && (l.status || 'novo') !== fStatus) return false;
+                    if (esconderClientes && jaECliente(l)) return false;
+                    if (termo) {
+                        const alvo = normalizarNomeLead([l.razaoSocial, l.nomeFantasia, l.municipio, l.bairro].join(' '));
+                        if (!alvo.includes(termo)) return false;
+                    }
+                    return true;
+                }).sort((a, b) => String(a.razaoSocial || '').localeCompare(String(b.razaoSocial || ''), 'pt-BR'));
+            }, [leads, busca, fMunicipio, fSegmento, fStatus, soCelular, esconderClientes, cnpjsClientes, nomesClientes]);
+
+            const stats = useMemo(() => ({
+                total: leads.length,
+                comCelular: leads.filter(l => ehCelular(l.telefone)).length,
+                abordados: leads.filter(l => l.status && l.status !== 'novo').length,
+                clientes: leads.filter(l => l.status === 'cliente').length,
+                hoje: leads.filter(l => l.abordadoEm && (Date.now() - l.abordadoEm) < 86400000).length,
+            }), [leads]);
+
+            // ═══ IMPORTAÇÃO ═══
+            const handleArquivo = (e) => {
+                const file = e.target.files && e.target.files[0];
+                e.target.value = '';
+                if (!file) return;
+                if (typeof XLSX === 'undefined') { showMessage('Biblioteca de planilha não carregou. Verifique a internet.', 'error'); return; }
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', raw: true });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false });
+                        if (!rows.length) { showMessage('Planilha vazia.', 'error'); return; }
+
+                        // Acha o cabeçalho: a primeira linha que mencione CNPJ ou razão social
+                        let hIdx = rows.findIndex(r => r.some(c => /cnpj|raz[aã]o|fantasia/i.test(String(c))));
+                        if (hIdx < 0) hIdx = 0;
+                        const header = rows[hIdx].map(c => String(c).toLowerCase().trim());
+                        const col = (re) => header.findIndex(h => re.test(h));
+                        const cols = (re) => header.map((h, i) => re.test(h) ? i : -1).filter(i => i >= 0);
+
+                        const iCnpj    = col(/cnpj/);
+                        const iRazao   = col(/raz[aã]o|nome.?empresarial|^nome$/);
+                        const iFant    = col(/fantasia/);
+                        const iEmail   = col(/e.?mail|correio/);
+                        const iMun     = col(/munic[ií]pio|cidade/);
+                        const iUf      = col(/^uf$|estado/);
+                        const iBairro  = col(/bairro/);
+                        const iLog     = col(/logradouro|endere|^rua$/);
+                        const iNum     = col(/^n[uú]mero$|^nro/);
+                        const iCep     = col(/cep/);
+                        const iCnae    = col(/cnae/);
+                        const iSit     = col(/situa/);
+                        const iAbert   = col(/abertura|in[ií]cio.?atividade|data.?in[ií]cio/);
+                        // 📞 Pode vir "telefone_1"/"telefone_2", ou DDD separado do número. Junta tudo e
+                        // escolhe o MELHOR: prefere celular; se não tiver, o primeiro fixo que existir.
+                        const iTels    = cols(/telefone|celular|fone|whats/);
+                        const iDdds    = cols(/^ddd/);
+
+                        if (iCnpj < 0 && iRazao < 0) { showMessage('Não achei coluna de CNPJ nem de Razão Social nessa planilha.', 'error'); return; }
+
+                        const melhorTelefone = (r) => {
+                            const cands = [];
+                            iTels.forEach((ti, k) => {
+                                let v = String(r[ti] || '').trim();
+                                if (!v) return;
+                                // Se o número veio sem DDD e existe uma coluna de DDD na mesma posição, junta
+                                if (soDigitos(v).length <= 9 && iDdds[k] !== undefined) {
+                                    const ddd = soDigitos(r[iDdds[k]]);
+                                    if (ddd) v = ddd + soDigitos(v);
+                                }
+                                if (telValido(v)) cands.push(v);
+                            });
+                            return cands.find(ehCelular) || cands[0] || '';
+                        };
+
+                        const vistos = new Set();
+                        const parsed = [];
+                        for (let i = hIdx + 1; i < rows.length; i++) {
+                            const r = rows[i];
+                            const cnpj = iCnpj >= 0 ? soDigitos(r[iCnpj]).padStart(14, '0') : '';
+                            const razao = iRazao >= 0 ? String(r[iRazao] || '').trim() : '';
+                            const fant = iFant >= 0 ? String(r[iFant] || '').trim() : '';
+                            if (cnpj.length !== 14 && !razao) continue;
+                            const chave = cnpj.length === 14 ? cnpj : 'n_' + normalizarNomeLead(razao);
+                            if (vistos.has(chave)) continue;
+                            vistos.add(chave);
+
+                            const cnae = iCnae >= 0 ? String(r[iCnae] || '').trim() : '';
+                            const telefone = melhorTelefone(r);
+                            parsed.push({
+                                _id: chave,
+                                cnpj: cnpj.length === 14 ? cnpj : '',
+                                razaoSocial: razao || fant,
+                                nomeFantasia: fant,
+                                telefone,
+                                email: iEmail >= 0 ? String(r[iEmail] || '').trim().toLowerCase() : '',
+                                municipio: iMun >= 0 ? String(r[iMun] || '').trim() : '',
+                                uf: iUf >= 0 ? String(r[iUf] || '').trim().toUpperCase() : '',
+                                bairro: iBairro >= 0 ? String(r[iBairro] || '').trim() : '',
+                                logradouro: iLog >= 0 ? String(r[iLog] || '').trim() : '',
+                                numero: iNum >= 0 ? String(r[iNum] || '').trim() : '',
+                                cep: iCep >= 0 ? String(r[iCep] || '').trim() : '',
+                                cnae,
+                                situacaoCadastral: iSit >= 0 ? String(r[iSit] || '').trim() : '',
+                                dataAbertura: iAbert >= 0 ? String(r[iAbert] || '').trim() : '',
+                                segmento: segmentoPorCnae(cnae) || segmentoPorNome(fant || razao),
+                            });
+                        }
+                        if (!parsed.length) { showMessage('Nenhum lead reconhecido na planilha.', 'error'); return; }
+                        const jaTem = new Set(leads.map(l => l.id));
+                        setImportPreview(parsed.map(p => ({ ...p, existe: jaTem.has(p._id), temCelular: ehCelular(p.telefone) })));
+                    } catch (err) {
+                        showMessage('Erro ao ler a planilha: ' + err.message, 'error');
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            };
+
+            const confirmarImport = async () => {
+                if (!importPreview) return;
+                setImportBusy(true);
+                try {
+                    // Firestore aceita no máximo 500 operações por lote — vai de 400 em 400
+                    const chunks = [];
+                    for (let i = 0; i < importPreview.length; i += 400) chunks.push(importPreview.slice(i, i + 400));
+                    let novos = 0, atualizados = 0;
+                    for (const chunk of chunks) {
+                        const batch = db.batch();
+                        chunk.forEach(p => {
+                            const { _id, existe, temCelular, ...dados } = p;
+                            const ref = db.collection('leads').doc(_id);
+                            if (existe) {
+                                // ⚠️ merge: NUNCA sobrescreve status/abordadoEm de quem já foi trabalhado
+                                batch.set(ref, { ...dados, atualizadoEm: Date.now() }, { merge: true });
+                                atualizados++;
+                            } else {
+                                batch.set(ref, { ...dados, status: 'novo', naoPerturbe: false, criadoEm: Date.now(), atualizadoEm: Date.now() });
+                                novos++;
+                            }
+                        });
+                        await batch.commit();
+                    }
+                    showMessage(`${novos} lead(s) novo(s) e ${atualizados} atualizado(s)! 🎯`, 'success');
+                    setImportPreview(null);
+                } catch (e) {
+                    showMessage('Erro ao salvar: ' + e.message, 'error');
+                } finally { setImportBusy(false); }
+            };
+
+            // ═══ AÇÕES POR LEAD ═══
+            const mudarStatus = async (lead, status) => {
+                setSalvandoId(lead.id);
+                try {
+                    const dados = { status, atualizadoEm: Date.now() };
+                    if (status === 'abordado') { dados.abordadoEm = Date.now(); dados.abordadoPor = user.id || ''; }
+                    await db.collection('leads').doc(lead.id).update(dados);
+                } catch (e) { showMessage('Erro ao atualizar.', 'error'); } finally { setSalvandoId(null); }
+            };
+            const marcarNaoPerturbe = async (lead) => {
+                if (!window.confirm(`Pôr "${lead.razaoSocial}" na lista de NÃO PERTURBE? Ele some da prospecção pra sempre.`)) return;
+                try { await db.collection('leads').doc(lead.id).update({ naoPerturbe: true, status: 'descartado', atualizadoEm: Date.now() }); showMessage('Marcado como não perturbe.', 'success'); }
+                catch (e) { showMessage('Erro ao marcar.', 'error'); }
+            };
+            // ➡️ Manda o lead pro funil que já existe (Cadastros em Processo), sem redigitar nada
+            const mandarPraCadastro = async (lead) => {
+                try {
+                    await db.collection('cadastros_processo').add({
+                        nome: lead.razaoSocial || lead.nomeFantasia || '',
+                        contato: lead.telefone || '',
+                        tipoCadastro: 'cnpj',
+                        itensRecebidos: [],
+                        observacoes: `Veio da Prospecção em Massa${lead.municipio ? ' — ' + lead.municipio : ''}.`,
+                        dorPrincipal: '',
+                        cnpj: lead.cnpj || '',
+                        enderecoCnpj: [lead.logradouro, lead.numero, lead.bairro, lead.municipio, lead.uf, lead.cep].filter(Boolean).join(', '),
+                        situacaoCadastralCnpj: lead.situacaoCadastral || '',
+                        naturezaJuridicaCnpj: '',
+                        cepCnpj: lead.cep || '', logradouroCnpj: lead.logradouro || '', numeroCnpj: lead.numero || '',
+                        complementoCnpj: '', bairroCnpj: lead.bairro || '', municipioCnpj: lead.municipio || '',
+                        vendedorId: user.id, criadoEm: Date.now(), atualizadoEm: Date.now(),
+                    });
+                    await db.collection('leads').doc(lead.id).update({ status: 'respondeu', atualizadoEm: Date.now() });
+                    showMessage('Mandei pros Cadastros em Processo! 📋', 'success');
+                } catch (e) { showMessage('Erro ao mandar pro cadastro.', 'error'); }
+            };
+            // 🔍 Enriquece pela BrasilAPI (grátis, sem chave) — traz dados frescos da Receita
+            const enriquecer = async (lead) => {
+                if (!lead.cnpj) { showMessage('Esse lead não tem CNPJ pra consultar.', 'error'); return; }
+                setSalvandoId(lead.id);
+                try {
+                    const d = await buscarCnpjNaReceita(lead.cnpj);
+                    const dados = { atualizadoEm: Date.now() };
+                    if (d.razaoSocial) dados.razaoSocial = d.razaoSocial;
+                    if (d.nomeFantasia) dados.nomeFantasia = d.nomeFantasia;
+                    if (d.telefone && !telValido(lead.telefone)) dados.telefone = d.telefone;
+                    if (d.email && !lead.email) dados.email = d.email;
+                    if (d.situacaoCadastral) dados.situacaoCadastral = d.situacaoCadastral;
+                    if (d.municipio) dados.municipio = d.municipio;
+                    if (d.bairro) dados.bairro = d.bairro;
+                    await db.collection('leads').doc(lead.id).update(dados);
+                    showMessage(d.situacaoCadastral && d.situacaoCadastral !== 'ATIVA' ? `⚠️ Situação: ${d.situacaoCadastral}` : 'Dados atualizados! ✅', d.situacaoCadastral === 'ATIVA' ? 'success' : 'error');
+                } catch (e) { showMessage(e.message || 'Erro na consulta.', 'error'); } finally { setSalvandoId(null); }
+            };
+
+            // ═══ MENSAGEM ═══
+            const montarOfertasLead = () => {
+                const lnSet = new Set((listaNegra || []).map(String));
+                const sel = (products || []).filter(p => produtosVitrine.has(String(p.code)) && !lnSet.has(String(p.code)));
+                if (!sel.length) return '';
+                return estiloZap === 'antigo'
+                    ? sel.map(p => montarBlocoProdutoZap(p, 'antigo').trim()).join('\n\n')
+                    : sel.map(p => montarBlocoProdutoZap(p).trim()).join(`\n${SEPARADOR_ZAP}\n`);
+            };
+            const saudacaoLead = () => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; };
+            const nomeVend = () => vendedorCustom.trim() || ((user && user.name) ? user.name.split(' ')[0] : 'vendedor');
+            const personalizarLead = (l) => {
+                const nome = l.nomeFantasia || l.razaoSocial || '';
+                let txt = template
+                    .replace(/\{nome\}/gi, nome)
+                    .replace(/\{contato\}/gi, nome)
+                    .replace(/\{cidade\}/gi, l.municipio || 'sua região')
+                    .replace(/\{bairro\}/gi, l.bairro || '')
+                    .replace(/\{saudacao\}/gi, saudacaoLead())
+                    .replace(/\{vendedor\}/gi, nomeVend());
+                const ofertas = incluirOfertas ? montarOfertasLead() : '';
+                txt = txt.replace(/\{ofertas\}/gi, ofertas);
+                if (incluirOfertas && ofertas && !/\{ofertas\}/i.test(template)) txt += `\n\n${ofertas}`;
+                return txt;
+            };
+            const waNum = (tel) => { let d = soDigitos(tel); if (!d) return ''; if (d.length <= 11) d = '55' + d; return d; };
+
+            // ═══ CAMPANHA ═══
+            const alvos = lista.filter(l => selecionados.has(l.id));
+            const toggle = (id) => { const s = new Set(selecionados); s.has(id) ? s.delete(id) : s.add(id); setSelecionados(s); };
+            const marcarTodos = () => setSelecionados(new Set(lista.map(l => l.id)));
+            const limparSel = () => setSelecionados(new Set());
+
+            const marcarAbordados = async (ids) => {
+                try {
+                    const chunks = [];
+                    for (let i = 0; i < ids.length; i += 400) chunks.push(ids.slice(i, i + 400));
+                    for (const chunk of chunks) {
+                        const batch = db.batch();
+                        chunk.forEach(id => batch.update(db.collection('leads').doc(id), { status: 'abordado', abordadoEm: Date.now(), abordadoPor: user.id || '', atualizadoEm: Date.now() }));
+                        await batch.commit();
+                    }
+                } catch (e) { console.error(e); }
+            };
+
+            const iniciar = () => {
+                if (!alvos.length) { showMessage('Selecione ao menos 1 lead.', 'error'); return; }
+                // 📱 APP ANDROID: balão flutuante — MESMO plugin nativo dos Disparos e da Fila, então
+                // funciona no APK que já está instalado, sem precisar de app novo.
+                const ZB = (isCapacitor && window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.ZapBolha : null;
+                if (ZB && ZB.iniciar) {
+                    const contatos = alvos.map(l => ({ nome: l.nomeFantasia || l.razaoSocial || 'Lead', telefone: waNum(l.telefone), mensagem: personalizarLead(l) }));
+                    ZB.iniciar({ contatos }).then(res => {
+                        if (res && res.semPermissao) { showMessage('Ative "Exibir sobre outros apps" pro Friganso e toque em Iniciar de novo. 🎈', 'error'); return; }
+                        showMessage(`Balão ativado com ${contatos.length} lead(s)! Vá pro WhatsApp e toque no balão verde. 🎈`, 'success');
+                        marcarAbordados(alvos.map(l => l.id));
+                    }).catch(() => showMessage('Não consegui ativar o balão.', 'error'));
+                    return;
+                }
+                setIdx(0); setEmCampanha(true);
+            };
+
+            const atual = alvos[idx];
+            const avancar = async (marcou) => {
+                if (marcou && atual) await mudarStatus(atual, 'abordado');
+                if (idx + 1 >= alvos.length) { setEmCampanha(false); showMessage('Campanha concluída! 🎉', 'success'); }
+                else setIdx(idx + 1);
+            };
+            const enviarIndice = (i) => new Promise(res => {
+                const l = alvos[i];
+                if (!l || !window.__frigZap) { res(false); return; }
+                window.__frigZap.enviar(waNum(l.telefone), personalizarLead(l), ok => res(ok));
+            });
+            // 🤖 Envio automático (só no programa de PC, pelo WhatsApp embutido). O "respiro" entre um
+            // envio e outro é regulável de propósito: disparo muito rápido pra número desconhecido é o
+            // caminho mais curto pro WhatsApp bloquear a SUA linha.
+            const rodarAuto = async () => {
+                if (rodandoAuto || !alvos.length) return;
+                setRodandoAuto(true); pararRef.current = false;
+                let i = idx, ok = 0;
+                while (i < alvos.length && !pararRef.current) {
+                    setIdx(i); setEnviando(true);
+                    const enviou = await enviarIndice(i);
+                    setEnviando(false);
+                    if (enviou) { ok++; await mudarStatus(alvos[i], 'abordado'); }
+                    i++;
+                    if (i < alvos.length && !pararRef.current) await new Promise(r => setTimeout(r, Math.max(2, respiro) * 1000));
+                }
+                setRodandoAuto(false);
+                if (pararRef.current) showMessage(`Pausado em ${ok} envio(s).`, 'success');
+                else { setEmCampanha(false); showMessage(`Campanha concluída! ${ok} enviada(s). 🎉`, 'success'); }
+            };
+            const pararAuto = () => { pararRef.current = true; setRodandoAuto(false); };
+
+            // ═══════════════════ MODO CAMPANHA ═══════════════════
+            if (emCampanha && atual) {
+                return (
+                    <div className="animate-in fade-in max-w-2xl mx-auto">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><div className="h-6 w-6 text-emerald-600"><IconWhatsApp/></div> Prospectando</h2>
+                            <button onClick={() => { pararAuto(); setEmCampanha(false); }} className="text-slate-500 font-medium px-4 py-2 bg-slate-200 rounded-lg text-sm">Encerrar</button>
+                        </div>
+                        <div className="bg-slate-200 rounded-full h-2 mb-1 overflow-hidden"><div className="bg-emerald-500 h-full transition-all" style={{ width: `${(idx / alvos.length) * 100}%` }}></div></div>
+                        <p className="text-xs text-slate-500 mb-4 text-center">Lead {idx + 1} de {alvos.length}</p>
+
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                            <p className="font-bold text-slate-800 text-lg">{atual.nomeFantasia || atual.razaoSocial}</p>
+                            <p className="text-xs text-slate-500 mb-1">{atual.razaoSocial}</p>
+                            <p className="text-sm text-slate-600">{[atual.bairro, atual.municipio].filter(Boolean).join(' · ')}</p>
+                            <p className="text-sm font-bold text-emerald-700 mt-1">📱 {formatarTelBonito(atual.telefone)}</p>
+                            <pre className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 whitespace-pre-wrap max-h-56 overflow-y-auto">{personalizarLead(atual)}</pre>
+
+                            <div className="mt-4 space-y-2">
+                                {isElectron && window.__frigZap && (
+                                    rodandoAuto
+                                        ? <button onClick={pararAuto} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl text-sm">⏸️ Pausar envio automático</button>
+                                        : <button onClick={rodarAuto} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm">🤖 Enviar todos automaticamente</button>
+                                )}
+                                <a href={zapUrl(waNum(atual.telefone), personalizarLead(atual))} target="_blank" rel="noreferrer" onClick={() => setTimeout(() => avancar(true), 800)}
+                                   className="block text-center w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm">💬 Abrir no WhatsApp e ir pro próximo</a>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setIdx(Math.max(0, idx - 1))} disabled={idx === 0} className="flex-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 font-bold py-2.5 rounded-xl text-sm">← Anterior</button>
+                                    <button onClick={() => avancar(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-sm">Pular →</button>
+                                </div>
+                                <button onClick={() => marcarNaoPerturbe(atual)} className="w-full text-xs font-bold text-red-600 hover:text-red-700 py-2">🚫 Não perturbe (nunca mais abordar)</button>
+                            </div>
+                            {enviando && <p className="text-center text-xs text-slate-500 mt-2 animate-pulse">Enviando...</p>}
+                        </div>
+                    </div>
+                );
+            }
+
+            // ═══════════════════ TELA PRINCIPAL ═══════════════════
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2">🎯 Prospecção em Massa</h1>
+                        <p className="text-slate-500 text-sm mt-1">Importa uma lista de empresas (dados públicos da Receita Federal), filtra quem interessa e aborda todo mundo pelo WhatsApp — sem repetir quem já é seu cliente.</p>
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-4">
+                            {[['Leads', stats.total, 'text-slate-800'], ['Com celular', stats.comCelular, 'text-emerald-700'], ['Abordados', stats.abordados, 'text-sky-700'], ['Hoje', stats.hoje, 'text-amber-700'], ['Viraram cliente', stats.clientes, 'text-rose-700']].map(([lab, val, cor]) => (
+                                <div key={lab} className="bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2.5 text-center">
+                                    <p className={`text-xl font-black ${cor}`}>{val}</p>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">{lab}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </header>
+
+                    {/* ═══ IMPORTAR ═══ */}
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <h3 className="font-bold text-slate-800 mb-1">📥 Importar lista de empresas</h3>
+                        <p className="text-xs text-slate-500 mb-3">
+                            Aceita <b>CSV ou Excel</b> exportado do Casa dos Dados, CNPJ.biz ou da base aberta da Receita.
+                            As colunas são achadas pelo <b>nome do cabeçalho</b>, então não precisa arrumar a ordem.
+                            Reimportar a mesma lista <b>atualiza</b> em vez de duplicar — o que você já abordou não se perde.
+                        </p>
+                        <label className="block w-full">
+                            <input type="file" accept=".csv,.xlsx,.xls,text/csv" onChange={handleArquivo} className="hidden" />
+                            <span className="block text-center bg-rose-700 hover:bg-rose-800 text-white font-bold py-3 rounded-xl text-sm cursor-pointer transition-colors">📎 Selecionar planilha de leads</span>
+                        </label>
+
+                        {importPreview && (
+                            <div className="mt-4 border-t border-slate-200 pt-4">
+                                <p className="text-sm font-bold text-slate-700 mb-2">
+                                    {importPreview.length} empresa(s) lida(s) ·{' '}
+                                    <span className="text-emerald-600">{importPreview.filter(p => !p.existe).length} novas</span> ·{' '}
+                                    <span className="text-slate-400">{importPreview.filter(p => p.existe).length} já na base</span> ·{' '}
+                                    <span className="text-sky-600">{importPreview.filter(p => p.temCelular).length} com celular</span>
+                                </p>
+                                <div className="max-h-52 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
+                                    {importPreview.slice(0, 200).map((p, i) => (
+                                        <div key={i} className="px-3 py-2 text-xs flex items-center justify-between gap-2">
+                                            <span className="min-w-0 truncate">
+                                                <b className="text-slate-700">{p.nomeFantasia || p.razaoSocial}</b>
+                                                <span className="text-slate-400"> · {p.municipio || '—'}</span>
+                                            </span>
+                                            <span className="shrink-0 flex items-center gap-1.5">
+                                                {p.temCelular ? <span className="text-emerald-600 font-bold">📱</span> : (telValido(p.telefone) ? <span className="text-slate-400">☎️</span> : <span className="text-red-400">—</span>)}
+                                                {p.existe && <span className="text-[10px] text-slate-400 font-bold">JÁ TEM</span>}
+                                            </span>
+                                        </div>
+                                    ))}
+                                    {importPreview.length > 200 && <p className="px-3 py-2 text-[11px] text-slate-400 italic">…e mais {importPreview.length - 200}. Todos serão importados.</p>}
+                                </div>
+                                <div className="flex gap-2 mt-3">
+                                    <button onClick={() => setImportPreview(null)} className="px-4 py-2.5 font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm">Cancelar</button>
+                                    <button onClick={confirmarImport} disabled={importBusy} className="flex-1 px-5 py-2.5 font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-sm shadow-md">{importBusy ? 'Salvando...' : `✅ Importar ${importPreview.length}`}</button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ═══ FILTROS ═══ */}
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 space-y-3">
+                        <div className="flex flex-wrap gap-2">
+                            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="🔍 Buscar por nome, bairro..." className="flex-1 min-w-[180px] px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                            <select value={fMunicipio} onChange={e => setFMunicipio(e.target.value)} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-700">
+                                <option value="todos">🏙️ Todas as cidades</option>
+                                {municipios.map(m => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                            <select value={fSegmento} onChange={e => setFSegmento(e.target.value)} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-700">
+                                <option value="todos">🏷️ Todos os segmentos</option>
+                                {Object.entries(LEAD_SEGMENTOS).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
+                            </select>
+                            <select value={fStatus} onChange={e => setFStatus(e.target.value)} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-700">
+                                <option value="nao_abordados">🎯 Ainda não abordados</option>
+                                <option value="todos">Todos os status</option>
+                                {Object.entries(LEAD_STATUS).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex flex-wrap gap-4 text-sm">
+                            <label className="flex items-center gap-2 cursor-pointer font-semibold text-slate-600">
+                                <input type="checkbox" checked={soCelular} onChange={e => setSoCelular(e.target.checked)} className="h-4 w-4 accent-rose-700" />
+                                📱 Só com celular <span className="text-xs text-slate-400 font-normal">(quase sempre o do dono)</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer font-semibold text-slate-600">
+                                <input type="checkbox" checked={esconderClientes} onChange={e => setEsconderClientes(e.target.checked)} className="h-4 w-4 accent-rose-700" />
+                                🙈 Esconder quem já é meu cliente
+                            </label>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                            <p className="text-sm font-bold text-slate-700">{lista.length} lead(s) no filtro · <span className="text-rose-700">{selecionados.size} selecionado(s)</span></p>
+                            <div className="flex gap-2">
+                                <button onClick={marcarTodos} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">Marcar todos</button>
+                                <button onClick={limparSel} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">Limpar</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* ═══ MENSAGEM ═══ */}
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <h3 className="font-bold text-slate-800 mb-1">💬 Mensagem de abordagem</h3>
+                        <p className="text-xs text-slate-500 mb-3">Use <code className="bg-slate-100 px-1 rounded">{'{nome}'}</code>, <code className="bg-slate-100 px-1 rounded">{'{cidade}'}</code>, <code className="bg-slate-100 px-1 rounded">{'{saudacao}'}</code>, <code className="bg-slate-100 px-1 rounded">{'{vendedor}'}</code> e <code className="bg-slate-100 px-1 rounded">{'{ofertas}'}</code>.</p>
+                        <textarea value={template} onChange={e => setTemplate(e.target.value)} rows={7} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm font-mono" />
+                        <div className="flex flex-wrap gap-3 items-center mt-3">
+                            <input value={vendedorCustom} onChange={e => setVendedorCustom(e.target.value)} placeholder={`Seu nome (padrão: ${nomeVend()})`} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm w-48" />
+                            <label className="flex items-center gap-2 cursor-pointer font-semibold text-slate-600 text-sm">
+                                <input type="checkbox" checked={incluirOfertas} onChange={e => setIncluirOfertas(e.target.checked)} className="h-4 w-4 accent-rose-700" />
+                                🥩 Incluir produtos da vitrine
+                            </label>
+                            {incluirOfertas && <SeletorEstiloZap estilo={estiloZap} setEstilo={setEstiloZap} />}
+                        </div>
+
+                        {incluirOfertas && (
+                            <div className="mt-3 border-t border-slate-100 pt-3">
+                                <input value={buscaProd} onChange={e => setBuscaProd(e.target.value)} placeholder="Buscar produto pra vitrine..." className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm mb-2" />
+                                <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
+                                    {(products || []).filter(p => !buscaProd || String(p.name || '').toLowerCase().includes(buscaProd.toLowerCase()) || String(p.code).includes(buscaProd)).slice(0, 60).map(p => (
+                                        <label key={p.code} className="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-slate-50">
+                                            <input type="checkbox" checked={produtosVitrine.has(String(p.code))} onChange={() => { const s = new Set(produtosVitrine); const k = String(p.code); s.has(k) ? s.delete(k) : s.add(k); setProdutosVitrine(s); }} className="h-4 w-4 accent-rose-700" />
+                                            <span className="font-mono text-slate-400">{p.code}</span>
+                                            <span className="text-slate-700 truncate">{p.name}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                                <p className="text-[11px] text-slate-400 mt-1">{produtosVitrine.size} produto(s) na vitrine. Itens da Lista Negra não entram.</p>
+                            </div>
+                        )}
+
+                        {isElectron && (
+                            <div className="flex items-center gap-2 mt-3 text-sm">
+                                <span className="font-semibold text-slate-600">⏱️ Respiro entre envios:</span>
+                                <input type="number" min="2" max="120" value={respiro} onChange={e => setRespiro(Number(e.target.value))} className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
+                                <span className="text-xs text-slate-400">segundos</span>
+                            </div>
+                        )}
+
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mt-4 text-xs text-amber-800">
+                            <b>⚠️ Cuidado com a sua linha.</b> Disparo rápido pra número desconhecido é o caminho mais curto pro WhatsApp bloquear o SEU número — e aí você perde também os Disparos da carteira.
+                            Vá com calma, personalize a mensagem e respeite quem pedir pra não receber (botão 🚫 Não perturbe).
+                        </div>
+
+                        <button onClick={iniciar} disabled={!selecionados.size} className="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold py-3.5 rounded-xl shadow-md flex items-center justify-center gap-2 transition-colors">
+                            <div className="h-5 w-5"><IconWhatsApp /></div>
+                            {isCapacitor ? `🎈 Abrir balão com ${selecionados.size} lead(s)` : `Abordar ${selecionados.size} lead(s)`}
+                        </button>
+                    </div>
+
+                    {/* ═══ LISTA ═══ */}
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                        {loading ? (
+                            <p className="p-8 text-center text-slate-400 text-sm">Carregando leads...</p>
+                        ) : !lista.length ? (
+                            <div className="p-8 text-center">
+                                <p className="text-slate-400 text-sm">{leads.length ? 'Nenhum lead bate com esse filtro.' : 'Nenhum lead ainda — importe uma planilha acima pra começar. 🎯'}</p>
+                            </div>
+                        ) : (
+                            <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
+                                {lista.slice(0, 400).map(l => {
+                                    const st = LEAD_STATUS[l.status || 'novo'] || LEAD_STATUS.novo;
+                                    const seg = LEAD_SEGMENTOS[l.segmento];
+                                    const cliente = jaECliente(l);
+                                    return (
+                                        <div key={l.id} className={`p-4 flex items-start gap-3 hover:bg-slate-50 transition-colors ${selecionados.has(l.id) ? 'bg-rose-50/50' : ''}`}>
+                                            <input type="checkbox" checked={selecionados.has(l.id)} onChange={() => toggle(l.id)} className="h-5 w-5 accent-rose-700 mt-1 shrink-0" />
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <p className="font-bold text-slate-800 truncate">{seg ? seg.emoji + ' ' : ''}{l.nomeFantasia || l.razaoSocial}</p>
+                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${st.cor}`}>{st.emoji} {st.label}</span>
+                                                    {cliente && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">JÁ É CLIENTE</span>}
+                                                </div>
+                                                <p className="text-xs text-slate-400 truncate">{l.razaoSocial}{l.cnpj ? ' · ' + formatarCnpjCurto(l.cnpj) : ''}</p>
+                                                <p className="text-xs text-slate-500">{[l.bairro, l.municipio, l.uf].filter(Boolean).join(' · ')}</p>
+                                                <div className="flex items-center gap-3 mt-1 flex-wrap">
+                                                    {telValido(l.telefone) && (
+                                                        <span className={`text-xs font-bold ${ehCelular(l.telefone) ? 'text-emerald-700' : 'text-slate-500'}`}>
+                                                            {ehCelular(l.telefone) ? '📱' : '☎️'} {formatarTelBonito(l.telefone)}
+                                                        </span>
+                                                    )}
+                                                    {l.email && (
+                                                        <span className={`text-xs truncate ${emailDeContador(l.email) ? 'text-amber-600' : 'text-slate-500'}`} title={emailDeContador(l.email) ? 'Parece email de contador' : ''}>
+                                                            ✉️ {l.email}{emailDeContador(l.email) ? ' (contador?)' : ''}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                                                    <a href={zapUrl(waNum(l.telefone), personalizarLead(l))} target="_blank" rel="noreferrer" onClick={() => mudarStatus(l, 'abordado')} className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white">💬 Zap</a>
+                                                    <button onClick={() => enriquecer(l)} disabled={salvandoId === l.id} className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-40">{salvandoId === l.id ? '...' : '🔍 Atualizar'}</button>
+                                                    <button onClick={() => mandarPraCadastro(l)} className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-700">📋 Pro cadastro</button>
+                                                    <select value={l.status || 'novo'} onChange={e => mudarStatus(l, e.target.value)} className="text-[11px] font-bold px-2 py-1 rounded-lg bg-slate-100 text-slate-700 border-none outline-none">
+                                                        {Object.entries(LEAD_STATUS).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
+                                                    </select>
+                                                    <button onClick={() => marcarNaoPerturbe(l)} title="Não perturbe" className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600">🚫</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                {lista.length > 400 && <p className="p-3 text-center text-[11px] text-slate-400 italic">Mostrando 400 de {lista.length}. Use os filtros pra afunilar.</p>}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
         const LikertScale = ({ question, value, onChange }) => (
             <div className="mb-4 bg-white p-4 rounded-xl border border-slate-200 hover:border-rose-300 transition-colors shadow-sm"><p className="font-semibold text-slate-700 mb-3 text-sm">{question}</p><div className="flex items-center justify-between gap-2"><span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase">1 - Não</span><div className="flex gap-1.5 sm:gap-3">{[1, 2, 3, 4, 5].map(num => (<button key={num} type="button" onClick={() => onChange(num)} className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm transition-all border-2 ${value === num ? 'bg-rose-700 border-rose-700 text-white shadow-md transform scale-110' : 'bg-slate-50 border-slate-300 text-slate-500 hover:border-rose-400 hover:bg-rose-50'}`}>{num}</button>))}</div><span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase">5 - Sim</span></div></div>
         );
@@ -5454,6 +6136,19 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.14.0', data: '13/08/2026', areas: ['site', 'app'], itens: [
+                '🎯 Nova tela *Prospecção em Massa*: importa uma lista de empresas (dados públicos de CNPJ da Receita Federal, exportada do Casa dos Dados/CNPJ.biz ou da base aberta) e aborda todo mundo pelo WhatsApp, pra aumentar a carteira',
+                'A planilha é lida pelo NOME das colunas, então serve CSV ou Excel de qualquer uma dessas fontes, em qualquer ordem de coluna',
+                '📱 Filtro *Só com celular*: separa quem tem celular (9 dígitos começando com 9) de quem só tem fixo — em empresa pequena o celular do cadastro costuma ser o do próprio dono',
+                '🙈 Esconde automaticamente quem JÁ é seu cliente (cruza por CNPJ e por nome), pra você não abordar quem já compra de você',
+                'Filtros por cidade, segmento (restaurante, mercado, açougue, padaria, hotel, buffet) e status da abordagem',
+                '🎈 No celular, abordar em massa usa o MESMO balão flutuante dos Disparos e da Fila — funciona no aplicativo que você já tem, sem precisar de APK novo',
+                'No programa de PC dá pra enviar em sequência automaticamente, com um "respiro" regulável entre um envio e outro',
+                'Cada lead vira botão 📋 *Pro cadastro*, que joga tudo pros Cadastros em Processo sem redigitar',
+                '🔍 *Atualizar* consulta o CNPJ na Receita (de graça) e traz situação cadastral e contato frescos',
+                '🚫 Lista de *Não perturbe*: quem pedir pra não receber some da prospecção pra sempre',
+                'Reimportar a mesma lista ATUALIZA em vez de duplicar — o histórico de quem você já abordou nunca se perde',
+            ]},
             { versao: '2.13.1', data: '04/08/2026', areas: ['site', 'app'], itens: [
                 '☁️ A Fila de Pedidos agora SINCRONIZA entre o computador e o celular. Monte a fila no PC (que é onde roda a extensão do SPAmov) e ela aparece sozinha no aplicativo, pra você mandar o WhatsApp do celular',
                 'Vale nos dois sentidos: copiou um pedido no celular, ele já aparece marcado com ✓ no PC. Limpar ou tirar um pedido da fila também vale nos dois',
@@ -8811,6 +9506,7 @@
                     case 'cadastrosProcesso': return <CadastrosProcessoScreen user={user} showMessage={showMessage} />;
                     case 'consultaCnpj': return <ConsultaCnpjScreen showMessage={showMessage} />;
                     case 'prospeccao': return <ProspeccaoScreen user={user} clients={clients} showMessage={showMessage} />;
+                    case 'leads': return <LeadsScreen user={user} clients={clients} products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} listaNegra={listaNegra} />;
                     case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
                     case 'credits': return <CreditsScreen />;
@@ -8921,6 +9617,7 @@
                             <NavButton route="cadastrosProcesso" icon={IconFileText} label="Em Cadastramento" />
                             <NavButton route="consultaCnpj" icon={IconSearch} label="Consulta CNPJ" />
                             <NavButton route="prospeccao" icon={IconMapPin} label="Perto de Mim" />
+                            <NavButton route="leads" icon={IconUsers} label="🎯 Prospecção em Massa" />
                             <NavButton route="radar" icon={IconDashboard} label="Radar de Clientes" />
                             <NavButton route="profile" icon={IconSettings} label="Meu Perfil / Admin" />
                             
