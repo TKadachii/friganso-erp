@@ -56,6 +56,7 @@ $header = @"
 // @match        https://tkadachii.github.io/*
 // @match        *://*.friganso.com.br/*
 // @match        *://spd1.friganso.com.br/*
+// @match        *://web.whatsapp.com/*
 // @run-at       document-idle
 // @grant        GM_setValue
 // @grant        GM_getValue

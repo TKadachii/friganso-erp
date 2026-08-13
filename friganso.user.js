@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.8.4.1622
+// @version      2026.8.13.1405
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
 // @match        *://*.friganso.com.br/*
 // @match        *://spd1.friganso.com.br/*
+// @match        *://web.whatsapp.com/*
 // @run-at       document-idle
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -14,6 +15,7 @@
 // @downloadURL  https://tkadachii.github.io/friganso-erp/friganso.user.js
 // @updateURL    https://tkadachii.github.io/friganso-erp/friganso.user.js
 // ==/UserScript==
+
 
 // Friganso ERP - Extensão (Resumo + Lançar pedido)
 (function () {
@@ -40,8 +42,18 @@
     };
 
 
+
     const APP_URL = "https://TKadachii.github.io/friganso-erp/";
     const host = location.hostname || "";
+
+    // 🤖 WhatsApp Web: dispara a campanha sozinho (vem antes dos outros hosts porque
+    // esta função usa `return` pra encerrar o bloco assim que reconhece a página).
+    // ⚠️ só no frame de cima: o manifesto usa all_frames, e sem essa trava cada iframe do
+    // WhatsApp montaria o próprio painel e disputaria o mesmo envio.
+    if (host.indexOf("web.whatsapp.com") !== -1) {
+        if (window.top === window.self) iniciarZapAuto();
+        return;
+    }
 
     // ========= PONTE: roda na página do APP (github.io) =========
     if (host.indexOf("github.io") !== -1) {
@@ -90,6 +102,20 @@
         window.addEventListener("message", function (e) {
             const d = e.data;
             if (!d || d.source !== "friganso-app") return;
+            // 🤖 Campanha de WhatsApp: o site manda a lista pronta e a extensão guarda. Quem
+            // consome é o content.js rodando no web.whatsapp.com. Responde ZAP_CAMPANHA_OK pro
+            // site saber que a extensão existe E está viva (sem isso ele abriria o WhatsApp à toa).
+            if (d.type === "ZAP_CAMPANHA" && Array.isArray(d.itens)) {
+                try {
+                    chrome.storage.local.set({
+                        friganso_zap_campanha: {
+                            itens: d.itens.map(function (i) { return { telefone: i.telefone, nome: i.nome, mensagem: i.mensagem, status: "" }; }),
+                            idx: 0, rodando: false, respiro: d.respiro || 8, ts: Date.now()
+                        }
+                    }, function () { try { window.postMessage({ source: "friganso-ext", type: "ZAP_CAMPANHA_OK", total: d.itens.length }, "*"); } catch (e) {} });
+                } catch (err) {}
+                return;
+            }
             if (d.type === "SET_CREDS") {
                 try { chrome.storage.local.set({ friganso_creds: { usuario: d.usuario || "", senha: d.senha || "", autoLogin: !!d.autoLogin, irVendas: !!d.irVendas } }); } catch (err) {}
                 return;
@@ -2028,4 +2054,170 @@
     tentarNavegarVendas();
     // ⚡ Se houver pedido pendente "automático", dispara o lançamento ao chegar na tela de vendas
     tentarIniciarAuto();
+
+    // ═══════════════════════════════════════════════════════════════════════════════════
+    // 🤖 ZAP AUTOMÁTICO no WhatsApp Web (2026-08-13)
+    // Faz no SITE o que o programa de PC já fazia: manda a campanha inteira sozinho.
+    //
+    // Por que precisa da extensão: um site NÃO consegue clicar dentro do web.whatsapp.com
+    // (origens diferentes, o navegador proíbe). O programa de PC dribla isso com uma <webview>
+    // que ele controla. A extensão dribla porque roda DENTRO da página do WhatsApp.
+    //
+    // ⚠️ Estratégia: navega pro chat de cada contato por URL (`/send?phone=...&text=...`), o que
+    // RECARREGA a página a cada envio. É de propósito: o content script morre e nasce a cada
+    // troca, então o estado NÃO pode viver em memória — vive todo no chrome.storage. Fica mais
+    // lento que mexer na busca interna do WhatsApp (jeito do PC), mas é muito mais resistente:
+    // não depende de adivinhar a navegação interna do app, que a Meta muda quando quer.
+    // ═══════════════════════════════════════════════════════════════════════════════════
+    function iniciarZapAuto() {
+        const CHAVE = "friganso_zap_campanha";
+        const VALIDADE = 60 * 60 * 1000;   // campanha esquecida expira em 1h
+        const TENTATIVAS_BOTAO = 60;       // 60 x 300ms = 18s esperando o botão Enviar aparecer
+
+        const soDig = (s) => String(s || "").replace(/\D/g, "");
+        const ler = (cb) => { try { chrome.storage.local.get([CHAVE], (r) => cb((r && r[CHAVE]) || null)); } catch (e) { cb(null); } };
+        const gravar = (c, cb) => { try { const o = {}; o[CHAVE] = c; chrome.storage.local.set(o, () => cb && cb()); } catch (e) { cb && cb(); } };
+        const limpar = () => { try { chrome.storage.local.remove(CHAVE); } catch (e) {} };
+
+        /** Número que está aberto agora, lido da própria URL. */
+        function numeroAberto() {
+            try { return soDig(new URLSearchParams(location.search).get("phone") || ""); } catch (e) { return ""; }
+        }
+
+        // ── Painel flutuante ────────────────────────────────────────────────────────────
+        let painel = null;
+        function montarPainel() {
+            if (painel) return painel;
+            painel = document.createElement("div");
+            painel.id = "friganso-zap-painel";
+            painel.style.cssText = [
+                "position:fixed", "right:16px", "bottom:16px", "z-index:2147483647",
+                "width:280px", "background:#0f172a", "color:#fff", "border-radius:16px",
+                "box-shadow:0 10px 40px rgba(0,0,0,.45)", "padding:14px",
+                "font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif", "font-size:13px",
+            ].join(";");
+            document.documentElement.appendChild(painel);
+            return painel;
+        }
+        function pintar(c, aviso) {
+            const p = montarPainel();
+            const total = c.itens.length;
+            const feitos = c.itens.filter((i) => i.status).length;
+            const ok = c.itens.filter((i) => i.status === "enviado").length;
+            const falhas = c.itens.filter((i) => i.status === "falhou").length;
+            const atual = c.itens[c.idx];
+            const pct = total ? Math.round((feitos / total) * 100) : 0;
+            p.innerHTML =
+                '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+                    '<span style="font-size:18px">🥩</span>' +
+                    '<b style="flex:1">Friganso — Disparo</b>' +
+                    '<span id="frig-x" style="cursor:pointer;opacity:.6;font-size:16px" title="Fechar e cancelar">✕</span>' +
+                '</div>' +
+                '<div style="background:#1e293b;border-radius:999px;height:6px;overflow:hidden;margin-bottom:6px">' +
+                    '<div style="background:#10b981;height:100%;width:' + pct + '%;transition:width .3s"></div>' +
+                '</div>' +
+                '<div style="opacity:.75;margin-bottom:8px">' + feitos + " de " + total +
+                    " · ✅ " + ok + (falhas ? " · ⚠️ " + falhas : "") + "</div>" +
+                (atual && c.rodando
+                    ? '<div style="background:#1e293b;border-radius:10px;padding:8px;margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">➡️ ' + (atual.nome || atual.telefone) + "</div>"
+                    : "") +
+                (aviso ? '<div style="background:#7c2d12;border-radius:10px;padding:8px;margin-bottom:8px">' + aviso + "</div>" : "") +
+                '<button id="frig-btn" style="width:100%;border:0;border-radius:10px;padding:10px;font-weight:700;cursor:pointer;background:' +
+                    (c.rodando ? "#dc2626" : "#10b981") + ';color:#fff">' +
+                    (c.rodando ? "⏸ Pausar" : (feitos ? "▶ Continuar" : "▶ Iniciar envio")) +
+                "</button>" +
+                '<div style="opacity:.5;font-size:11px;margin-top:8px;line-height:1.4">Não feche esta aba. Cada mensagem espera ' +
+                    (c.respiro || 8) + "s pra próxima.</div>";
+
+            p.querySelector("#frig-x").onclick = () => { limpar(); p.remove(); painel = null; };
+            p.querySelector("#frig-btn").onclick = () => {
+                c.rodando = !c.rodando;
+                gravar(c, () => { pintar(c); if (c.rodando) prosseguir(c); });
+            };
+        }
+
+        // ── Achar e clicar no botão Enviar ──────────────────────────────────────────────
+        function acharBotaoEnviar() {
+            const alvo =
+                document.querySelector('button[aria-label="Enviar"], button[aria-label="Send"]') ||
+                document.querySelector('span[data-icon="send"]') ||
+                document.querySelector('[data-testid="send"]');
+            if (!alvo) return null;
+            // o ícone costuma estar dentro do botão — sobe até 4 níveis procurando o clicável
+            let b = alvo;
+            for (let i = 0; i < 4 && b; i++) {
+                if (b.tagName === "BUTTON" || (b.getAttribute && b.getAttribute("role") === "button")) return b;
+                b = b.parentElement;
+            }
+            return alvo;
+        }
+        /** Detecta a tela de "número inválido" pra não ficar 18s esperando à toa. */
+        function numeroInvalido() {
+            const t = (document.body && document.body.innerText || "").toLowerCase();
+            return t.indexOf("inválido") !== -1 && t.indexOf("telefone") !== -1;
+        }
+
+        function esperarEEnviar(cb) {
+            let tentativas = 0;
+            const iv = setInterval(() => {
+                tentativas++;
+                if (numeroInvalido()) { clearInterval(iv); cb(false); return; }
+                const btn = acharBotaoEnviar();
+                if (btn) {
+                    clearInterval(iv);
+                    try { btn.click(); cb(true); } catch (e) { cb(false); }
+                    return;
+                }
+                if (tentativas > TENTATIVAS_BOTAO) { clearInterval(iv); cb(false); }
+            }, 300);
+        }
+
+        // ── Motor ───────────────────────────────────────────────────────────────────────
+        function irPara(item) {
+            location.href = "https://web.whatsapp.com/send?phone=" + soDig(item.telefone) +
+                            "&text=" + encodeURIComponent(item.mensagem || "");
+        }
+
+        function prosseguir(c) {
+            if (!c.rodando) return;
+            const item = c.itens[c.idx];
+            if (!item) {                                   // acabou
+                c.rodando = false;
+                gravar(c, () => pintar(c, "🎉 Campanha concluída!"));
+                return;
+            }
+            // Já estou no chat certo? Então envia. Senão, navega (a página recarrega e o
+            // script roda de novo, agora com o número certo na URL).
+            if (numeroAberto() && numeroAberto() === soDig(item.telefone)) {
+                pintar(c);
+                esperarEEnviar((ok) => {
+                    c.itens[c.idx].status = ok ? "enviado" : "falhou";
+                    c.idx++;
+                    gravar(c, () => {
+                        pintar(c, ok ? null : "⚠️ Não consegui enviar pra " + (item.nome || item.telefone) + " — pulei.");
+                        const prox = c.itens[c.idx];
+                        if (!prox) { c.rodando = false; gravar(c, () => pintar(c, "🎉 Campanha concluída!")); return; }
+                        setTimeout(() => { if (c.rodando) irPara(prox); }, Math.max(2, c.respiro || 8) * 1000);
+                    });
+                });
+            } else {
+                pintar(c);
+                irPara(item);
+            }
+        }
+
+        // ── Arranque ────────────────────────────────────────────────────────────────────
+        function arrancar() {
+            ler((c) => {
+                if (!c || !c.itens || !c.itens.length) return;          // sem campanha: nem aparece
+                if (Date.now() - (c.ts || 0) > VALIDADE) { limpar(); return; }
+                pintar(c);
+                if (c.rodando) prosseguir(c);
+            });
+        }
+        // o WhatsApp Web demora pra montar; espera o corpo existir antes de pendurar o painel
+        if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => setTimeout(arrancar, 1500));
+        else setTimeout(arrancar, 1500);
+    }
+
 })();

@@ -1,23 +1,28 @@
 {
   "manifest_version": 3,
   "name": "Friganso ERP - Resumo Rápido",
-  "version": "2.13.175",
-  "version_name": "2.13.1 - build 175",
-  "description": "Lê o pedido do SPAmov para o Resumo e lança pedidos montados no app, direto no SPAmov.",
+  "version": "2.15.177",
+  "version_name": "2.15.0 - build 177",
+  "description": "Lê o pedido do SPAmov para o Resumo, lança pedidos montados no app e dispara campanhas de WhatsApp sozinho.",
   "icons": {
     "16": "icon16.png",
     "48": "icon48.png",
     "128": "icon128.png"
   },
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "content_scripts": [
     {
       "matches": [
         "*://*.friganso.com.br/*",
         "*://spd1.friganso.com.br/*",
-        "*://tkadachii.github.io/*"
+        "*://tkadachii.github.io/*",
+        "*://web.whatsapp.com/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }

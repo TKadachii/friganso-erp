@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 176;
+        const APP_BUILD_VERSION = 177;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -367,6 +367,31 @@
             if (isCapacitor || destino === 'app') return `whatsapp://send?phone=${n}&text=${t}`;
             if (destino === 'web') return `https://web.whatsapp.com/send?phone=${n}&text=${t}`;
             return `https://wa.me/${n}?text=${t}`;
+        };
+        // 🤖 Entrega a campanha inteira pra EXTENSÃO e abre o WhatsApp Web, que dispara sozinho.
+        // É o equivalente, no site, ao "Enviar todos sozinho" do programa de PC: o navegador não
+        // pode clicar dentro do web.whatsapp.com (outra origem), mas a extensão roda lá dentro.
+        // ⚠️ Espera o ACK antes de abrir a aba — sem isso, quem não tem a extensão instalada veria
+        // o WhatsApp abrir e nada acontecer, sem nenhuma pista do motivo.
+        const dispararPelaExtensao = (itens, respiro, showMessage, aoConfirmar) => {
+            if (!itens.length) { showMessage('Selecione ao menos 1 contato com telefone.', 'error'); return; }
+            let respondeu = false;
+            const onAck = (e) => {
+                const d = e.data;
+                if (!d || d.source !== 'friganso-ext' || d.type !== 'ZAP_CAMPANHA_OK') return;
+                respondeu = true;
+                window.removeEventListener('message', onAck);
+                showMessage(d.total + ' mensagem(ns) na fila! Abri o WhatsApp Web — clique em "Iniciar envio" no painel do canto. 🤖', 'success');
+                window.open('https://web.whatsapp.com', 'friganso_zap_web');
+                if (aoConfirmar) aoConfirmar();
+            };
+            window.addEventListener('message', onAck);
+            try { window.postMessage({ source: 'friganso-app', type: 'ZAP_CAMPANHA', itens: itens, respiro: respiro }, '*'); } catch (e) {}
+            setTimeout(() => {
+                if (respondeu) return;
+                window.removeEventListener('message', onAck);
+                showMessage('A extensão do Friganso não respondeu. Instale ou atualize ela (aba Extensão) e recarregue a página com Ctrl+Shift+R.', 'error');
+            }, 1500);
         };
         const checkDiscountRules = (code, name, originalPrice) => {
             const codeStr = (code || '').toString().trim(), nameStr = (name || '').toLowerCase().trim(), origPrice = parseFloat(originalPrice) || 0;
@@ -5193,7 +5218,7 @@
                             </div>
                         )}
 
-                        {isElectron && (
+                        {!isCapacitor && (
                             <div className="flex items-center gap-2 mt-3 text-sm">
                                 <span className="font-semibold text-slate-600">⏱️ Respiro entre envios:</span>
                                 <input type="number" min="2" max="120" value={respiro} onChange={e => setRespiro(Number(e.target.value))} className="w-20 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
@@ -5206,6 +5231,15 @@
                             Vá com calma, personalize a mensagem e respeite quem pedir pra não receber (botão 🚫 Não perturbe).
                         </div>
 
+                        {/* 🤖 No navegador, a EXTENSÃO dispara sozinho — mesmo motor dos Disparos */}
+                        {!isElectron && !isCapacitor && (
+                            <button onClick={() => dispararPelaExtensao(
+                                alvos.map(l => ({ telefone: waNum(l.telefone), nome: l.nomeFantasia || l.razaoSocial || '', mensagem: personalizarLead(l) })),
+                                Math.max(2, respiro), showMessage, () => marcarAbordados(alvos.map(l => l.id))
+                            )} disabled={!selecionados.size} className="w-full mt-4 bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white font-bold py-3.5 rounded-xl shadow-md flex items-center justify-center gap-2 transition-colors">
+                                🤖 Enviar todos sozinho pela extensão ({selecionados.size})
+                            </button>
+                        )}
                         <button onClick={iniciar} disabled={!selecionados.size} className="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold py-3.5 rounded-xl shadow-md flex items-center justify-center gap-2 transition-colors">
                             <div className="h-5 w-5"><IconWhatsApp /></div>
                             {isCapacitor ? `🎈 Abrir balão com ${selecionados.size} lead(s)` : `Abordar ${selecionados.size} lead(s)`}
@@ -6136,6 +6170,14 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.15.0', data: '13/08/2026', areas: ['site', 'extensao'], itens: [
+                '🤖 Agora dá pra "Enviar todos sozinho" PELO SITE, não só pelo programa de PC. Vale nos Disparos e na Prospecção em Massa',
+                'Quem faz o trabalho é a EXTENSÃO: o site entrega a lista pronta pra ela, que abre o WhatsApp Web e vai mandando um por um, sozinha. Um site normal não consegue clicar dentro do WhatsApp — a extensão consegue porque roda lá dentro',
+                'Um painel do Friganso aparece no canto do WhatsApp Web mostrando o progresso, com botão de Pausar e Continuar. Ele NÃO começa sozinho: você clica em "Iniciar envio"',
+                'Número inválido não trava mais a fila — ele é marcado como falhou e o envio segue pro próximo',
+                'O "respiro" entre um envio e outro agora também aparece no site (antes só no programa de PC)',
+                '⚠️ Precisa BAIXAR A EXTENSÃO DE NOVO e atualizar em chrome://extensions — extensão instalada por pasta não se atualiza sozinha',
+            ]},
             { versao: '2.14.0', data: '13/08/2026', areas: ['site', 'app'], itens: [
                 '🎯 Nova tela *Prospecção em Massa*: importa uma lista de empresas (dados públicos de CNPJ da Receita Federal, exportada do Casa dos Dados/CNPJ.biz ou da base aberta) e aborda todo mundo pelo WhatsApp, pra aumentar a carteira',
                 'A planilha é lida pelo NOME das colunas, então serve CSV ou Excel de qualquer uma dessas fontes, em qualquer ordem de coluna',
@@ -8689,6 +8731,15 @@
                             <div className="bg-[#e1ffc7] rounded-2xl p-4 border border-[#d3f4b8] mb-4">
                                 <pre className="font-sans text-sm whitespace-pre-wrap text-slate-800">{personalizar(atual)}</pre>
                             </div>
+                            {/* 🤖 No site/navegador quem automatiza é a EXTENSÃO (o programa de PC usa o WhatsApp embutido) */}
+                            {!isElectron && !isCapacitor && (
+                                <button onClick={() => dispararPelaExtensao(
+                                    comTelefone.slice(idx).map(c => ({ telefone: waNumber(c.phone), nome: c.name || '', mensagem: personalizar(c) })),
+                                    8, showMessage, () => setEmCampanha(false)
+                                )} className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg">
+                                    🤖 Enviar todos sozinho ({comTelefone.length - idx} restante{comTelefone.length - idx > 1 ? 's' : ''})
+                                </button>
+                            )}
                             {/* 🤖 Envio automático em sequência (só no programa de PC) */}
                             {isElectron && (rodandoAuto ? (
                                 <button onClick={pararAuto} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-4 rounded-2xl shadow-md transition-colors flex items-center justify-center gap-2 mb-3 text-lg animate-pulse">
