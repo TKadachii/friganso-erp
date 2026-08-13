@@ -352,9 +352,37 @@ descobrir leads.
   redigitar nada. **"🔍 Atualizar"** consulta a BrasilAPI e traz situação cadastral/contato frescos.
 - Lista **🚫 Não perturbe** (`naoPerturbe: true`): some da prospecção pra sempre. Prospecção B2B se
   apoia no legítimo interesse da LGPD (art. 7º, IX), mas o opt-out precisa existir e ser respeitado.
-- ⚠️ **Falta a planilha**: a tela está pronta e vazia. O usuário precisa exportar do Casa dos Dados
-  (~R$0,01/CNPJ) **ou** rodar um script na base aberta da Receita (grátis, ~2,5 GB compactados —
-  esse script ainda NÃO foi escrito).
+### 🛠️ `ferramentas/gerar-leads.js` — o gerador da lista (2026-08-13)
+Script Node (roda no PC, não no site) que baixa a base aberta da Receita e cospe o CSV pronto pra
+importar na tela. **De graça e repetível** — o export do Casa dos Dados custa ~R$0,01/CNPJ *toda vez*
+que você quiser atualizar; o script custa só o download. Ver `ferramentas/README.md`.
+
+`node ferramentas\gerar-leads.js` → `leads-friganso.csv`. Flags: `--so-celular`, `--com-inativas`,
+`--razao`, `--pasta AAAA-MM`, `--saida`, `--manter-zips`. Cidades/CNAEs/UF se configuram em
+maiúsculas no topo do arquivo.
+
+⚠️ **As pegadinhas do formato da Receita** (é o que quebra quem tenta na mão — já resolvidas):
+1. Os CSVs **não têm cabeçalho**: colunas POSICIONAIS (aqui a ORDEM é o contrato, ao contrário da
+   planilha do usuário, que é lida pelo NOME).
+2. Encoding **ISO-8859-1**, não UTF-8 — ler como UTF-8 estraga todo acento.
+3. Separador `;`, campos entre aspas, aspas internas dobradas.
+4. **Município e CNAE vêm como CÓDIGO** — precisa das tabelas `Municipios.zip` e `Cnaes.zip`.
+5. **DDD numa coluna separada** do número (`ddd_1` + `telefone_1`).
+6. Situação ATIVA é o código `02`.
+7. ⚠️ **Razão Social NÃO está em ESTABELECIMENTOS** — mora em EMPRESAS, ligada por `cnpj_basico`.
+   Por isso `--razao` é opcional: dobra o download. Sem ela vem só o Nome Fantasia.
+
+O download é de ~2,5 GB em 10 partes, mas o script **apaga cada parte depois de filtrar**, então
+basta ~2 GB livres. Se cair a internet, rodar de novo reaproveita o que já baixou.
+
+- ✅ Testado: `node ferramentas\teste-gerar-leads.js` roda a regra de negócio inteira com dados
+  falsos no formato exato da Receita, **sem baixar nada**. O teste lê os detectores de coluna
+  direto do `index.html`, então quebra de propósito se alguém mexer neles e perder a
+  compatibilidade entre o script e a tela.
+- ⚠️ **Falta a planilha**: a tela está pronta e vazia até rodar o gerador (ou importar um export
+  do Casa dos Dados — a tela aceita os dois).
+- ⚠️ **A URL da Receita muda de lugar**: o script descobre sozinho a pasta `AAAA-MM` mais nova
+  listando o diretório. Se a Receita mudar a estrutura do site, cai no `--pasta AAAA-MM` manual.
 
 ## 🐞 PENDENTE / em investigação
 - **Bug do preço 00,00 no PDF `2206.pdf`**: vários itens vieram R$ 0,00. Ex.: código **13291**
