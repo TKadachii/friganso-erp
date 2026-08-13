@@ -314,6 +314,48 @@ exatamente qual etapa zera. Foi assim que caiu de "não lê" pra causa exata em 
 `pcsItem` sai vazio. Não impede a leitura (o campo é só informativo) — mas se um dia precisar do
 número de peças, é aí que está o problema.
 
+## 🎯 Prospecção em Massa / Leads (2026-08-13, v2.14.0)
+Tela `LeadsScreen` (rota `leads`) pra **aumentar a carteira** abordando muito estabelecimento pelo
+WhatsApp. Importa uma planilha de empresas, filtra, e dispara.
+
+**De onde vêm os dados — a descoberta que definiu a arquitetura:** o CNPJ.biz e o Casa dos Dados
+**não têm base própria**, os dois revendem o arquivo público da Receita Federal
+(`dadosabertos.rfb.gov.br`). O telefone e o email que eles mostram são os campos `telefone_1` e
+`correio_eletronico` da tabela ESTABELECIMENTOS. Ou seja: dá pra ter os mesmos dados de graça, e em
+massa, em vez de um CNPJ por vez.
+
+**Por que NÃO é API ao vivo** (decidido, não esquecer): o site é estático no GitHub Pages, então
+qualquer chave de API ficaria visível no `index.html`, e o proxy pra escondê-la exigiria **Firebase
+Blaze (pago)**. A importação única resolve sem custo recorrente, sem CORS, e ainda funciona offline
+no app e no PC. A exceção é a **BrasilAPI** (`buscarCnpjNaReceita`, já usada na Consulta CNPJ): não
+tem chave, então pode ser chamada direto do navegador — serve pra ENRIQUECER 1 CNPJ, não pra
+descobrir leads.
+
+- **Firestore `leads`**, com o **CNPJ como id do documento** (chave natural). O import usa `merge`,
+  então **reimportar a mesma lista ATUALIZA em vez de duplicar** e nunca apaga o status de quem já
+  foi abordado. Lotes de 400 (o limite do Firestore é 500).
+- **Colunas achadas pelo NOME do cabeçalho**, nunca por posição fixa — mesma lição da Lista de Preços
+  e do cadastro do SPAmov. Testado contra 4 formatos reais (Casa dos Dados, base da Receita,
+  CNPJ.biz e planilha mínima); todos leem. Se a fonte mudar a ordem das colunas, continua lendo.
+- ⚠️ **Filtro "só com celular" é o coração da tela.** Celular = 9 dígitos começando com 9 (fixo tem 8).
+  Em empresa pequena — restaurante, mercadinho, açougue — o telefone do cadastro da Receita costuma
+  ser o **celular do próprio dono**, então esse filtro é o que separa contato útil de telefone de
+  recado. Confirmado com caso real (restaurante em Búzios: celular + Gmail pessoal da dona).
+- Email **de contador** (`contab|escritorio|assessoria|fiscal`) é só SINALIZADO em âmbar, não
+  descartado — nesse segmento o email costuma ser pessoal mesmo.
+- **Cruza com a carteira** por CNPJ (exato) e por nome normalizado, pra esconder quem já é cliente.
+- 🎈 O disparo reusa o **MESMO plugin nativo `ZapBolha`** dos Disparos e da Fila — funciona no APK que
+  já está instalado, **sem precisar de app novo**. No PC usa o WhatsApp embutido (`window.__frigZap`)
+  com **respiro regulável** entre envios: disparo rápido pra número desconhecido derruba a linha, e
+  perder o número derruba junto os Disparos da carteira.
+- Botão **"📋 Pro cadastro"** joga o lead pros `cadastros_processo` (funil que já existia) sem
+  redigitar nada. **"🔍 Atualizar"** consulta a BrasilAPI e traz situação cadastral/contato frescos.
+- Lista **🚫 Não perturbe** (`naoPerturbe: true`): some da prospecção pra sempre. Prospecção B2B se
+  apoia no legítimo interesse da LGPD (art. 7º, IX), mas o opt-out precisa existir e ser respeitado.
+- ⚠️ **Falta a planilha**: a tela está pronta e vazia. O usuário precisa exportar do Casa dos Dados
+  (~R$0,01/CNPJ) **ou** rodar um script na base aberta da Receita (grátis, ~2,5 GB compactados —
+  esse script ainda NÃO foi escrito).
+
 ## 🐞 PENDENTE / em investigação
 - **Bug do preço 00,00 no PDF `2206.pdf`**: vários itens vieram R$ 0,00. Ex.: código **13291**
   (correto = 30,63). Causa descoberta: NESSE PDF as colunas estão em posições X **diferentes** das
