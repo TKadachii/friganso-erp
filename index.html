@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 177;
+        const APP_BUILD_VERSION = 178;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -367,6 +367,42 @@
             if (isCapacitor || destino === 'app') return `whatsapp://send?phone=${n}&text=${t}`;
             if (destino === 'web') return `https://web.whatsapp.com/send?phone=${n}&text=${t}`;
             return `https://wa.me/${n}?text=${t}`;
+        };
+        // 🏆 Ranking de produtos por cliente, a partir da coleção `purchases`.
+        // ⚠️ Por que não dá pra usar o `client.history`: ele é desduplicado (`[...new Set(...)]`),
+        // então guarda QUAIS produtos o cliente compra, mas perde QUANTAS VEZES. A frequência real
+        // só existe em `purchases`, que tem um documento por pedido.
+        // Devolve: clienteCode -> (codigoProduto -> { pedidos, kg, ultima }).
+        const montarRankCompras = (compras) => {
+            const mapa = new Map();
+            (compras || []).forEach(p => {
+                const code = String((p && p.clienteCode) || '');
+                if (!code) return;
+                let porProd = mapa.get(code);
+                if (!porProd) { porProd = new Map(); mapa.set(code, porProd); }
+                const vistosNestePedido = new Set(); // produto repetido DENTRO do mesmo pedido conta 1
+                ((p && p.itens) || []).forEach(i => {
+                    const cod = String((i && i.code) || '');
+                    if (!cod) return;
+                    let r = porProd.get(cod);
+                    if (!r) { r = { pedidos: 0, kg: 0, ultima: 0 }; porProd.set(cod, r); }
+                    if (!vistosNestePedido.has(cod)) { r.pedidos++; vistosNestePedido.add(cod); }
+                    r.kg += Number(i.peso) || 0;
+                    if ((p.ts || 0) > r.ultima) r.ultima = p.ts || 0;
+                });
+            });
+            return mapa;
+        };
+        // Ordena os candidatos pelo que o cliente MAIS compra: 1º nº de pedidos em que apareceu,
+        // 2º total de kg, 3º o mais recente. Produto sem registro vai pro fim (tudo zero).
+        const ordenarPelosMaisComprados = (cands, rank) => {
+            const nota = (p) => (rank && rank.get(String(p.code))) || { pedidos: 0, kg: 0, ultima: 0 };
+            return [...cands].sort((a, b) => {
+                const ra = nota(a), rb = nota(b);
+                if (rb.pedidos !== ra.pedidos) return rb.pedidos - ra.pedidos;
+                if (rb.kg !== ra.kg) return rb.kg - ra.kg;
+                return rb.ultima - ra.ultima;
+            });
         };
         // 🤖 Entrega a campanha inteira pra EXTENSÃO e abre o WhatsApp Web, que dispara sozinho.
         // É o equivalente, no site, ao "Enviar todos sozinho" do programa de PC: o navegador não
@@ -6170,6 +6206,14 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.16.0', data: '13/08/2026', areas: ['site'], itens: [
+                '🏆 Nos Disparos, escolhendo 2/3/4/5 produtos, agora vão os que AQUELE cliente MAIS COMPRA — antes o app ia variando os produtos a cada dia, sem olhar quantidade',
+                'A ordem sai do histórico real de pedidos: primeiro em quantos pedidos o produto apareceu, depois pelo total de kg, e por último o mais recente',
+                'Isso não dava pra fazer com o histórico do cliente, que só guarda QUAIS produtos ele compra, sem repetição — a conta agora vem das compras registradas, uma por pedido',
+                'Continua dando pra usar o jeito antigo: o botão "🔁 Variar a cada dia" fica ao lado, e o app lembra da sua escolha',
+                'Cliente que ainda não tem compra registrada cai no rodízio sozinho, em vez de ficar sem oferta',
+                'A extensão NÃO mudou nesta versão — se a sua já está na 2.15.0 (build 177), não precisa reinstalar',
+            ]},
             { versao: '2.15.0', data: '13/08/2026', areas: ['site', 'extensao'], itens: [
                 '🤖 Agora dá pra "Enviar todos sozinho" PELO SITE, não só pelo programa de PC. Vale nos Disparos e na Prospecção em Massa',
                 'Quem faz o trabalho é a EXTENSÃO: o site entrega a lista pronta pra ela, que abre o WhatsApp Web e vai mandando um por um, sozinha. Um site normal não consegue clicar dentro do WhatsApp — a extensão consegue porque roda lá dentro',
@@ -8461,6 +8505,23 @@
             // 💰 Estilo do bloco de preço de cada produto — independente do preset de saudação/cabeçalho acima.
             const [estiloZap, setEstiloZap] = useState(getEstiloZapSalvo());
             useEffect(() => { try { window.localStorage.setItem(ESTILO_ZAP_KEY, estiloZap); } catch (e) {} }, [estiloZap]);
+            // 🏆 RANKING DE PRODUTOS POR CLIENTE (2026-08-13)
+            // ⚠️ O `client.history` NÃO serve pra isso: ele é desduplicado (`[...new Set(...)]`),
+            // então diz QUAIS produtos o cliente compra, mas não QUANTAS VEZES. A frequência real
+            // só existe na coleção `purchases`, um documento por pedido.
+            const [comprasRank, setComprasRank] = useState([]);
+            useEffect(() => {
+                const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(2000)
+                    .onSnapshot(s => setComprasRank(s.docs.map(d => d.data())), () => {});
+                return () => unsub();
+            }, []);
+            const rankPorCliente = useMemo(() => montarRankCompras(comprasRank), [comprasRank]);
+            // 'top' = os que ele MAIS compra | 'rodizio' = varia a cada dia (comportamento antigo)
+            const [ordemOferta, setOrdemOferta] = useState(() => {
+                try { return window.localStorage.getItem('friganso_ordem_oferta') || 'top'; } catch (e) { return 'top'; }
+            });
+            useEffect(() => { try { window.localStorage.setItem('friganso_ordem_oferta', ordemOferta); } catch (e) {} }, [ordemOferta]);
+
             const [filtro, setFiltro] = useState('todos'); // todos | inativos | atencao | top | produto
             const [busca, setBusca] = useState('');
             const [produtosAlvo, setProdutosAlvo] = useState(new Set()); // códigos dos produtos p/ segmentar quem compra
@@ -8532,9 +8593,21 @@
                 cands = cands.filter(p => p && !lnSet.has(String(p.code))); // 🚫 remove itens da lista negra
                 if (!cands.length) return [];
 
-                // "todos" devolve a lista inteira; senão rotaciona uma janela de N pela data
                 if (n === 'todos' || Number(n) >= cands.length) return cands;
                 const num = Number(n);
+
+                // 🏆 MAIS COMPRADOS: ordena pelo histórico real de pedidos deste cliente.
+                // Critério: 1º em quantos PEDIDOS o produto apareceu, 2º o total de KG, 3º o mais
+                // recente. Só vale pro modo "só o que já comprou" — em "novos produtos" ele nunca
+                // comprou nada, não haveria o que ranquear.
+                if (ordemOferta === 'top' && ofertaModo === 'historico') {
+                    const rank = rankPorCliente.get(String(c.code));
+                    if (rank && rank.size) return ordenarPelosMaisComprados(cands, rank).slice(0, num);
+                    // sem compra registrada pra este cliente: cai no rodízio abaixo
+                }
+
+                // 🔁 RODÍZIO (padrão antigo): janela de N que anda sozinha a cada dia, pra não
+                // mandar sempre a mesma coisa pro mesmo cliente.
                 const today = new Date();
                 const daySeed = Number(`${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`);
                 const start = (daySeed + hashStr(c.code)) % cands.length;
@@ -8846,6 +8919,20 @@
                                             ))}
                                             <button onClick={() => setQtdProdutos('todos')} className={`h-7 px-3 rounded-lg text-xs font-bold transition-colors ${qtdProdutos === 'todos' ? 'bg-rose-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>Todos</button>
                                         </div>
+                                        {/* 🏆 Ordem da escolha — só faz diferença no modo "só o que já comprou" */}
+                                        {ofertaModo === 'historico' && qtdProdutos !== 'todos' && (
+                                            <div className="flex items-center gap-2 flex-wrap mt-2">
+                                                <span className="text-xs font-bold text-slate-500">Quais escolher:</span>
+                                                <button onClick={() => setOrdemOferta('top')} title="Manda os produtos que ESTE cliente mais compra, contando os pedidos de verdade" className={`h-7 px-3 rounded-lg text-xs font-bold transition-colors ${ordemOferta === 'top' ? 'bg-rose-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>🏆 Mais comprados</button>
+                                                <button onClick={() => setOrdemOferta('rodizio')} title="Vai variando os produtos a cada dia, pra não mandar sempre a mesma coisa" className={`h-7 px-3 rounded-lg text-xs font-bold transition-colors ${ordemOferta === 'rodizio' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}>🔁 Variar a cada dia</button>
+                                            </div>
+                                        )}
+                                        {ofertaModo === 'historico' && qtdProdutos !== 'todos' && ordemOferta === 'top' && (
+                                            <p className="text-[11px] text-slate-400 mt-1.5 leading-snug">
+                                                Ordena pelo histórico real: 1º em quantos pedidos o produto apareceu, depois pelo total de kg.
+                                                Cliente sem compra registrada cai no rodízio automaticamente.
+                                            </p>
+                                        )}
                                     </>
                                 )}
                             </div>

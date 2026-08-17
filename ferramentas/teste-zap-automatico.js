@@ -1,4 +1,12 @@
-const { chromium } = require('playwright');
+// Precisa do Playwright + Chromium pra simular o WhatsApp Web num navegador de verdade.
+// Não é dependência do projeto (o site não usa), então avisa em vez de quebrar.
+let chromium;
+try { chromium = require('playwright').chromium; }
+catch (e) {
+    console.log('⏭️  Teste pulado: o pacote "playwright" não está instalado.');
+    console.log('   Pra rodar:  npm install playwright');
+    process.exit(0);
+}
 const http = require('http');
 const fs = require('fs');
 
@@ -37,7 +45,14 @@ const servidor = http.createServer((req, res) => {
     const porta = servidor.address().port;
     const BASE = `http://localhost:${porta}`;
 
-    const navegador = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+        // o caminho do Chromium muda conforme a instalação; usa o do Playwright se o fixo não existir
+    const fsx = require('fs');
+    const candidatos = (fsx.existsSync('/opt/pw-browsers') ? fsx.readdirSync('/opt/pw-browsers') : [])
+        .filter(d => d.startsWith('chromium-'))
+        .map(d => `/opt/pw-browsers/${d}/chrome-linux/chrome`)
+        .filter(f => fsx.existsSync(f));
+    const opcoes = candidatos.length ? { executablePath: candidatos[0] } : {};
+    const navegador = await chromium.launch(opcoes);
     const ctx = await navegador.newContext();
     const pg = await ctx.newPage();
 
