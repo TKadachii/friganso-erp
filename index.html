@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 178;
+        const APP_BUILD_VERSION = 179;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -2017,7 +2017,7 @@
         // 📄 PDF preto-e-branco só com as MUDANÇAS DE PREÇO da tabela nova em relação à anterior, pra
         // mandar pro cliente no WhatsApp. Separa em "baixaram" e "subiram" (as quedas primeiro, da maior
         // pra menor — é o que interessa pro cliente ver) e quebra em várias páginas sozinho.
-        const gerarPdfMudancasPreco = (changes, user) => {
+        const gerarPdfMudancasPreco = (changes) => {
             const JsPDF = window.jspdf && window.jspdf.jsPDF;
             if (!JsPDF) throw new Error('sem-lib');
             const preco = (v) => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
@@ -2067,13 +2067,15 @@
             secao('BAIXARAM DE PREÇO (' + baixaram.length + ')', baixaram);
             secao('SUBIRAM DE PREÇO (' + subiram.length + ')', subiram);
 
-            const fone = (user && user.whatsapp) ? String(user.whatsapp) : '';
-            const nome = (user && user.name) ? user.name : 'Friganso';
+            // 🔒 Rodapé SEM dado pessoal (2026-08-13). Este PDF é feito pra ser repassado pro
+            // cliente no WhatsApp, e o cliente reencaminha pra quem quiser — então o nome e o
+            // telefone do vendedor não entram. Sai só a marca. Quem quiser divulgar o contato
+            // pessoal usa o cartão do Portfólio, que existe justamente pra isso.
             const n = doc.internal.getNumberOfPages();
             for (let i = 1; i <= n; i++) {
                 doc.setPage(i);
                 doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-                doc.text(nome + (fone ? ' - ' + fone : ''), 14, 288);
+                doc.text('Friganso', 14, 288);
                 doc.text('Página ' + i + ' de ' + n, 196, 288, { align: 'right' });
             }
             return doc;
@@ -2098,7 +2100,7 @@
                 const lista = (priceChanges && priceChanges.changes) || [];
                 if (!lista.length) { showMessage('Nenhuma mudança de preço pra gerar o PDF.', 'error'); return; }
                 try {
-                    const doc = gerarPdfMudancasPreco(lista, user);
+                    const doc = gerarPdfMudancasPreco(lista);
                     const d = new Date();
                     const nome = 'friganso-mudancas-preco-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '.pdf';
                     doc.save(nome);
@@ -6206,6 +6208,12 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.16.1', data: '13/08/2026', areas: ['site'], itens: [
+                '🔒 O PDF de "Mudanças nesta tabela" não leva mais o SEU NOME nem o SEU TELEFONE no rodapé — agora sai só "Friganso"',
+                'Esse PDF é feito pra ser repassado pro cliente no WhatsApp, e de lá o cliente reencaminha pra quem quiser. Seu contato pessoal ia junto em todas as páginas',
+                'O resto do PDF continua igual: título, produtos, quem baixou, quem subiu e a numeração das páginas',
+                'Pra divulgar seu contato de propósito, continua tendo o cartão do Portfólio — que existe justamente pra isso',
+            ]},
             { versao: '2.16.0', data: '13/08/2026', areas: ['site'], itens: [
                 '🏆 Nos Disparos, escolhendo 2/3/4/5 produtos, agora vão os que AQUELE cliente MAIS COMPRA — antes o app ia variando os produtos a cada dia, sem olhar quantidade',
                 'A ordem sai do histórico real de pedidos: primeiro em quantos pedidos o produto apareceu, depois pelo total de kg, e por último o mais recente',
