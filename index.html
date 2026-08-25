@@ -344,7 +344,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 179;
+        const APP_BUILD_VERSION = 180;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -501,7 +501,7 @@
             }
         });
 
-        const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user, spamov, condicaoPagamento) => {
+        const registrarCompra = async (clienteCode, itensValidos, tipo, via, clients, user, spamov, condicaoPagamento, prova) => {
             try {
                 const itensSafe = (itensValidos || [])
                     .map(i => ({ code: String(i.code), name: i.name || i.nome || ('Produto ' + i.code), qty: Number(i.qty != null ? i.qty : i.quantity), peso: Number(i.peso) || 0, valorKg: Number(i.valorKg) || 0 }))
@@ -562,6 +562,8 @@
                     pesoTotal: pesoTotal,
                     spamov: spamovStr,
                     condicaoPagamento: condicaoPagamento || '',
+                    // ✋ Prova da conferência obrigatória (print/áudio/ligação), quando ligada
+                    prova: prova || null,
                     dia: dia,
                     ts: agora,
                     via: via || '',
@@ -2580,7 +2582,218 @@
             );
         };
 
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        // ✋ CONFERÊNCIA OBRIGATÓRIA DO PEDIDO (2026-08-13)
+        // Trava opcional antes de "Copiar Resumo" — que é o momento em que o pedido vai pro
+        // supervisor E a venda é contabilizada. Nasceu de um pedido do usuário: erro por distração.
+        //
+        // ⚠️ O anexo NÃO é o que evita o erro — quem evita é a RELEITURA. Por isso o texto do pedido
+        // aparece grande e por inteiro na tela, e o upload fica embaixo. Se um dia alguém quiser
+        // "simplificar" isso escondendo o resumo, o mecanismo perde a razão de existir.
+        //
+        // A prova sobe pro Firebase Storage e o link fica gravado junto da venda em `purchases`,
+        // então também serve de defesa se o supervisor cobrar depois.
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        const CONFERENCIA_KEY = 'friganso_conferencia_pedido';
+        const CONFERENCIA_PULOS = 'friganso_conferencia_pulos';
+        const lerConferenciaAtiva = () => { try { return window.localStorage.getItem(CONFERENCIA_KEY) === '1'; } catch (e) { return false; } };
+        const salvarConferenciaAtiva = (v) => { try { window.localStorage.setItem(CONFERENCIA_KEY, v ? '1' : '0'); } catch (e) {} };
+        const hojeStr = () => { const d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); };
+        // Conta quantas vezes você pulou HOJE. Não impede nada — é só pra você enxergar se a saída
+        // fácil virou o padrão (o risco real de ter um botão de pular).
+        const lerPulosHoje = () => {
+            try {
+                const r = JSON.parse(window.localStorage.getItem(CONFERENCIA_PULOS) || '{}');
+                return r.dia === hojeStr() ? (Number(r.n) || 0) : 0;
+            } catch (e) { return 0; }
+        };
+        const registrarPulo = () => {
+            try { window.localStorage.setItem(CONFERENCIA_PULOS, JSON.stringify({ dia: hojeStr(), n: lerPulosHoje() + 1 })); } catch (e) {}
+        };
+        // Comprime a imagem antes de subir: print de conversa não precisa de resolução de foto.
+        const comprimirPrint = (blob, maxDim = 1400, qualidade = 0.75) => new Promise((resolve) => {
+            try {
+                const url = URL.createObjectURL(blob);
+                const img = new Image();
+                img.onload = () => {
+                    URL.revokeObjectURL(url);
+                    const s = Math.min(1, maxDim / Math.max(img.width, img.height));
+                    if (s === 1 && blob.size < 400000) { resolve(blob); return; } // já é pequeno
+                    const canvas = document.createElement('canvas');
+                    canvas.width = Math.round(img.width * s); canvas.height = Math.round(img.height * s);
+                    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+                    canvas.toBlob(b => resolve(b || blob), 'image/jpeg', qualidade);
+                };
+                img.onerror = () => { URL.revokeObjectURL(url); resolve(blob); };
+                img.src = url;
+            } catch (e) { resolve(blob); }
+        });
+
+        const ConferenciaPedidoModal = ({ textoResumo, clienteNome, qtdItens, onCancelar, onConfirmar, showMessage }) => {
+            const [tipo, setTipo] = useState('');           // print | audio | ligacao
+            const [arquivo, setArquivo] = useState(null);
+            const [previewUrl, setPreviewUrl] = useState(null);
+            const [anotacao, setAnotacao] = useState('');
+            const [enviando, setEnviando] = useState(false);
+            const pulosHoje = lerPulosHoje();
+
+            useEffect(() => () => { if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch (e) {} } }, [previewUrl]);
+
+            const escolherArquivo = async (e, qual) => {
+                const f = e.target.files && e.target.files[0];
+                e.target.value = '';
+                if (!f) return;
+                const b = qual === 'print' ? await comprimirPrint(f) : f;
+                if (b.size > 15 * 1024 * 1024) { showMessage('Arquivo muito grande (máx. 15 MB).', 'error'); return; }
+                setArquivo({ blob: b, nome: f.name, qual });
+                if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch (er) {} }
+                setPreviewUrl(URL.createObjectURL(b));
+            };
+
+            const confirmar = async () => {
+                if (tipo === 'ligacao' && !anotacao.trim()) { showMessage('Escreve numa linha o que ele pediu — ou usa o botão de pular.', 'error'); return; }
+                if ((tipo === 'print' || tipo === 'audio') && !arquivo) { showMessage('Anexa o arquivo (ou escolhe "foi por ligação").', 'error'); return; }
+                setEnviando(true);
+                try {
+                    let url = '';
+                    if (arquivo) {
+                        const ext = arquivo.qual === 'print' ? '.jpg' : (/\.(\w{2,5})$/.exec(arquivo.nome || '') || [, 'ogg'])[1];
+                        const caminho = 'provas-pedido/' + hojeStr().slice(0, 7) + '/' + Date.now() + '_' + Math.floor(Math.random() * 10000) +
+                                        (arquivo.qual === 'print' ? '.jpg' : '.' + ext);
+                        const ref = storage.ref().child(caminho);
+                        await ref.put(arquivo.blob, { contentType: arquivo.blob.type || (arquivo.qual === 'print' ? 'image/jpeg' : 'audio/ogg') });
+                        url = await ref.getDownloadURL();
+                    }
+                    onConfirmar({ tipo: tipo || 'ligacao', url, anotacao: anotacao.trim(), ts: Date.now() });
+                } catch (err) {
+                    showMessage('Não consegui subir o arquivo: ' + (err && err.message ? err.message : err), 'error');
+                    setEnviando(false);
+                }
+            };
+            const pular = () => { registrarPulo(); onConfirmar({ tipo: 'pulado', url: '', anotacao: '', ts: Date.now() }); };
+
+            const Opcao = ({ id, emoji, titulo, sub }) => (
+                <button onClick={() => { setTipo(id); if (id === 'ligacao') { setArquivo(null); setPreviewUrl(null); } }}
+                    className={`flex-1 min-w-[110px] p-3 rounded-2xl border-2 transition-all text-left ${tipo === id ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300 bg-white'}`}>
+                    <div className="text-xl">{emoji}</div>
+                    <p className={`text-xs font-bold mt-1 ${tipo === id ? 'text-rose-700' : 'text-slate-700'}`}>{titulo}</p>
+                    <p className="text-[10px] text-slate-400 leading-tight">{sub}</p>
+                </button>
+            );
+
+            return (
+                <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-3 z-[95] animate-in fade-in">
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95">
+                        <div className="p-4 border-b border-slate-200 bg-amber-50">
+                            <h2 className="text-lg font-bold text-amber-900 flex items-center gap-2">✋ Confere antes de mandar</h2>
+                            <p className="text-xs text-amber-700 mt-0.5">Lê o pedido inteiro de novo. É pra isso que essa tela existe.</p>
+                        </div>
+
+                        <div className="p-4 space-y-4 overflow-y-auto flex-1">
+                            {/* 👀 A RELEITURA — a parte que realmente evita o erro */}
+                            <div>
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <p className="text-sm font-bold text-slate-700 truncate">{clienteNome || 'Cliente'}</p>
+                                    <span className="text-[11px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full flex-shrink-0">{qtdItens} item(ns)</span>
+                                </div>
+                                <pre className="font-mono text-[13px] whitespace-pre-wrap text-slate-800 bg-[#e1ffc7] border border-[#d3f4b8] rounded-2xl p-3 max-h-64 overflow-y-auto">{textoResumo}</pre>
+                            </div>
+
+                            <div>
+                                <p className="text-sm font-bold text-slate-700 mb-2">Como esse pedido chegou?</p>
+                                <div className="flex gap-2 flex-wrap">
+                                    <Opcao id="print" emoji="📷" titulo="Print" sub="Foto da conversa" />
+                                    <Opcao id="audio" emoji="🎤" titulo="Áudio" sub="O que ele mandou" />
+                                    <Opcao id="ligacao" emoji="📞" titulo="Por ligação" sub="Sem anexo" />
+                                </div>
+                            </div>
+
+                            {(tipo === 'print' || tipo === 'audio') && (
+                                <div>
+                                    <label className="block w-full">
+                                        <input type="file" accept={tipo === 'print' ? 'image/*' : 'audio/*'} onChange={e => escolherArquivo(e, tipo)} className="hidden" />
+                                        <span className="block text-center bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl text-sm cursor-pointer transition-colors">
+                                            {arquivo ? '✅ ' + (arquivo.nome || 'arquivo escolhido') : (tipo === 'print' ? '📎 Escolher print' : '📎 Escolher áudio')}
+                                        </span>
+                                    </label>
+                                    {previewUrl && tipo === 'print' && <img src={previewUrl} alt="prévia" className="mt-2 rounded-xl border border-slate-200 max-h-48 mx-auto" />}
+                                    {previewUrl && tipo === 'audio' && <audio src={previewUrl} controls className="mt-2 w-full" />}
+                                </div>
+                            )}
+
+                            {tipo === 'ligacao' && (
+                                <div>
+                                    <label className="text-sm font-bold text-slate-700">Escreve numa linha o que ele pediu</label>
+                                    <p className="text-[11px] text-slate-400 mb-1.5">Ex.: "2 cx costela + 1 file de coxa, entrega quinta". Leva 10 segundos e te obriga a lembrar.</p>
+                                    <input value={anotacao} onChange={e => setAnotacao(e.target.value)} autoFocus placeholder="O que o cliente pediu..."
+                                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-2">
+                            <div className="flex gap-2">
+                                <button onClick={onCancelar} disabled={enviando} className="px-4 py-3 font-bold bg-slate-200 hover:bg-slate-300 disabled:opacity-50 text-slate-700 rounded-xl text-sm">Voltar</button>
+                                <button onClick={confirmar} disabled={enviando || !tipo} className="flex-1 px-4 py-3 font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-sm shadow-md">
+                                    {enviando ? 'Subindo...' : '✅ Confirmar e copiar'}
+                                </button>
+                            </div>
+                            <button onClick={pular} disabled={enviando} className="w-full text-xs font-bold text-slate-400 hover:text-slate-600 py-1.5 disabled:opacity-40">
+                                Pular sem anexar{pulosHoje > 0 ? ` · ${pulosHoje} pulado(s) hoje` : ''}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         const ResumoScreen = ({ products, showMessage, clients, user, setActiveRoute }) => {
+            // ✋ Conferência obrigatória antes de mandar o pedido (liga/desliga nas Configurações)
+            const [conferenciaAtiva] = useState(lerConferenciaAtiva);
+            const [mostrarConferencia, setMostrarConferencia] = useState(false);
+            // Todo o fluxo de "Copiar Resumo" vive aqui pra poder ser chamado de dois lugares:
+            // direto (trava desligada) ou depois da conferência (trava ligada).
+            const executarCopiaResumo = (prova) => {
+                // ⚠️ Se a condição atual for diferente da ÚLTIMA compra desse cliente, confirma antes.
+                if (condicaoAtual && condicaoHistorico && condicaoHistorico.ultimaCondicaoRaw) {
+                    const catAtual = normalizarCondicaoPagamento(condicaoAtual);
+                    if (catAtual && catAtual !== condicaoHistorico.ultimaCondicaoCat) {
+                        const nomeAtual = LABEL_CONDICAO[catAtual] || condicaoAtual;
+                        const ok = window.confirm(`A última compra desse cliente foi em "${condicaoHistorico.ultimaCondicaoRaw}", mas esse pedido está como ${nomeAtual} (${condicaoAtual}). Confirma que está certo?`);
+                        if (!ok) return;
+                    }
+                }
+                const textoResumo = generateWhatsAppText();
+                navigator.clipboard.writeText(textoResumo);
+                // 🧾 Grava na ficha do cliente (todo pedido confirmado passa por aqui)
+                if (orderSummary && orderSummary.customerCode) {
+                    const itens = (orderSummary.items || []).map(it => { const a = itemAtual(it); return { code: a.code, name: a.name, qty: Number(getQty(it)), peso: Number(a.peso) || 0, valorKg: Number(a.valorKg) || 0 }; });
+                    registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user, orderSummary.spamov, condicaoAtual, prova);
+                }
+                // 📋 Veio da Fila de Pedidos? Guarda o texto JÁ com preço/desconto aplicados e
+                // marca como conferido, depois volta pra fila pro próximo pedido. O texto é
+                // gerado AQUI de propósito: é esta tela que sabe aplicar preço e desconto.
+                let voltouPraFila = false;
+                try {
+                    const idxFila = window.localStorage.getItem(FILA_ATUAL);
+                    if (idxFila !== null && idxFila !== '') {
+                        const f = JSON.parse(window.localStorage.getItem(FILA_ATIVA) || '[]');
+                        const i = Number(idxFila);
+                        if (f[i]) {
+                            f[i].feito = true; f[i].texto = textoResumo;
+                            window.localStorage.setItem(FILA_ATIVA, JSON.stringify(f));
+                            window.localStorage.removeItem(FILA_ATUAL);
+                            voltouPraFila = true;
+                        }
+                    }
+                } catch (e) {}
+                if (voltouPraFila) {
+                    showMessage('Conferido e copiado! Voltando pra fila. 📋', 'success');
+                    setActiveRoute && setActiveRoute('fila');
+                    return;
+                }
+                showMessage('Copiado pro Zap e salvo na ficha do cliente! 🧾', 'success');
+            };
             // 💾 Rascunho do Resumo: assim como o Fazer Pedido, volta EXATAMENTE onde parou (texto colado,
             // pedido montado, edições de preço/qtd e o modo manual) mesmo saindo da tela e voltando.
             const RESUMO_RASCUNHO_KEY = 'friganso_resumo_rascunho';
@@ -2945,6 +3158,17 @@
 
             return (
                 <div className="animate-in fade-in space-y-6">
+                    {/* ✋ Conferência obrigatória — só aparece com a trava ligada nas Configurações */}
+                    {mostrarConferencia && (
+                        <ConferenciaPedidoModal
+                            textoResumo={generateWhatsAppText()}
+                            clienteNome={(clients.find(c => String(c.code) === String(orderSummary && orderSummary.customerCode)) || {}).name || (orderSummary && orderSummary.customerCode) || ''}
+                            qtdItens={((orderSummary && orderSummary.items) || []).length}
+                            showMessage={showMessage}
+                            onCancelar={() => setMostrarConferencia(false)}
+                            onConfirmar={(prova) => { setMostrarConferencia(false); executarCopiaResumo(prova); }}
+                        />
+                    )}
                     {showModal && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
                             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[85vh] overflow-hidden">
@@ -3285,45 +3509,9 @@
                                 <div className="p-4 border-b bg-slate-50 flex justify-between items-center">
                                     <h3 className="font-semibold text-slate-700 flex items-center gap-2"><div className="h-5 w-5 text-emerald-600"><IconWhatsApp /></div> Resumo WhatsApp</h3>
                                     <button onClick={() => {
-                                        // ⚠️ Se a condição atual for diferente da ÚLTIMA compra desse cliente, confirma antes.
-                                        if (condicaoAtual && condicaoHistorico && condicaoHistorico.ultimaCondicaoRaw) {
-                                            const catAtual = normalizarCondicaoPagamento(condicaoAtual);
-                                            if (catAtual && catAtual !== condicaoHistorico.ultimaCondicaoCat) {
-                                                const nomeAtual = LABEL_CONDICAO[catAtual] || condicaoAtual;
-                                                const ok = window.confirm(`A última compra desse cliente foi em "${condicaoHistorico.ultimaCondicaoRaw}", mas esse pedido está como ${nomeAtual} (${condicaoAtual}). Confirma que está certo?`);
-                                                if (!ok) return;
-                                            }
-                                        }
-                                        const textoResumo = generateWhatsAppText();
-                                        navigator.clipboard.writeText(textoResumo);
-                                        // 🧾 Grava na ficha do cliente (todo pedido confirmado passa por aqui)
-                                        if (orderSummary && orderSummary.customerCode) {
-                                            const itens = (orderSummary.items || []).map(it => { const a = itemAtual(it); return { code: a.code, name: a.name, qty: Number(getQty(it)), peso: Number(a.peso) || 0, valorKg: Number(a.valorKg) || 0 }; });
-                                            registrarCompra(orderSummary.customerCode, itens, null, 'resumo', clients, user, orderSummary.spamov, condicaoAtual);
-                                        }
-                                        // 📋 Veio da Fila de Pedidos? Guarda o texto JÁ com preço/desconto aplicados e
-                                        // marca como conferido, depois volta pra fila pro próximo pedido. O texto é
-                                        // gerado AQUI de propósito: é esta tela que sabe aplicar preço e desconto.
-                                        let voltouPraFila = false;
-                                        try {
-                                            const idxFila = window.localStorage.getItem(FILA_ATUAL);
-                                            if (idxFila !== null && idxFila !== '') {
-                                                const f = JSON.parse(window.localStorage.getItem(FILA_ATIVA) || '[]');
-                                                const i = Number(idxFila);
-                                                if (f[i]) {
-                                                    f[i].feito = true; f[i].texto = textoResumo;
-                                                    window.localStorage.setItem(FILA_ATIVA, JSON.stringify(f));
-                                                    window.localStorage.removeItem(FILA_ATUAL);
-                                                    voltouPraFila = true;
-                                                }
-                                            }
-                                        } catch (e) {}
-                                        if (voltouPraFila) {
-                                            showMessage('Conferido e copiado! Voltando pra fila. 📋', 'success');
-                                            setActiveRoute && setActiveRoute('fila');
-                                            return;
-                                        }
-                                        showMessage('Copiado pro Zap e salvo na ficha do cliente! 🧾', 'success');
+                                        // ✋ Trava opcional: obriga a conferir e anexar a prova antes de mandar
+                                        if (conferenciaAtiva) { setMostrarConferencia(true); return; }
+                                        executarCopiaResumo(null);
                                     }} className="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-4 py-2 rounded-xl text-sm font-bold transition-colors">Copiar Resumo</button>
                                 </div>
                                 <div className="p-6 bg-slate-100 flex-1 overflow-y-auto" style={{backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')", backgroundSize: 'cover', backgroundPosition: 'center'}}>
@@ -6208,6 +6396,14 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.17.0', data: '13/08/2026', areas: ['site', 'app'], itens: [
+                '✋ Nova trava OPCIONAL contra pedido errado: antes de "Copiar Resumo", abre uma tela com o pedido inteiro pra você reler e anexar a prova do que o cliente pediu',
+                'Três saídas: 📷 print da conversa, 🎤 áudio, ou 📞 "foi por ligação" — nesta você escreve numa linha o que ele pediu, que já serve de registro',
+                'Tem um botão de pular pra quando estiver com pressa, e o app conta quantos você pulou no dia (sem travar nada, só pra você enxergar)',
+                'A prova sobe pra nuvem e fica guardada JUNTO da venda — se o supervisor cobrar depois, você abre e mostra',
+                'Liga e desliga em ⚙️ Configurações (a antiga aba "Temas", que agora tem as duas coisas). Vem desligada',
+                'A tela mostra o pedido inteiro em destaque de propósito: o que evita o erro é a releitura, o anexo é só a prova',
+            ]},
             { versao: '2.16.1', data: '13/08/2026', areas: ['site'], itens: [
                 '🔒 O PDF de "Mudanças nesta tabela" não leva mais o SEU NOME nem o SEU TELEFONE no rodapé — agora sai só "Friganso"',
                 'Esse PDF é feito pra ser repassado pro cliente no WhatsApp, e de lá o cliente reencaminha pra quem quiser. Seu contato pessoal ia junto em todas as páginas',
@@ -9324,6 +9520,7 @@
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             const [messageBox, setMessageBox] = useState(null);
             const [showSettings, setShowSettings] = useState(false);
+            const [conferenciaPedido, setConferenciaPedido] = useState(lerConferenciaAtiva);
             const [resumoNonce, setResumoNonce] = useState(0); // força recarregar o Resumo quando chega um pedido do SPAmov (app)
 
             // 📲 APP ANDROID: abrir o SPAmov pra pegar resumo + receber o pedido de volta (botão "Enviar pro Friganso ERP")
@@ -9709,7 +9906,7 @@
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[90] animate-in fade-in" onClick={() => setShowSettings(false)}>
                             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                                 <div className="p-5 border-b border-slate-200 flex justify-between items-center">
-                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">🎨 Temas</h2>
+                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">⚙️ Configurações</h2>
                                     <button onClick={() => setShowSettings(false)} className="h-9 w-9 bg-slate-100 hover:bg-slate-200 rounded-full flex items-center justify-center text-slate-500"><div className="h-4 w-4"><IconX/></div></button>
                                 </div>
                                 <div className="p-5 space-y-4">
@@ -9733,6 +9930,25 @@
                                         </div>
                                     </div>
                                     <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-400 text-center"><b>Automático</b> = claro no dia a dia e 🌸 Sakura nos dias especiais (21 e 27 de junho). 🦢</div>
+
+                                    {/* ✋ Trava contra pedido errado por distração */}
+                                    <div className="border-t border-slate-200 pt-4">
+                                        <p className="text-sm font-bold text-slate-700 mb-1">Segurança do pedido</p>
+                                        <label className="flex items-start gap-3 cursor-pointer bg-amber-50 border border-amber-200 rounded-2xl p-3">
+                                            <input type="checkbox" checked={conferenciaPedido} onChange={e => { setConferenciaPedido(e.target.checked); salvarConferenciaAtiva(e.target.checked); }} className="h-5 w-5 accent-rose-700 mt-0.5 flex-shrink-0" />
+                                            <span className="min-w-0">
+                                                <span className="block text-sm font-bold text-amber-900">✋ Conferir antes de mandar o pedido</span>
+                                                <span className="block text-xs text-amber-700 leading-snug mt-0.5">
+                                                    Antes de "Copiar Resumo", abre uma tela com o pedido inteiro pra você reler e anexar a prova
+                                                    (print, áudio ou "foi por ligação"). A prova fica guardada junto da venda.
+                                                </span>
+                                            </span>
+                                        </label>
+                                        <p className="text-[11px] text-slate-400 mt-2 leading-snug">
+                                            Vale neste aparelho. Tem um botão de pular na tela, pra quando estiver com pressa —
+                                            mas o app conta quantas vezes você pulou no dia.
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -9781,7 +9997,7 @@
                             
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-8 ml-2">Sistema & Ajuda</p>
                             <button onClick={() => { setShowSettings(true); setIsSidebarOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold transition-all duration-200 text-slate-400 hover:text-white hover:bg-slate-800/50">
-                                <div className="h-5 w-5 flex items-center justify-center text-base">🎨</div> Temas
+                                <div className="h-5 w-5 flex items-center justify-center text-base">⚙️</div> Configurações
                             </button>
                             <NavButton route="tutorial" icon={IconBook} label="Tutorial" />
                             <NavButton route="changelog" icon={IconHistory} label="🔄 Atualizações" />
@@ -9801,7 +10017,7 @@
                                 </div>
                             </div>
                             <button onClick={() => setShowSettings(true)} className="w-full flex items-center justify-center gap-2 px-4 py-2.5 mb-2 text-sm font-bold text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition-colors border border-slate-800">
-                                <span className="text-base">🎨</span> Temas
+                                <span className="text-base">⚙️</span> Configurações
                             </button>
                             <button onClick={() => handleSetUser(null)} className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-bold text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-lg transition-colors border border-transparent hover:border-red-400/20">
                                 <div className="h-4 w-4"><IconLogOut/></div> Sair da Conta
