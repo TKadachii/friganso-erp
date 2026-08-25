@@ -128,6 +128,13 @@
         /* pétalas de sakura caindo */
         .sakura-petals { position: fixed; inset: 0; pointer-events: none; z-index: 9998; overflow: hidden; }
         .sakura-petals span { position: absolute; top: -24px; display: block; background: radial-gradient(circle at 30% 30%, #ffd6df, #ff5d7e); border-radius: 100% 0 100% 0; opacity: .82; box-shadow: 0 0 6px rgba(255,93,126,.5); animation-name: sakuraCair; animation-timing-function: linear; animation-iteration-count: infinite; }
+        /* 🔺 Alerta de lembrete pendente: pulsa e emite um brilho vermelho suave */
+        @keyframes frigPulsaAlerta {
+            0%   { transform: scale(1);    box-shadow: 0 0 0 0 rgba(220,38,38,.65), 0 0 14px 3px rgba(248,113,113,.45); }
+            70%  { transform: scale(1.09); box-shadow: 0 0 0 12px rgba(220,38,38,0), 0 0 22px 7px rgba(248,113,113,.75); }
+            100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(220,38,38,0),   0 0 14px 3px rgba(248,113,113,.45); }
+        }
+        .friganso-pulsa-alerta { animation: frigPulsaAlerta 1.8s ease-in-out infinite; }
         @keyframes sakuraCair { 0% { transform: translateY(-24px) translateX(0) rotate(0deg); } 100% { transform: translateY(106vh) translateX(40px) rotate(540deg); } }
 
         /* ===== 🌊 TEMA OCEANO (azul/preto) ===== */
@@ -344,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 180;
+        const APP_BUILD_VERSION = 181;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -2743,6 +2750,288 @@
                             </button>
                         </div>
                     </div>
+                </div>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        // 🔔 LEMBRETES (2026-08-13)
+        // Duas categorias, que se diferenciam pelo que acontece ao tocar em "Feito":
+        //   ⚡ RÁPIDO      — coisa pontual ("avisar o cliente X"). Feito = conclui e sai da lista.
+        //   🔁 PERMANENTE — rotina que se repete ("clientes que compram na segunda"). Feito = marca
+        //                   o dia e ele volta na próxima ocorrência.
+        //
+        // ⚠️ LIMITE REAL: o site NÃO consegue avisar com o app fechado — notificação agendada exige
+        // servidor de push, e isto é um site estático. O lembrete das 8h aparece na PRIMEIRA vez que
+        // o app for aberto às 8h ou depois. Não perde; atrasa. Não prometa alarme ao usuário.
+        //
+        // Fechar no ✕ NÃO resolve o lembrete: ele vira o triângulo vermelho pulsando no canto, que
+        // fica visível em todas as telas até o "Feito" — é de propósito, é o ponto do recurso.
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        const DIAS_SEMANA = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+        const diaISO = (d) => { const x = d || new Date(); return x.getFullYear() + '-' + ('0' + (x.getMonth() + 1)).slice(-2) + '-' + ('0' + x.getDate()).slice(-2); };
+
+        /** O lembrete cai HOJE? (só a data/repetição, sem olhar hora nem se já foi feito) */
+        const lembreteEhDeHoje = (l, agora) => {
+            const d = agora || new Date();
+            if (!l || l.ativo === false) return false;
+            if (l.repeticao === 'diario') return true;
+            if (l.repeticao === 'semanal') return Number(l.diaSemana) === d.getDay();
+            if (l.repeticao === 'data') return l.data === diaISO(d);
+            return false;
+        };
+        /** Já passou da hora marcada? Sem hora = vale a partir da primeira abertura do dia. */
+        const lembreteJaNaHora = (l, agora) => {
+            const d = agora || new Date();
+            if (!l || !l.hora) return true;
+            const [h, m] = String(l.hora).split(':').map(Number);
+            if (isNaN(h)) return true;
+            return (d.getHours() * 60 + d.getMinutes()) >= (h * 60 + (m || 0));
+        };
+        /** Está esperando você AGORA: cai hoje, já é a hora, e ainda não foi marcado como feito. */
+        const lembretePendente = (l, agora) => {
+            if (!lembreteEhDeHoje(l, agora)) return false;
+            if (!lembreteJaNaHora(l, agora)) return false;
+            return l.ultimoFeito !== diaISO(agora);
+        };
+        /** Pendente E ainda não foi empurrado com o ✕ hoje → o pop-up deve subir. */
+        const lembreteDeveAbrir = (l, agora) => lembretePendente(l, agora) && l.ultimoAdiado !== diaISO(agora);
+        const descreverRepeticao = (l) => {
+            if (!l) return '';
+            const hora = l.hora ? ' às ' + l.hora : '';
+            if (l.repeticao === 'diario') return 'Todo dia' + hora;
+            if (l.repeticao === 'semanal') return 'Toda ' + (DIAS_SEMANA[Number(l.diaSemana)] || '?') + hora;
+            if (l.repeticao === 'data') {
+                const [a, m, d] = String(l.data || '').split('-');
+                return (d && m ? `${d}/${m}/${a}` : l.data) + hora;
+            }
+            return '';
+        };
+
+        // ── 🔺 Alerta pulsante: fica no canto em TODAS as telas quando algo ficou pendente ────────
+        const AlertaLembrete = ({ quantos, onClick }) => {
+            if (!quantos) return null;
+            return (
+                <button onClick={onClick} title={quantos + ' lembrete(s) esperando você'}
+                    className="fixed top-16 md:top-4 right-4 z-[80] h-11 w-11 flex items-center justify-center rounded-full bg-red-600 text-white text-xl shadow-lg friganso-pulsa-alerta"
+                    style={{ boxShadow: '0 0 0 0 rgba(220,38,38,.7), 0 0 18px 4px rgba(248,113,113,.55)' }}>
+                    ⚠️
+                    {quantos > 1 && <span className="absolute -bottom-1 -right-1 bg-white text-red-700 text-[10px] font-black rounded-full h-5 w-5 flex items-center justify-center border border-red-200">{quantos}</span>}
+                </button>
+            );
+        };
+
+        // ── 🔔 Pop-up travado: só sai pelo ✅ Feito ou pelo ✕ ─────────────────────────────────────
+        const LembretePopup = ({ lembrete, restantes, onFeito, onAdiar }) => {
+            if (!lembrete) return null;
+            const rapido = lembrete.categoria === 'rapido';
+            return (
+                <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 z-[96] animate-in fade-in">
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
+                        <div className={`p-5 text-white ${rapido ? 'bg-gradient-to-r from-amber-600 to-amber-500' : 'bg-gradient-to-r from-sky-700 to-sky-500'}`}>
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-xs font-bold uppercase tracking-widest opacity-80">{rapido ? '⚡ Lembrete rápido' : '🔁 Rotina'}</p>
+                                    <h2 className="text-xl font-black mt-0.5">🔔 Lembrete</h2>
+                                </div>
+                                {/* ✕ NÃO resolve: empurra e acende o triângulo no canto */}
+                                <button onClick={onAdiar} title="Fechar por agora (fica o aviso no canto)" className="h-9 w-9 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center flex-shrink-0 text-lg leading-none">✕</button>
+                            </div>
+                        </div>
+                        <div className="p-5 space-y-4">
+                            <p className="text-lg text-slate-800 font-semibold whitespace-pre-wrap break-words">{lembrete.texto}</p>
+                            <p className="text-xs text-slate-400">{descreverRepeticao(lembrete)}</p>
+                            {restantes > 0 && <p className="text-xs font-bold text-slate-500">+{restantes} lembrete(s) depois deste</p>}
+                            <button onClick={onFeito} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl shadow-md transition-colors text-base">
+                                ✅ Feito
+                            </button>
+                            <p className="text-[11px] text-slate-400 text-center leading-snug">
+                                Fechando no ✕ ele continua pendente e fica um ⚠️ pulsando no canto até você marcar como feito.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ── 📋 A aba ────────────────────────────────────────────────────────────────────────────
+        const LembretesScreen = ({ user, showMessage }) => {
+            const [lembretes, setLembretes] = useState([]);
+            const [carregando, setCarregando] = useState(true);
+            const [form, setForm] = useState(null);   // null = formulário fechado
+            const [salvando, setSalvando] = useState(false);
+            const [verConcluidos, setVerConcluidos] = useState(false);
+
+            useEffect(() => {
+                if (!user || !user.id) return;
+                const unsub = db.collection('lembretes').where('userId', '==', user.id).onSnapshot(snap => {
+                    const l = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    l.sort((a, b) => (b.criadoEm || 0) - (a.criadoEm || 0));
+                    setLembretes(l); setCarregando(false);
+                }, err => { console.error(err); setCarregando(false); });
+                return () => unsub();
+            }, [user && user.id]);
+
+            const novo = (categoria) => setForm({
+                texto: '', categoria,
+                repeticao: categoria === 'rapido' ? 'data' : 'diario',
+                data: diaISO(), diaSemana: new Date().getDay(), hora: '',
+            });
+            const salvar = async () => {
+                if (!form.texto.trim()) { showMessage('Escreve o que você quer lembrar.', 'error'); return; }
+                setSalvando(true);
+                try {
+                    const dados = {
+                        userId: user.id, texto: form.texto.trim(), categoria: form.categoria,
+                        repeticao: form.repeticao, data: form.data || '', diaSemana: Number(form.diaSemana),
+                        hora: form.hora || '', ativo: true, atualizadoEm: Date.now(),
+                    };
+                    if (form.id) await db.collection('lembretes').doc(form.id).update(dados);
+                    else await db.collection('lembretes').add({ ...dados, ultimoFeito: '', ultimoAdiado: '', criadoEm: Date.now() });
+                    showMessage('Lembrete salvo! 🔔', 'success');
+                    setForm(null);
+                } catch (e) { showMessage('Erro ao salvar: ' + e.message, 'error'); }
+                finally { setSalvando(false); }
+            };
+            const excluir = async (l) => {
+                if (!window.confirm('Apagar esse lembrete?')) return;
+                try { await db.collection('lembretes').doc(l.id).delete(); showMessage('Apagado.', 'success'); }
+                catch (e) { showMessage('Erro ao apagar.', 'error'); }
+            };
+            const reativar = async (l) => {
+                try { await db.collection('lembretes').doc(l.id).update({ ativo: true, ultimoFeito: '', ultimoAdiado: '', atualizadoEm: Date.now() }); }
+                catch (e) { showMessage('Erro ao reativar.', 'error'); }
+            };
+
+            const ativos = lembretes.filter(l => l.ativo !== false);
+            const concluidos = lembretes.filter(l => l.ativo === false);
+            const agora = new Date();
+
+            const Campo = ({ children }) => <div className="space-y-1">{children}</div>;
+
+            return (
+                <div className="animate-in fade-in space-y-6">
+                    <header className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                        <h1 className="text-2xl font-bold text-rose-800 flex items-center gap-2">🔔 Lembretes</h1>
+                        <p className="text-slate-500 text-sm mt-1">
+                            O lembrete abre um aviso na tela na hora marcada. Fechando no ✕ ele continua pendente
+                            e fica um ⚠️ pulsando no canto até você marcar como feito.
+                        </p>
+                        <div className="flex gap-2 mt-4 flex-wrap">
+                            <button onClick={() => novo('rapido')} className="flex-1 min-w-[150px] bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl text-sm shadow-md transition-colors">⚡ Novo lembrete rápido</button>
+                            <button onClick={() => novo('permanente')} className="flex-1 min-w-[150px] bg-sky-700 hover:bg-sky-800 text-white font-bold py-3 rounded-xl text-sm shadow-md transition-colors">🔁 Nova rotina</button>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-2 leading-snug">
+                            <b>⚡ Rápido</b> = coisa pontual; ao marcar "Feito" ele conclui e sai da lista.
+                            <b className="ml-2">🔁 Rotina</b> = se repete; "Feito" marca o dia e ele volta na próxima vez.
+                        </p>
+                        <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mt-3 leading-snug">
+                            ⚠️ O aviso só aparece com o Friganso <b>aberto</b>. Um site não consegue tocar alarme com o app fechado —
+                            se o lembrete é das 8h e você abrir às 11h, ele aparece às 11h. Não some, atrasa.
+                        </p>
+                    </header>
+
+                    {form && (
+                        <div className="bg-white rounded-3xl shadow-sm border-2 border-rose-200 p-6 space-y-4">
+                            <h3 className="font-bold text-slate-800">{form.id ? 'Editar' : (form.categoria === 'rapido' ? '⚡ Novo lembrete rápido' : '🔁 Nova rotina')}</h3>
+                            <Campo>
+                                <label className="text-sm font-bold text-slate-700">O que lembrar?</label>
+                                <textarea value={form.texto} onChange={e => setForm(f => ({ ...f, texto: e.target.value }))} rows={3} autoFocus
+                                    placeholder={form.categoria === 'rapido' ? 'Ex.: avisar o Zé do Mercado que a costela chegou' : 'Ex.: conferir a lista de quem compra na segunda'}
+                                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
+                            </Campo>
+                            <Campo>
+                                <label className="text-sm font-bold text-slate-700">Quando?</label>
+                                <div className="flex gap-2 flex-wrap">
+                                    {[['data', '📅 Um dia só'], ['diario', '🔁 Todo dia'], ['semanal', '📆 Toda semana']].map(([v, t]) => (
+                                        <button key={v} onClick={() => setForm(f => ({ ...f, repeticao: v }))}
+                                            className={`px-3 py-2 rounded-xl text-xs font-bold transition-colors ${form.repeticao === v ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{t}</button>
+                                    ))}
+                                </div>
+                            </Campo>
+                            {form.repeticao === 'data' && (
+                                <Campo>
+                                    <label className="text-sm font-bold text-slate-700">Dia</label>
+                                    <input type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data: e.target.value }))} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm" />
+                                </Campo>
+                            )}
+                            {form.repeticao === 'semanal' && (
+                                <Campo>
+                                    <label className="text-sm font-bold text-slate-700">Dia da semana</label>
+                                    <div className="flex gap-1.5 flex-wrap">
+                                        {DIAS_SEMANA.map((d, i) => (
+                                            <button key={i} onClick={() => setForm(f => ({ ...f, diaSemana: i }))}
+                                                className={`px-2.5 py-2 rounded-lg text-xs font-bold transition-colors ${Number(form.diaSemana) === i ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{d.slice(0, 3)}</button>
+                                        ))}
+                                    </div>
+                                </Campo>
+                            )}
+                            <Campo>
+                                <label className="text-sm font-bold text-slate-700">Hora <span className="font-normal text-slate-400">(opcional)</span></label>
+                                <div className="flex items-center gap-2">
+                                    <input type="time" value={form.hora} onChange={e => setForm(f => ({ ...f, hora: e.target.value }))} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm" />
+                                    {form.hora && <button onClick={() => setForm(f => ({ ...f, hora: '' }))} className="text-xs font-bold text-slate-400 hover:text-slate-600">limpar</button>}
+                                </div>
+                                <p className="text-[11px] text-slate-400">Vazio = aparece na primeira vez que você abrir o app no dia.</p>
+                            </Campo>
+                            <div className="flex gap-2 pt-1">
+                                <button onClick={() => setForm(null)} className="px-4 py-2.5 font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm">Cancelar</button>
+                                <button onClick={salvar} disabled={salvando} className="flex-1 px-4 py-2.5 font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-sm shadow-md">{salvando ? 'Salvando...' : '✅ Salvar'}</button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                        {carregando ? <p className="p-8 text-center text-slate-400 text-sm">Carregando...</p>
+                        : !ativos.length ? <p className="p-8 text-center text-slate-400 text-sm">Nenhum lembrete ainda. Cria um aí em cima. 🔔</p>
+                        : (
+                            <div className="divide-y divide-slate-100">
+                                {ativos.map(l => {
+                                    const rapido = l.categoria === 'rapido';
+                                    const pendente = lembretePendente(l, agora);
+                                    const adiado = pendente && l.ultimoAdiado === diaISO(agora);
+                                    return (
+                                        <div key={l.id} className="p-4 flex items-start gap-3">
+                                            <span className="text-xl flex-shrink-0">{rapido ? '⚡' : '🔁'}</span>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-slate-800 font-semibold break-words">{l.texto}</p>
+                                                <div className="flex items-center gap-2 flex-wrap mt-1">
+                                                    <span className="text-xs text-slate-400">{descreverRepeticao(l)}</span>
+                                                    {adiado && <span className="text-[10px] font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded-full">⚠️ pendente hoje</span>}
+                                                    {!adiado && pendente && <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">esperando</span>}
+                                                    {l.ultimoFeito === diaISO(agora) && <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">✅ feito hoje</span>}
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-1.5 flex-shrink-0">
+                                                <button onClick={() => setForm({ ...l })} title="Editar" className="text-xs font-bold px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700">✎</button>
+                                                <button onClick={() => excluir(l)} title="Apagar" className="text-xs font-bold px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600">🗑</button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    {concluidos.length > 0 && (
+                        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                            <button onClick={() => setVerConcluidos(v => !v)} className="w-full p-4 flex items-center justify-between text-left hover:bg-slate-50">
+                                <span className="font-bold text-slate-700 text-sm">✅ Concluídos ({concluidos.length})</span>
+                                <span className="text-slate-400">{verConcluidos ? '▲' : '▼'}</span>
+                            </button>
+                            {verConcluidos && (
+                                <div className="divide-y divide-slate-100 border-t border-slate-100">
+                                    {concluidos.map(l => (
+                                        <div key={l.id} className="p-4 flex items-center gap-3">
+                                            <span className="text-slate-400 line-through flex-1 min-w-0 break-words text-sm">{l.texto}</span>
+                                            <button onClick={() => reativar(l)} className="text-xs font-bold px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 flex-shrink-0">↩ Reativar</button>
+                                            <button onClick={() => excluir(l)} className="text-xs font-bold px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 flex-shrink-0">🗑</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             );
         };
@@ -6396,6 +6685,14 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.18.0', data: '13/08/2026', areas: ['site', 'app'], itens: [
+                '🔔 Nova aba *Lembretes*: escreve o que precisa lembrar e o app te avisa com um pop-up na tela',
+                'Duas categorias: ⚡ RÁPIDO (coisa pontual — ao marcar "Feito" ele conclui e sai da lista) e 🔁 ROTINA (se repete — "Feito" marca o dia e ele volta na próxima vez)',
+                'Quando: um dia só, todo dia, ou um dia da semana toda semana. A hora é opcional — sem hora, ele aparece na primeira vez que você abrir o app no dia',
+                '⚠️ Fechar no ✕ NÃO resolve o lembrete: fica um triângulo vermelho pulsando no canto da tela, visível em TODAS as telas, até você marcar como feito. Clicar nele traz os pendentes de volta',
+                'Os lembretes ficam na sua conta, então valem no PC e no celular ao mesmo tempo',
+                '⚠️ O aviso só toca com o Friganso aberto — um site não consegue avisar com o app fechado. Se o lembrete é das 8h e você abrir às 11h, ele aparece às 11h: não some, atrasa',
+            ]},
             { versao: '2.17.0', data: '13/08/2026', areas: ['site', 'app'], itens: [
                 '✋ Nova trava OPCIONAL contra pedido errado: antes de "Copiar Resumo", abre uma tela com o pedido inteiro pra você reler e anexar a prova do que o cliente pediu',
                 'Três saídas: 📷 print da conversa, 🎤 áudio, ou 📞 "foi por ligação" — nesta você escreve numa linha o que ele pediu, que já serve de registro',
@@ -9520,6 +9817,45 @@
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             const [messageBox, setMessageBox] = useState(null);
             const [showSettings, setShowSettings] = useState(false);
+            // 🔔 LEMBRETES — vivem no App (não na aba) porque o pop-up e o ⚠️ têm que aparecer em
+            // QUALQUER tela. O relógio bate de minuto em minuto pra pegar a hora marcada sem F5.
+            const [lembretes, setLembretes] = useState([]);
+            const [agoraLembrete, setAgoraLembrete] = useState(() => new Date());
+            useEffect(() => {
+                if (!user || !user.id) return;
+                const unsub = db.collection('lembretes').where('userId', '==', user.id)
+                    .onSnapshot(snap => setLembretes(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => {});
+                return () => unsub();
+            }, [user && user.id]);
+            useEffect(() => {
+                const iv = setInterval(() => setAgoraLembrete(new Date()), 60000);
+                const aoVoltar = () => { if (!document.hidden) setAgoraLembrete(new Date()); };
+                document.addEventListener('visibilitychange', aoVoltar);
+                return () => { clearInterval(iv); document.removeEventListener('visibilitychange', aoVoltar); };
+            }, []);
+            const lembretesAbrindo = lembretes.filter(l => lembreteDeveAbrir(l, agoraLembrete));
+            const lembretesPendentes = lembretes.filter(l => lembretePendente(l, agoraLembrete));
+            const lembreteAtual = lembretesAbrindo[0] || null;
+            // ✅ Feito: rápido conclui de vez; rotina só marca o dia e volta na próxima ocorrência.
+            const marcarLembreteFeito = async (l) => {
+                try {
+                    const dados = { ultimoFeito: diaISO(agoraLembrete), atualizadoEm: Date.now() };
+                    if (l.categoria === 'rapido') dados.ativo = false;
+                    await db.collection('lembretes').doc(l.id).update(dados);
+                } catch (e) {}
+            };
+            // ✕ NÃO resolve: só tira o pop-up da frente e acende o ⚠️ no canto até o fim do dia.
+            const adiarLembrete = async (l) => {
+                try { await db.collection('lembretes').doc(l.id).update({ ultimoAdiado: diaISO(agoraLembrete), atualizadoEm: Date.now() }); } catch (e) {}
+            };
+            // Clicar no ⚠️ traz os pendentes de volta pra frente.
+            const reabrirLembretes = async () => {
+                try {
+                    for (const l of lembretesPendentes) {
+                        if (l.ultimoAdiado === diaISO(agoraLembrete)) await db.collection('lembretes').doc(l.id).update({ ultimoAdiado: '' });
+                    }
+                } catch (e) {}
+            };
             const [conferenciaPedido, setConferenciaPedido] = useState(lerConferenciaAtiva);
             const [resumoNonce, setResumoNonce] = useState(0); // força recarregar o Resumo quando chega um pedido do SPAmov (app)
 
@@ -9849,6 +10185,7 @@
                     case 'cadastrosProcesso': return <CadastrosProcessoScreen user={user} showMessage={showMessage} />;
                     case 'consultaCnpj': return <ConsultaCnpjScreen showMessage={showMessage} />;
                     case 'prospeccao': return <ProspeccaoScreen user={user} clients={clients} showMessage={showMessage} />;
+                    case 'lembretes': return <LembretesScreen user={user} showMessage={showMessage} />;
                     case 'leads': return <LeadsScreen user={user} clients={clients} products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} listaNegra={listaNegra} />;
                     case 'radar': return <RadarScreen clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'support': return <SupportScreen user={user} />;
@@ -9881,6 +10218,15 @@
                 <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
                     {messageBox && <CustomMessageBox {...messageBox} onClose={() => setMessageBox(null)} />}
                     {siteUpdate && <SiteUpdateModal siteUpdate={siteUpdate} onAtualizar={atualizarSiteAgora} />}
+
+                    {/* 🔔 Lembretes: valem em todas as telas */}
+                    <AlertaLembrete quantos={lembretesPendentes.length} onClick={reabrirLembretes} />
+                    <LembretePopup
+                        lembrete={lembreteAtual}
+                        restantes={Math.max(0, lembretesAbrindo.length - 1)}
+                        onFeito={() => marcarLembreteFeito(lembreteAtual)}
+                        onAdiar={() => adiarLembrete(lembreteAtual)}
+                    />
 
                     {/* 📲 Aviso de atualização do APK (estilo Discord) */}
                     {apkUpdate && (
@@ -9975,6 +10321,7 @@
                         <div className="flex-1 overflow-y-auto p-4 space-y-1 scrollbar-hide">
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 mt-2 ml-2">Gestão Principal</p>
                             <NavButton route="dashboard" icon={IconDashboard} label="Painel (Dashboard)" />
+                            <NavButton route="lembretes" icon={IconHistory} label="🔔 Lembretes" />
                             <NavButton route="clients" icon={IconUsers} label="CRM & Rotas" />
                             <NavButton route="cadastrosProcesso" icon={IconFileText} label="Em Cadastramento" />
                             <NavButton route="consultaCnpj" icon={IconSearch} label="Consulta CNPJ" />
