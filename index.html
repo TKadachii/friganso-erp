@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 182;
+        const APP_BUILD_VERSION = 183;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -2090,6 +2090,126 @@
             return doc;
         };
 
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        // 📄 LEITURA DA TABELA DE PREÇOS EM PDF (reescrita em 2026-08-13)
+        //
+        // ⚠️ POR QUE MUDOU: o parser antigo usava FAIXAS DE X FIXAS (nome 60–305, preço 535+).
+        // No PDF real (Tabela_2708) a coluna à vista está em x≈354 e as 9 colunas de preço vão de
+        // 354 a 570 — então `col(535, ...)` caía nos PRAZOS LONGOS. Medido contra 718 produtos:
+        // ZERO pegavam o à vista e 699 pegavam o de 45 DIAS, ~8% mais caro. Falhava em SILÊNCIO,
+        // com número plausível — pior que o R$ 0,00 do bug antigo, que ao menos era visível.
+        //
+        // ⭐ A CORREÇÃO é a MESMA lição já registrada no contexto pra Lista de Preços do SPAmov:
+        // quando a ORDEM é previsível e a distância não é, extraia por ORDEM. As 9 colunas saem
+        // sempre na mesma sequência (À Vista, Cartão, 07, 14, 21, 28, 30, 35, 45 dias), então
+        // basta pegar todo texto com CARA de preço na linha e usar a posição. Validado: 740 de
+        // 740 linhas de produto do PDF real têm exatamente 9 preços.
+        //
+        // ⚠️ COMPATIBILIDADE: PDF de layout antigo (com 1 preço só na linha) continua funcionando —
+        // com menos de 2 preços, o primeiro achado é o à vista e não há cartão/prazos.
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        const PDF_TEM_CARA_DE_PRECO = /^\d{1,4}[.,]\d{2}$/;
+        // ⚠️ Rótulos do cabeçalho da tabela — ele se REPETE em toda página, e como fica logo acima
+        // do primeiro produto, seria adotado como pedaço do nome dele ("ÍTEM BOLSA TÉRMICA...").
+        const PDF_LINHA_DE_CABECALHO = /^(ÍTEM|ITEM|UN\.?|Peso\s*Liq|Peças|Pe[çc]as|EST-?VENDA|Pre[çc]o|Unidade|À\s*Vista|A\s*Vista|Cart[ãa]o|\d+\s*Dias|Tabela\s+de\s+Pre[çc]o|Data\s+Relat[óo]rio|Firefox|https?:)/i;
+        const PDF_TIPOS_EMBALAGEM = /^(CX|PC|UN|FD|SC|BD|PT|PLT|KG)$/i;
+        const PDF_DIAS_PRAZO = [7, 14, 21, 28, 30, 35, 45];
+
+        /**
+         * Lê os produtos de UMA página, já com os itens de texto agrupados por linha.
+         * `linhasMap`: Map(y arredondado -> itens do pdf.js). Devolve um array de produtos crus.
+         * Separado do handler do React de propósito: é a regra inteira, e assim dá pra testar
+         * contra um PDF real fora do navegador (ver ferramentas/teste-pdf-tabela.js).
+         */
+        const extrairProdutosDaPaginaPdf = (linhasMap) => {
+            const ys = Array.from(linhasMap.keys()).sort((a, b) => b - a);
+            const ordenar = (its) => its.slice().sort((a, b) => a.transform[4] - b.transform[4]);
+            const acharCodigo = (its) => its.find(it => /^\d{3,7}$/.test((it.str || '').trim()) && it.transform[4] < 60);
+            const precosDaLinha = (its) => its
+                .filter(it => PDF_TEM_CARA_DE_PRECO.test((it.str || '').trim()))
+                .map(it => ({ v: Number(it.str.trim().replace(',', '.')), x: it.transform[4] }));
+
+            // 1️⃣ Âncoras: as linhas que têm código E preço. Cada uma é um produto.
+            const ancoras = [];
+            ys.forEach(y => {
+                const its = ordenar(linhasMap.get(y) || []);
+                const cod = acharCodigo(its);
+                if (!cod) return;
+                const precos = precosDaLinha(its);
+                if (!precos.length) return;
+                ancoras.push({ y, its, cod, precos });
+            });
+            if (!ancoras.length) return [];
+
+            // 2️⃣ Onde o nome termina em cada linha: antes da embalagem (CX/PC/...) ou, na falta
+            // dela, antes do peso/peças — nunca num pixel fixo.
+            const limiteNomeDe = (a) => {
+                const itemTipo = a.its.find(it => PDF_TIPOS_EMBALAGEM.test((it.str || '').trim()) && it.transform[4] > a.cod.transform[4] + 40);
+                if (itemTipo) return { lim: itemTipo.transform[4] - 4, tipo: itemTipo.str.trim(), xTipo: itemTipo.transform[4] };
+                const medida = a.its.find(it => /^[\d.,]+\s*(Kg|P[çc])$/i.test((it.str || '').trim()) && it.transform[4] > a.cod.transform[4] + 40);
+                const lim = medida ? medida.transform[4] - 4 : a.precos[0].x - 4;
+                return { lim, tipo: '', xTipo: lim };
+            };
+            const limites = ancoras.map(limiteNomeDe);
+            // largura típica da coluna do nome, pra recortar as linhas de continuação (que não têm
+            // código nem embalagem pra servir de referência)
+            const limiteTipico = limites.map(l => l.lim).sort((a, b) => a - b)[Math.floor(limites.length / 2)] || 175;
+
+            // 3️⃣ ⚠️ O nome TRANSBORDA pra cima E pra baixo da linha do código (a célula tem altura
+            // maior que a linha, e o código/preços ficam no meio). Por isso cada pedaço solto vai
+            // pro código MAIS PRÓXIMO em Y — juntar só "a linha de baixo" cola o nome do produto
+            // seguinte no anterior (foi o que aconteceu com 0133 x 01055 no teste).
+            const pedacos = ancoras.map(() => []);
+            const soPontuacao = (t) => !/[A-Za-z0-9À-ú]/.test(t);
+            ys.forEach(y => {
+                const its = ordenar(linhasMap.get(y) || []);
+                if (acharCodigo(its) && precosDaLinha(its).length) return;   // é âncora, já tratada
+                const texto = its
+                    .filter(it => it.transform[4] > 60 && it.transform[4] < limiteTipico && (it.str || '').trim())
+                    .map(it => it.str.trim())
+                    .filter(t => !soPontuacao(t) && !PDF_LINHA_DE_CABECALHO.test(t))
+                    .join(' ');
+                if (!texto) return;
+                let melhor = 0, dist = Infinity;
+                ancoras.forEach((a, i) => { const d = Math.abs(a.y - y); if (d < dist) { dist = d; melhor = i; } });
+                if (dist <= 24) pedacos[melhor].push({ y, texto });
+            });
+
+            // 4️⃣ Monta cada produto
+            return ancoras.map((a, i) => {
+                const { lim, tipo, xTipo } = limites[i];
+                const naLinha = ordenar(a.its)
+                    .filter(it => it.transform[4] > a.cod.transform[4] && it.transform[4] < lim && (it.str || '').trim())
+                    .map(it => it.str.trim()).filter(t => !soPontuacao(t)).join(' ');
+                // de cima pra baixo: o texto da própria linha entra na posição de Y dela
+                const partes = pedacos[i].concat(naLinha ? [{ y: a.y, texto: naLinha }] : [])
+                    .sort((x, z) => z.y - x.y).map(x => x.texto);
+
+                const precos = a.precos;
+                const precosPrazo = {};
+                if (precos.length >= 3) PDF_DIAS_PRAZO.forEach((d, k) => { if (precos[k + 2] != null) precosPrazo[d] = precos[k + 2].v; });
+                const meio = a.its.filter(it => it.transform[4] >= xTipo + 8 && it.transform[4] < precos[0].x - 4 && (it.str || '').trim())
+                    .map(it => it.str.trim()).join(' ');
+
+                return {
+                    code: a.cod.str.trim(),
+                    name: partes.join(' ').replace(/\s+/g, ' ').replace(/^[-\s]+|[-\s]+$/g, '').trim(),
+                    originalPrice: precos[0].v,
+                    precoCartao: precos.length >= 2 ? precos[1].v : null,
+                    precosPrazo: Object.keys(precosPrazo).length ? precosPrazo : null,
+                    tipo,
+                    pesoItem: (meio.match(/[\d.,]+(?:\s*à\s*[\d.,]+)?\s*Kg(?!\s*\/)/i) || [''])[0].trim(),
+                    pcsItem: (meio.match(/[\d.,]+(?:\s*à\s*[\d.,]+)?\s*P[çc]/i) || [''])[0].trim(),
+                    unidade: (meio.match(/Kg\s*\[[A-Z]\]|\bUN\b/i) || [''])[0].trim(),
+                    kgUn: (meio.match(/[\d.,]+\s*Kg\s*\/\s*\d+\s*Un/i) || [''])[0].trim(),
+                };
+            });
+        };
+        // ⚠️ Assinatura de nome estragado pelo parser ANTIGO: "Kg [L]" e "N Kg/N Un" são valores das
+        // colunas UN. e EST-VENDA que vazaram pro nome — nunca aparecem em nome de produto de verdade.
+        // Só esses podem ser sobrescritos; qualquer outro nome existente é preservado.
+        const PDF_NOME_CORROMPIDO = /Kg\s*\[[A-Z]\]|\d[\d.,]*\s*Kg\s*\/\s*\d+\s*Un/i;
+
         // 🧪 PDF de CONFERÊNCIA (Debug): despeja a tabela que o SITE está usando agora — todo produto,
         // com nome e TODOS os preços que ele guarda. Serve pra bater contra o PDF original da
         // distribuidora e achar o que está faltando ou saindo errado, em vez de conferir na tela
@@ -2177,45 +2297,56 @@
                 fetchCloudInfo();
             }, []);
 
-            // 📥 Tabela lida direto da tela "Lista de Preços" do SPAmov (botão "📥 Atualizar Tabela do Site").
-            // Chega de dois jeitos: 1) já pronta no sessionStorage (URL curta, se a rota já apontava
-            // pra cá antes do React montar) ou 2) via postMessage da extensão, se chegar depois do mount.
+            // 📥 CAMINHO ÚNICO de carga da tabela — usado pela EXTENSÃO ("Atualizar Tabela do Site",
+            // lendo a Lista de Preços do SPAmov) E pelo PDF. Os dois entregam a MESMA lista de produtos
+            // aqui, então clicar num botão ou no outro dá exatamente o mesmo resultado. Se um dia
+            // divergirem, é porque alguém duplicou esta função — não duplique.
+            // Formato esperado de cada item: { code, name, originalPrice, precoCartao, precosPrazo,
+            //                                  tipo, pesoItem, pcsItem, unidade, kgUn }
+            const carregarTabela = (brutos, origem) => {
+                try {
+                    const lista = Array.isArray(brutos) ? brutos : JSON.parse(brutos || '[]');
+                    const extractedProducts = (lista || []).map(b => {
+                        const { unitFinalPrice } = checkDiscountRules(b.code, b.name, b.originalPrice);
+                        return { code: String(b.code), name: b.name, originalPrice: Number(b.originalPrice) || 0, discountedPrice: unitFinalPrice, tipo: b.tipo || '', pesoItem: b.pesoItem || '', pcsItem: b.pcsItem || '', unidade: b.unidade || '', kgUn: b.kgUn || '', precoCartao: b.precoCartao != null ? Number(b.precoCartao) : null, precosPrazo: b.precosPrazo || null };
+                    }).filter(p => p.code && p.originalPrice > 0);
+                    if (!extractedProducts.length) { showMessage('Não veio nenhum produto válido.', 'error'); return; }
+                    const produtosAtivosAntes = (products || []).filter(p => p.ativo !== false);
+                    const antigos = new Map(produtosAtivosAntes.map(p => [String(p.code), p]));
+                    const changes = [], novos = [];
+                    extractedProducts.forEach(np => {
+                        const op = antigos.get(String(np.code));
+                        if (!op) { novos.push({ code: np.code, name: np.name, price: np.originalPrice }); return; }
+                        const oldP = Number(op.originalPrice) || 0, newP = np.originalPrice;
+                        if (Math.abs(oldP - newP) >= 0.01) changes.push({ code: np.code, name: np.name, oldPrice: oldP, newPrice: newP });
+                    });
+                    const removidos = produtosAtivosAntes.filter(p => !extractedProducts.some(np => String(np.code) === String(p.code))).length;
+                    setPriceChanges(produtosAtivosAntes.length > 0 ? { changes, novos, removidos } : null);
+                    setProducts(extractedProducts);
+                    // 🔒 marca como "já sincronizado agora" — senão a sincronização automática da nuvem
+                    // (useEffect do onSnapshot, lá embaixo) enxerga a última tabela DISTRIBUÍDA como
+                    // "mais nova" que essa leitura local e sobrescreve ela de volta pros dados antigos.
+                    try { window.localStorage.setItem('friganso_tabela_sync_ms', String(Date.now())); } catch (e) {}
+                    const de = origem === 'pdf' ? 'do PDF' : 'direto do SPAmov';
+                    showMessage(`Tabela lida ${de}! ${extractedProducts.length} produtos.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
+                } catch (e) { showMessage('Erro ao processar a tabela: ' + (e && e.message ? e.message : e), 'error'); }
+            };
+
+            // A extensão entrega de dois jeitos: já pronta no sessionStorage (se a rota apontava pra cá
+            // antes do React montar) ou via postMessage, se chegar depois.
+            // ⚠️ `carregarTabela` mora no escopo do componente de propósito: quando ficava DENTRO deste
+            // useEffect com deps [], ela congelava o `products` do primeiro render, e a comparação de
+            // preços era feita contra uma tabela velha.
+            const carregarTabelaRef = useRef(carregarTabela);
+            carregarTabelaRef.current = carregarTabela;
             useEffect(() => {
-                const processarTabela = (raw) => {
-                    if (!raw) return;
-                    try {
-                        const brutos = JSON.parse(raw);
-                        const extractedProducts = (brutos || []).map(b => {
-                            const { hasDiscount, unitFinalPrice } = checkDiscountRules(b.code, b.name, b.originalPrice);
-                            return { code: String(b.code), name: b.name, originalPrice: Number(b.originalPrice) || 0, discountedPrice: unitFinalPrice, tipo: b.tipo || '', pesoItem: b.pesoItem || '', pcsItem: b.pcsItem || '', unidade: b.unidade || '', kgUn: b.kgUn || '', precoCartao: b.precoCartao != null ? Number(b.precoCartao) : null, precosPrazo: b.precosPrazo || null };
-                        }).filter(p => p.code && p.originalPrice > 0);
-                        if (!extractedProducts.length) { showMessage('Não veio nenhum produto válido da Lista de Preços.', 'error'); return; }
-                        const produtosAtivosAntes = (products || []).filter(p => p.ativo !== false);
-                        const antigos = new Map(produtosAtivosAntes.map(p => [String(p.code), p]));
-                        const changes = [], novos = [];
-                        extractedProducts.forEach(np => {
-                            const op = antigos.get(String(np.code));
-                            if (!op) { novos.push({ code: np.code, name: np.name, price: np.originalPrice }); return; }
-                            const oldP = Number(op.originalPrice) || 0, newP = np.originalPrice;
-                            if (Math.abs(oldP - newP) >= 0.01) changes.push({ code: np.code, name: np.name, oldPrice: oldP, newPrice: newP });
-                        });
-                        const removidos = produtosAtivosAntes.filter(p => !extractedProducts.some(np => String(np.code) === String(p.code))).length;
-                        setPriceChanges(produtosAtivosAntes.length > 0 ? { changes, novos, removidos } : null);
-                        setProducts(extractedProducts);
-                        // 🔒 marca como "já sincronizado agora" — senão a sincronização automática da nuvem
-                        // (useEffect do onSnapshot, lá embaixo) enxerga a última tabela DISTRIBUÍDA como
-                        // "mais nova" que essa leitura local e sobrescreve ela de volta pros dados antigos.
-                        try { window.localStorage.setItem('friganso_tabela_sync_ms', String(Date.now())); } catch (e) {}
-                        showMessage(`Tabela lida direto do SPAmov! ${extractedProducts.length} produtos.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
-                    } catch (e) { showMessage('Erro ao processar a tabela lida do SPAmov.', 'error'); }
-                };
                 const raw = window.sessionStorage.getItem('friganso_tabela_json');
-                if (raw) { window.sessionStorage.removeItem('friganso_tabela_json'); processarTabela(raw); }
+                if (raw) { window.sessionStorage.removeItem('friganso_tabela_json'); try { carregarTabelaRef.current(JSON.parse(raw), 'extensao'); } catch (e) {} }
                 const onMsg = (e) => {
                     const d = e.data;
                     if (!d || d.source !== 'friganso-ext' || d.type !== 'TABELA_PENDENTE' || !d.produtos) return;
-                    window.sessionStorage.removeItem('friganso_tabela_json'); // evita reprocessar de novo se remontar essa tela
-                    processarTabela(JSON.stringify(d.produtos));
+                    window.sessionStorage.removeItem('friganso_tabela_json'); // evita reprocessar se remontar
+                    carregarTabelaRef.current(d.produtos, 'extensao');
                 };
                 window.addEventListener('message', onMsg);
                 return () => window.removeEventListener('message', onMsg);
@@ -2250,89 +2381,36 @@
                 try {
                     const arrayBuffer = await file.arrayBuffer();
                     const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-                    let extractedProducts = [];
-                    const byCode = new Map(); // dedup por código: se repetir, fica com o nome mais "de produto"
-                    const letterScore = (s) => ((s || '').match(/[A-Za-zÀ-ú]/g) || []).length;
-
+                    const porCodigo = new Map();
                     for (let i = 1; i <= pdf.numPages; i++) {
-                        const page = await pdf.getPage(i);
-                        const textContent = await page.getTextContent();
-                        const linesMap = new Map();
-                        
+                        const textContent = await (await pdf.getPage(i)).getTextContent();
+                        const linhasMap = new Map();
                         textContent.items.forEach(item => {
-                            const y = Math.round(item.transform[5] / 6) * 6; 
-                            if (!linesMap.has(y)) linesMap.set(y, []); linesMap.get(y).push(item);
+                            const y = Math.round(item.transform[5] / 6) * 6;
+                            if (!linhasMap.has(y)) linhasMap.set(y, []);
+                            linhasMap.get(y).push(item);
                         });
-                        
-                        const sortedY = Array.from(linesMap.keys()).sort((a, b) => b - a);
-                        
-                        sortedY.forEach(y => {
-                            const lineItems = linesMap.get(y).sort((a, b) => a.transform[4] - b.transform[4]);
-                            const lineText = lineItems.map(item => item.str).join(' ').replace(/\s+/g, ' ').trim();
-                            
-                            const match = lineText.match(/(?:^|\s)(\d{4,7})\s+([A-Z0-9ÇÃÕÁÉÍÓÚÂÊÔ].*)/i);
-                            if (match) {
-                                const code = match[1];
-                                let rest = match[2].trim();
-
-                                // 📐 Leitura por COLUNA (posição X), juntando a janela do produto (linha do código + de cima + de baixo).
-                                // No PDF cada coluna tem um X fixo; o nome "transborda" pras linhas vizinhas e, em alguns casos,
-                                // o código fica numa linha e os números (preço!) noutra — por isso varremos as 3 linhas.
-                                const janela = [].concat(...[y + 6, y, y - 6].map(yy => linesMap.get(yy) || []));
-                                const col = (xmin, xmax) => janela
-                                    .filter(it => { const x = it.transform[4]; return x >= xmin && x < xmax && it.str && it.str.trim(); })
-                                    .sort((a, b) => (Math.round(b.transform[5]) - Math.round(a.transform[5])) || (a.transform[4] - b.transform[4]))
-                                    .map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
-
-                                let finalName = col(60, 305);                 // 🔴 nome inteiro
-                                const tipo = col(305, 325);                    // 🟤 CX / PC / UN / FD / SC...
-                                const meio = col(325, 412);                    // 🟢 peso + 🩷 peças (separa por marcador Kg/Pç)
-                                const pesoItem = (meio.match(/[\d.,]+(?:\s*à\s*[\d.,]+)?\s*Kg/i) || [''])[0].trim();
-                                const pcsItem = (meio.match(/[\d.,]+(?:\s*à\s*[\d.,]+)?\s*P[çc]/i) || [''])[0].trim();
-                                const unidade = col(412, 456);                 // Kg [L] / UN / Kg [B]
-                                const kgUn = col(456, 535);                    // 🟣 ex: 459.25 Kg/23 Un
-                                const rawPrice = parsePrice(col(535, 99999)) || 0; // ⬛ preço à vista (corrige o 00,00 do morango)
-
-                                // fallback (jeito antigo) só se a coluna do nome vier vazia
-                                if (!finalName) {
-                                    finalName = rest;
-                                    const precoNoNome = rest.match(/\d{1,3}(?:\.\d{3})*,\d{2}(?!\s*k?g\b)/i);
-                                    if (precoNoNome) finalName = rest.slice(0, precoNoNome.index);
-                                    finalName = finalName.split(/Vista\s*\/\s*PIX/i)[0].replace(/\s*\[?\s*L\s*\]?\s*$/i, '').replace(/[-—.,\s]+$/, '').trim();
-                                }
-
-                                const { hasDiscount, unitFinalPrice } = checkDiscountRules(code, finalName, rawPrice);
-                                const cand = { code, name: finalName, originalPrice: rawPrice, discountedPrice: unitFinalPrice, tipo, pesoItem, pcsItem, unidade, kgUn };
-                                const prev = byCode.get(code);
-                                // código repetido = um deles é fragmento mal lido: fica com o de nome mais "de produto" (mais letras)
-                                if (!prev || letterScore(cand.name) > letterScore(prev.name)) byCode.set(code, cand);
-                            }
+                        extrairProdutosDaPaginaPdf(linhasMap).forEach(prod => {
+                            if (!porCodigo.has(prod.code)) porCodigo.set(prod.code, prod);
                         });
                     }
-                    extractedProducts = Array.from(byCode.values());
+                    if (!porCodigo.size) { showMessage('Não consegui ler nenhum produto desse PDF.', 'error'); return; }
 
-                    // 🔔 Compara com a tabela anterior e lista mudanças de preço — usa só os produtos ATIVOS
-                    // (da tabela do dia anterior), senão "removidos" ficaria contando todo o histórico
-                    // acumulado (produtos que já estavam inativos há dias) em vez do que sumiu de ONTEM pra hoje.
-                    const produtosAtivosAntes = (products || []).filter(p => p.ativo !== false);
-                    const antigos = new Map(produtosAtivosAntes.map(p => [String(p.code), p]));
-                    const changes = [], novos = [];
-                    extractedProducts.forEach(np => {
-                        const op = antigos.get(String(np.code));
-                        if (!op) { novos.push({ code: np.code, name: np.name, price: Number(np.originalPrice) || 0 }); return; }
-                        const oldP = Number(op.originalPrice) || 0, newP = Number(np.originalPrice) || 0;
-                        if (Math.abs(oldP - newP) >= 0.01) changes.push({ code: np.code, name: np.name, oldPrice: oldP, newPrice: newP });
+                    // 🏷️ O PDF NÃO RENOMEIA. Quem manda no nome é a extensão, que lê direto do SPAmov —
+                    // por isso carregar pelo PDF ou pelo botão da extensão mostra a MESMA coisa.
+                    // Mexer no nome não é cosmético: ele alimenta a regra de desconto (checkDiscountRules)
+                    // e a categorização dos Disparos (prodCategory). Trocar o nome muda comportamento.
+                    // ÚNICA exceção: nome já estragado pelo parser antigo — preservar seria manter o erro.
+                    const nomesAtuais = new Map((products || []).map(p => [String(p.code), p.name]));
+                    const finais = Array.from(porCodigo.values()).map(p => {
+                        const atual = nomesAtuais.get(String(p.code));
+                        return (atual && !PDF_NOME_CORROMPIDO.test(atual)) ? { ...p, name: atual } : p;
                     });
-                    const removidos = produtosAtivosAntes.filter(p => !extractedProducts.some(np => String(np.code) === String(p.code))).length;
-                    // só mostra comparação se já havia uma tabela antes (senão é a primeira carga)
-                    setPriceChanges((produtosAtivosAntes.length > 0) ? { changes, novos, removidos } : null);
 
-                    setProducts(extractedProducts);
-                    // 🔒 mesma marca de "já sincronizado agora" do processarTabela — evita a sincronização
-                    // automática da nuvem sobrescrever essa leitura de PDF com a última tabela distribuída.
-                    try { window.localStorage.setItem('friganso_tabela_sync_ms', String(Date.now())); } catch (e) {}
-                    showMessage(`Sucesso! ${extractedProducts.length} produtos carregados.` + (changes.length ? ` ${changes.length} mudança(s) de preço.` : ''), 'success');
-                } catch (err) { showMessage('Erro ao processar PDF.', 'error'); } finally { setIsLoading(false); }
+                    carregarTabela(finais, 'pdf');
+                } catch (err) {
+                    showMessage('Erro ao processar PDF: ' + (err && err.message ? err.message : err), 'error');
+                } finally { setIsLoading(false); }
             };
 
             const handleDistribute = async () => {
@@ -6737,6 +6815,16 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.20.0', data: '13/08/2026', areas: ['site'], itens: [
+                '📄 A leitura da Tabela de Preços em PDF foi CONSERTADA e agora faz exatamente o mesmo que o botão "Atualizar Tabela do Site" da extensão — carregar por um ou por outro mostra a mesma coisa',
+                '⛔ O BUG: o PDF procurava o preço numa posição fixa da página e acabava pegando a coluna de 45 DIAS achando que era o à vista. Testado contra a tabela do dia 27/08: 0 de 718 produtos vinham com o preço certo, e o erro médio era de 8% A MAIS',
+                'Era pior que dar erro na tela: vinha um número plausível, então dava pra mandar preço errado pro cliente sem perceber. Ex.: DIANTEIRO BOVINO saía R$ 24,84 quando o à vista é R$ 23,00',
+                '✅ Agora os preços são lidos pela ORDEM das colunas (à vista, cartão, 07, 14, 21, 28, 30, 35 e 45 dias) em vez da posição na folha — 740 de 740 corretos no teste',
+                '💳 O PDF agora também traz o preço de CARTÃO e os 7 prazos, que antes só vinham pela extensão',
+                '🏷️ O PDF NÃO renomeia mais seus produtos: quem já está na tabela mantém o nome atual. Só nome que ficou estragado pelo parser antigo é corrigido (foi 1 produto na sua tabela)',
+                'O parser também não cria mais "produtos fantasma" a partir do número do estoque (você tem 30 desses na tabela, de cargas antigas — dá pra limpar)',
+                'PDF de layout antigo, com uma coluna de preço só, continua funcionando',
+            ]},
             { versao: '2.19.0', data: '13/08/2026', areas: ['site'], itens: [
                 '🧪 No Debug, novo botão "Gerar PDF de conferência": despeja TODOS os produtos que o site está usando agora, com nome e todos os preços (à vista, cartão e os 7 prazos)',
                 'Serve pra colocar lado a lado com o PDF original da distribuidora e achar o que está faltando ou saindo errado, sem conferir produto por produto na tela',
