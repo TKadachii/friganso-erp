@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 181;
+        const APP_BUILD_VERSION = 182;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -2087,6 +2087,58 @@
                 doc.text('Friganso', 14, 288);
                 doc.text('Página ' + i + ' de ' + n, 196, 288, { align: 'right' });
             }
+            return doc;
+        };
+
+        // 🧪 PDF de CONFERÊNCIA (Debug): despeja a tabela que o SITE está usando agora — todo produto,
+        // com nome e TODOS os preços que ele guarda. Serve pra bater contra o PDF original da
+        // distribuidora e achar o que está faltando ou saindo errado, em vez de conferir na tela
+        // produto por produto. Nasceu do bug do parser que lia o preço de 45 dias como se fosse o
+        // à vista — silenciosamente, com número plausível.
+        const gerarPdfConferenciaTabela = (produtos) => {
+            const JsPDF = window.jspdf && window.jspdf.jsPDF;
+            if (!JsPDF) throw new Error('sem-lib');
+            const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' });
+            const num = (v) => (v == null || v === '' || isNaN(Number(v))) ? '-' : Number(v).toFixed(2);
+            const lista = (produtos || []).slice().sort((a, b) => String(a.code).localeCompare(String(b.code), 'pt-BR', { numeric: true }));
+            const hoje = new Date();
+
+            // ⚠️ Larguras somam < 297mm (A4 deitado). Se acrescentar coluna, refaça a conta.
+            const COLS = [
+                { t: 'CÓDIGO', x: 10, w: 18 },   { t: 'NOME', x: 28, w: 96 },
+                { t: 'À VISTA', x: 126, w: 16 }, { t: 'CARTÃO', x: 144, w: 16 },
+                { t: '07d', x: 162, w: 14 },     { t: '14d', x: 176, w: 14 },
+                { t: '21d', x: 190, w: 14 },     { t: '28d', x: 204, w: 14 },
+                { t: '30d', x: 218, w: 14 },     { t: '35d', x: 232, w: 14 },
+                { t: '45d', x: 246, w: 14 },     { t: 'TIPO', x: 260, w: 12 },
+                { t: 'PESO', x: 272, w: 18 },
+            ];
+            let y = 0;
+            const cabecalho = () => {
+                doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
+                doc.text('FRIGANSO — CONFERÊNCIA DA TABELA DO SITE', 10, 12);
+                doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+                doc.text(lista.length + ' produtos  |  gerado em ' + hoje.toLocaleDateString('pt-BR') + ' ' + hoje.toLocaleTimeString('pt-BR'), 10, 17);
+                doc.setFont('helvetica', 'bold'); doc.setFontSize(7);
+                COLS.forEach(c => doc.text(c.t, c.x, 23));
+                doc.setLineWidth(0.3); doc.line(10, 25, 290, 25);
+                doc.setFont('helvetica', 'normal');
+                y = 29;
+            };
+            const corta = (txt, larg) => { let t = String(txt || ''); while (doc.getTextWidth(t) > larg && t.length > 3) t = t.slice(0, -1); return t; };
+            cabecalho();
+            lista.forEach(p => {
+                if (y > 200) { doc.addPage(); cabecalho(); }
+                const pz = p.precosPrazo || {};
+                doc.setFontSize(7);
+                const vals = [String(p.code), corta(p.name, 94), num(p.originalPrice), num(p.precoCartao),
+                              num(pz[7]), num(pz[14]), num(pz[21]), num(pz[28]), num(pz[30]), num(pz[35]), num(pz[45]),
+                              String(p.tipo || '-'), corta(p.pesoItem || '-', 17)];
+                COLS.forEach((c, i) => doc.text(vals[i], c.x, y));
+                y += 4.2;
+            });
+            const n = doc.internal.getNumberOfPages();
+            for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFontSize(7); doc.text('Página ' + i + ' de ' + n, 290, 205, { align: 'right' }); }
             return doc;
         };
 
@@ -6685,6 +6737,11 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.19.0', data: '13/08/2026', areas: ['site'], itens: [
+                '🧪 No Debug, novo botão "Gerar PDF de conferência": despeja TODOS os produtos que o site está usando agora, com nome e todos os preços (à vista, cartão e os 7 prazos)',
+                'Serve pra colocar lado a lado com o PDF original da distribuidora e achar o que está faltando ou saindo errado, sem conferir produto por produto na tela',
+                'Mostra também um resumo rápido: quantos têm preço, quantos estão zerados, quantos têm cartão e prazos',
+            ]},
             { versao: '2.18.0', data: '13/08/2026', areas: ['site', 'app'], itens: [
                 '🔔 Nova aba *Lembretes*: escreve o que precisa lembrar e o app te avisa com um pop-up na tela',
                 'Duas categorias: ⚡ RÁPIDO (coisa pontual — ao marcar "Feito" ele conclui e sai da lista) e 🔁 ROTINA (se repete — "Feito" marca o dia e ele volta na próxima vez)',
@@ -9540,7 +9597,7 @@
         };
 
         // ===== DEBUG (somente admin) =====
-        const DebugScreen = ({ user, showMessage }) => {
+        const DebugScreen = ({ user, showMessage, products }) => {
             const [usuario, setUsuario] = useState(() => window.localStorage.getItem('friganso_spamov_user') || '');
             const [senha, setSenha] = useState(() => window.localStorage.getItem('friganso_spamov_pass') || '');
             const [verSenha, setVerSenha] = useState(false);
@@ -9555,6 +9612,20 @@
                 return () => { window.removeEventListener('storage', atualizar); clearInterval(iv); };
             }, []);
             const limparValorNota = () => { window.localStorage.removeItem('friganso_debug_valor_nota'); setValorNota(null); };
+
+            // 🧪 Exporta a tabela que o site está usando AGORA, pra bater contra o PDF da distribuidora
+            const baixarPdfConferencia = () => {
+                if (!products || !products.length) { showMessage('Nenhum produto carregado na tabela.', 'error'); return; }
+                try {
+                    const doc = gerarPdfConferenciaTabela(products);
+                    const d = new Date();
+                    doc.save('friganso-conferencia-tabela-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '.pdf');
+                    showMessage(products.length + ' produtos exportados! Procure em Downloads. 📄', 'success');
+                } catch (e) {
+                    if (e && e.message === 'sem-lib') showMessage('O gerador de PDF não carregou. Conecte na internet e atualize a página.', 'error');
+                    else showMessage('Erro ao gerar: ' + (e && e.message ? e.message : e), 'error');
+                }
+            };
 
             // 🧹 Correção de pedidos duplicados (mesmo SPAmov registrado mais de uma vez, de antes da
             // regra "mesmo SPAmov = mesmo pedido" existir). Faz um escaneamento primeiro (não mexe em
@@ -9629,6 +9700,33 @@
                     <div>
                         <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><span>🐞</span> Debug (Admin)</h2>
                         <p className="text-slate-500 text-sm">Ferramentas internas, só pra você.</p>
+                    </div>
+
+                    {/* 🧪 Conferência da tabela: exporta o que o site tem, pra comparar com o PDF original */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-3">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>🧪</span> Conferir a tabela do site</h3>
+                        <p className="text-xs text-slate-500 leading-snug">
+                            Gera um PDF com <b>todos os produtos que o site está usando agora</b> — código, nome e todos os preços
+                            (à vista, cartão e os 7 prazos). Serve pra colocar lado a lado com o PDF original da distribuidora e
+                            achar o que está faltando ou saindo errado, sem conferir produto por produto na tela.
+                        </p>
+                        <div className="flex items-center gap-3 flex-wrap">
+                            <button onClick={baixarPdfConferencia} disabled={!products || !products.length}
+                                className="bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white font-bold px-5 py-3 rounded-xl text-sm transition-colors">
+                                📄 Gerar PDF de conferência
+                            </button>
+                            <span className="text-xs font-bold text-slate-500">
+                                {products && products.length ? products.length + ' produto(s) na tabela' : 'nenhum produto carregado'}
+                            </span>
+                        </div>
+                        {products && products.length > 0 && (
+                            <div className="flex flex-wrap gap-2 text-[11px] font-bold pt-1">
+                                <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">{products.filter(p => Number(p.originalPrice) > 0).length} com preço à vista</span>
+                                <span className={`px-2 py-1 rounded-lg ${products.filter(p => !Number(p.originalPrice)).length ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>{products.filter(p => !Number(p.originalPrice)).length} com preço zerado</span>
+                                <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">{products.filter(p => p.precoCartao != null).length} com cartão</span>
+                                <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">{products.filter(p => p.precosPrazo).length} com prazos</span>
+                            </div>
+                        )}
                     </div>
 
                     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
@@ -10203,7 +10301,7 @@
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
                     case 'navegador': return isElectron ? null : <NavegadorScreen />;
                     case 'tutorial': return <TutorialScreen setActiveRoute={setActiveRoute} />;
-                    case 'debug': return user.role === 'admin' ? <DebugScreen user={user} showMessage={showMessage} /> : <DashboardScreen user={user} />;
+                    case 'debug': return user.role === 'admin' ? <DebugScreen user={user} showMessage={showMessage} products={products} /> : <DashboardScreen user={user} />;
                     default: return <DashboardScreen user={user} />;
                 }
             };
