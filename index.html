@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 183;
+        const APP_BUILD_VERSION = 184;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -2766,6 +2766,19 @@
             } catch (e) { resolve(blob); }
         });
 
+        // ⚠️ FORA do componente de propósito. Componente declarado DENTRO do corpo de outro é
+        // recriado a cada render: o React entende como um TIPO novo, desmonta a árvore e monta
+        // outra. Qualquer input ali dentro perde o foco e o cursor volta pro começo — as letras
+        // saem ao contrário. Foi o que aconteceu na tela de Lembretes (2026-08-13).
+        const OpcaoProva = ({ id, emoji, titulo, sub, tipo, onEscolher }) => (
+            <button onClick={() => onEscolher(id)}
+                className={`flex-1 min-w-[110px] p-3 rounded-2xl border-2 transition-all text-left ${tipo === id ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300 bg-white'}`}>
+                <div className="text-xl">{emoji}</div>
+                <p className={`text-xs font-bold mt-1 ${tipo === id ? 'text-rose-700' : 'text-slate-700'}`}>{titulo}</p>
+                <p className="text-[10px] text-slate-400 leading-tight">{sub}</p>
+            </button>
+        );
+
         const ConferenciaPedidoModal = ({ textoResumo, clienteNome, qtdItens, onCancelar, onConfirmar, showMessage }) => {
             const [tipo, setTipo] = useState('');           // print | audio | ligacao
             const [arquivo, setArquivo] = useState(null);
@@ -2808,15 +2821,8 @@
                 }
             };
             const pular = () => { registrarPulo(); onConfirmar({ tipo: 'pulado', url: '', anotacao: '', ts: Date.now() }); };
+            const escolherTipo = (id) => { setTipo(id); if (id === 'ligacao') { setArquivo(null); setPreviewUrl(null); } };
 
-            const Opcao = ({ id, emoji, titulo, sub }) => (
-                <button onClick={() => { setTipo(id); if (id === 'ligacao') { setArquivo(null); setPreviewUrl(null); } }}
-                    className={`flex-1 min-w-[110px] p-3 rounded-2xl border-2 transition-all text-left ${tipo === id ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300 bg-white'}`}>
-                    <div className="text-xl">{emoji}</div>
-                    <p className={`text-xs font-bold mt-1 ${tipo === id ? 'text-rose-700' : 'text-slate-700'}`}>{titulo}</p>
-                    <p className="text-[10px] text-slate-400 leading-tight">{sub}</p>
-                </button>
-            );
 
             return (
                 <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-3 z-[95] animate-in fade-in">
@@ -2839,9 +2845,9 @@
                             <div>
                                 <p className="text-sm font-bold text-slate-700 mb-2">Como esse pedido chegou?</p>
                                 <div className="flex gap-2 flex-wrap">
-                                    <Opcao id="print" emoji="📷" titulo="Print" sub="Foto da conversa" />
-                                    <Opcao id="audio" emoji="🎤" titulo="Áudio" sub="O que ele mandou" />
-                                    <Opcao id="ligacao" emoji="📞" titulo="Por ligação" sub="Sem anexo" />
+                                    <OpcaoProva id="print" emoji="📷" titulo="Print" sub="Foto da conversa" tipo={tipo} onEscolher={escolherTipo} />
+                                    <OpcaoProva id="audio" emoji="🎤" titulo="Áudio" sub="O que ele mandou" tipo={tipo} onEscolher={escolherTipo} />
+                                    <OpcaoProva id="ligacao" emoji="📞" titulo="Por ligação" sub="Sem anexo" tipo={tipo} onEscolher={escolherTipo} />
                                 </div>
                             </div>
 
@@ -3037,7 +3043,6 @@
             const concluidos = lembretes.filter(l => l.ativo === false);
             const agora = new Date();
 
-            const Campo = ({ children }) => <div className="space-y-1">{children}</div>;
 
             return (
                 <div className="animate-in fade-in space-y-6">
@@ -3064,13 +3069,13 @@
                     {form && (
                         <div className="bg-white rounded-3xl shadow-sm border-2 border-rose-200 p-6 space-y-4">
                             <h3 className="font-bold text-slate-800">{form.id ? 'Editar' : (form.categoria === 'rapido' ? '⚡ Novo lembrete rápido' : '🔁 Nova rotina')}</h3>
-                            <Campo>
+                            <div className="space-y-1">
                                 <label className="text-sm font-bold text-slate-700">O que lembrar?</label>
                                 <textarea value={form.texto} onChange={e => setForm(f => ({ ...f, texto: e.target.value }))} rows={3} autoFocus
                                     placeholder={form.categoria === 'rapido' ? 'Ex.: avisar o Zé do Mercado que a costela chegou' : 'Ex.: conferir a lista de quem compra na segunda'}
                                     className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-500 text-sm" />
-                            </Campo>
-                            <Campo>
+                            </div>
+                            <div className="space-y-1">
                                 <label className="text-sm font-bold text-slate-700">Quando?</label>
                                 <div className="flex gap-2 flex-wrap">
                                     {[['data', '📅 Um dia só'], ['diario', '🔁 Todo dia'], ['semanal', '📆 Toda semana']].map(([v, t]) => (
@@ -3078,15 +3083,15 @@
                                             className={`px-3 py-2 rounded-xl text-xs font-bold transition-colors ${form.repeticao === v ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{t}</button>
                                     ))}
                                 </div>
-                            </Campo>
+                            </div>
                             {form.repeticao === 'data' && (
-                                <Campo>
+                                <div className="space-y-1">
                                     <label className="text-sm font-bold text-slate-700">Dia</label>
                                     <input type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data: e.target.value }))} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm" />
-                                </Campo>
+                                </div>
                             )}
                             {form.repeticao === 'semanal' && (
-                                <Campo>
+                                <div className="space-y-1">
                                     <label className="text-sm font-bold text-slate-700">Dia da semana</label>
                                     <div className="flex gap-1.5 flex-wrap">
                                         {DIAS_SEMANA.map((d, i) => (
@@ -3094,16 +3099,16 @@
                                                 className={`px-2.5 py-2 rounded-lg text-xs font-bold transition-colors ${Number(form.diaSemana) === i ? 'bg-rose-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{d.slice(0, 3)}</button>
                                         ))}
                                     </div>
-                                </Campo>
+                                </div>
                             )}
-                            <Campo>
+                            <div className="space-y-1">
                                 <label className="text-sm font-bold text-slate-700">Hora <span className="font-normal text-slate-400">(opcional)</span></label>
                                 <div className="flex items-center gap-2">
                                     <input type="time" value={form.hora} onChange={e => setForm(f => ({ ...f, hora: e.target.value }))} className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm" />
                                     {form.hora && <button onClick={() => setForm(f => ({ ...f, hora: '' }))} className="text-xs font-bold text-slate-400 hover:text-slate-600">limpar</button>}
                                 </div>
                                 <p className="text-[11px] text-slate-400">Vazio = aparece na primeira vez que você abrir o app no dia.</p>
-                            </Campo>
+                            </div>
                             <div className="flex gap-2 pt-1">
                                 <button onClick={() => setForm(null)} className="px-4 py-2.5 font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm">Cancelar</button>
                                 <button onClick={salvar} disabled={salvando} className="flex-1 px-4 py-2.5 font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-sm shadow-md">{salvando ? 'Salvando...' : '✅ Salvar'}</button>
@@ -6815,6 +6820,11 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.20.1', data: '13/08/2026', areas: ['site'], itens: [
+                '🐞 Corrigido: na tela de Lembretes as letras saíam AO CONTRÁRIO enquanto você digitava',
+                'A causa: o campo de texto era destruído e recriado a cada tecla, então o cursor voltava pro começo e a letra nova entrava antes da anterior',
+                'Varri o sistema inteiro atrás do mesmo problema em outras telas — só os Lembretes tinham',
+            ]},
             { versao: '2.20.0', data: '13/08/2026', areas: ['site'], itens: [
                 '📄 A leitura da Tabela de Preços em PDF foi CONSERTADA e agora faz exatamente o mesmo que o botão "Atualizar Tabela do Site" da extensão — carregar por um ou por outro mostra a mesma coisa',
                 '⛔ O BUG: o PDF procurava o preço numa posição fixa da página e acabava pegando a coluna de 45 DIAS achando que era o à vista. Testado contra a tabela do dia 27/08: 0 de 718 produtos vinham com o preço certo, e o erro médio era de 8% A MAIS',
