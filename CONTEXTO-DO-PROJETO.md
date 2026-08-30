@@ -384,7 +384,130 @@ basta ~2 GB livres. Se cair a internet, rodar de novo reaproveita o que já baix
 - ⚠️ **A URL da Receita muda de lugar**: o script descobre sozinho a pasta `AAAA-MM` mais nova
   listando o diretório. Se a Receita mudar a estrutura do site, cai no `--pasta AAAA-MM` manual.
 
+## 🤖 Envio automático pelo SITE, via extensão (2026-08-13, v2.15.0)
+O "🤖 Enviar todos sozinho" existia só no programa de PC, que tem o WhatsApp embutido numa
+`<webview>` e consegue controlá-la. **No site um script NÃO pode clicar dentro do web.whatsapp.com**
+(origens diferentes) — mas a EXTENSÃO pode, porque roda dentro da página.
+
+Fluxo: o site entrega a lista pronta (`postMessage` `ZAP_CAMPANHA` → `chrome.storage`), abre o
+`web.whatsapp.com`, e o `content.js` que roda lá dentro dispara um por um. Vale nos Disparos e na
+Prospecção em Massa.
+
+- ⚠️ Navega por URL (`/send?phone=..&text=..`), o que **RECARREGA a página a cada envio** — então o
+  estado NÃO pode viver em memória, vive todo no `chrome.storage`. É mais lento que mexer na busca
+  interna do WhatsApp (jeito do PC), mas não depende de adivinhar a navegação interna do app.
+- O site **espera o ACK** (`ZAP_CAMPANHA_OK`) antes de abrir a aba: sem isso, quem não tem a
+  extensão veria o WhatsApp abrir e nada acontecer, sem pista do motivo.
+- O painel **não começa sozinho** — mostra "Iniciar envio" e espera o clique.
+- ⚠️ **Trava de top-frame**: o manifesto usa `all_frames`, e sem ela cada iframe do WhatsApp montaria
+  um painel e todos disputariam o mesmo envio.
+- Número inválido é detectado pelo texto da página e marcado como falhou, em vez de segurar a fila
+  os 18s do timeout.
+- ✅ `ferramentas/teste-zap-automatico.js` roda num Chromium de verdade (Playwright) contra um
+  servidor que finge ser o WhatsApp Web. Pula sozinho se o playwright não estiver instalado.
+
+## 🏆 Disparos: oferta os produtos que o cliente MAIS compra (2026-08-13, v2.16.0)
+Escolhendo 2/3/4/5 produtos, o app rodiziava (janela que anda por hash da data). Agora ranqueia pelo
+histórico real: **1º em quantos PEDIDOS o produto apareceu, 2º o total de kg, 3º o mais recente.**
+
+⚠️ **O `client.history` NÃO serve pra isso**: ele é desduplicado (`[...new Set(...)]`), então guarda
+QUAIS produtos o cliente compra mas perde QUANTAS VEZES. A frequência real só existe na coleção
+`purchases`, um documento por pedido. Quem usar o `history` acha que funcionou e entrega errado.
+
+Frequência ganha do volume **de propósito**: item comprado em 4 pedidos vale mais que outro de 200 kg
+comprado em 2 — numa oferta o que interessa é o hábito. O rodízio segue no botão "🔁 Variar a cada
+dia", e cliente sem compra registrada cai nele sozinho.
+Funções puras `montarRankCompras` / `ordenarPelosMaisComprados`. ✅ `ferramentas/teste-ranking-ofertas.js`.
+
+## 🔒 PDF de mudanças de preço: sem dados pessoais (2026-08-13, v2.16.1)
+O rodapé saía com `nome - whatsapp` do vendedor em TODAS as páginas. Esse PDF nasceu pra ir pro
+cliente no WhatsApp, e dali é reencaminhado — o contato pessoal circulava junto. Agora sai só
+"Friganso". O parâmetro `user` foi REMOVIDO da assinatura de `gerarPdfMudancasPreco` de propósito:
+sem ele, não dá pra reintroduzir dado pessoal ali sem querer.
+⚠️ O cartão do **Portfólio** continua mostrando o WhatsApp — lá o contato é o propósito da peça.
+
+## ✋ Conferência obrigatória antes de mandar o pedido (2026-08-13, v2.17.0)
+Trava OPCIONAL (⚙️ Configurações, vem desligada) antes do "Copiar Resumo" — que é onde o pedido vai
+pro supervisor E a venda é contabilizada. Nasceu de erro por distração (TDAH).
+
+⚠️ **O anexo NÃO é o que evita o erro; quem evita é a RELEITURA.** Por isso o texto do pedido aparece
+grande e por inteiro no topo, e o upload fica embaixo. Se alguém "simplificar" escondendo o resumo,
+o mecanismo perde a razão de existir.
+
+- Três saídas: 📷 print (comprimido antes de subir), 🎤 áudio, ou 📞 "foi por ligação", que **exige uma
+  linha escrita** do que o cliente pediu.
+- Tem botão de **pular** (pedido do usuário). Ele não trava nada, mas **registra o pulo e mostra
+  quantos foram no dia** — um escape sem atrito vira o padrão, e aí a trava deixa de existir.
+- A prova sobe pro Storage em `provas-pedido/AAAA-MM/` e o link fica no próprio doc da compra
+  (`purchases.prova`), então também serve de defesa se o supervisor cobrar. Pulado fica como
+  `tipo: 'pulado'`, não como prova.
+- Todo o fluxo virou `executarCopiaResumo(prova)`, chamado de dois lugares. Cobre a Fila junto,
+  porque lá o botão é o mesmo — **não há porta dos fundos** (o teste verifica isso).
+- ⚠️ Não consegui verificar as REGRAS do Firebase Storage daqui; se `provas-pedido/` der erro de
+  permissão, é isso. ✅ `ferramentas/teste-conferencia-pedido.js`.
+
+## 🔔 Lembretes (2026-08-13, v2.18.0)
+Aba `lembretes`, coleção `lembretes` no Firestore filtrada por `userId` (vale no PC e no celular).
+⚡ RÁPIDO = pontual, "Feito" conclui (`ativo:false`). 🔁 ROTINA = repete, "Feito" só marca o dia.
+Quando: um dia só / todo dia / dia da semana. Hora opcional (vazia = primeira abertura do dia).
+
+⚠️ **O ✕ NÃO resolve**: grava `ultimoAdiado`, NUNCA `ultimoFeito`. O lembrete segue pendente e acende
+um ⚠️ vermelho pulsando no canto, em TODAS as telas, até o "Feito". É o ponto do recurso — por isso o
+popup e o alerta vivem no **App**, não na aba. Clicar no ⚠️ limpa o `ultimoAdiado` e traz de volta.
+
+⚠️ **LIMITE REAL**: site estático não manda push, então **não há aviso com o app fechado**. O lembrete
+das 8h aparece na primeira abertura das 8h em diante. Não perde, atrasa — está escrito na própria
+tela. Não prometer alarme. ✅ `ferramentas/teste-lembretes.js` (relógio controlado).
+
+## 📄 Leitura de PDF CONSERTADA e unificada com a extensão (2026-08-13, v2.19.0 e v2.20.0)
+⛔ **O bug, medido contra a tabela real de 27/08 (740 produtos):** o parser usava FAIXAS DE X FIXAS —
+procurava o preço a partir de `x=535`. No PDF real a coluna à vista fica em **x≈354** e as 9 colunas
+vão até ~570, então ele pegava a de **45 DIAS**. Resultado: **0 de 718 com o preço certo**, 699 com o
+de 45 dias, **~8% mais caro**. Falhava em SILÊNCIO, com número plausível — pior que o R$ 0,00 do bug
+antigo, que ao menos era visível. Ex.: `1602 DIANTEIRO BOVINO` saía 24,84 e o à vista é 23,00.
+
+✅ **A correção é a MESMA lição de 04/07**: quando a ORDEM é previsível e a distância não é, extraia
+por ORDEM. 740 de 740 corretos. De quebra o PDF passou a trazer `precoCartao` e os 7 `precosPrazo`.
+
+⚠️ **CAMINHO ÚNICO**: PDF e extensão entregam na mesma função `carregarTabela(brutos, origem)`, então
+carregar por um ou pelo outro mostra a MESMA coisa. **Se um dia divergirem, é porque alguém duplicou
+essa função.** (Ela também foi tirada de dentro de um `useEffect [] `, onde congelava o `products` do
+primeiro render e comparava preço contra tabela velha.)
+
+⚠️ **O PDF NÃO RENOMEIA.** Quem manda no nome é a extensão, que lê do SPAmov. Nome não é cosmético:
+alimenta `checkDiscountRules` (regra da fraldinha ramax) e `prodCategory` (categorias dos Disparos) —
+trocar o nome MUDA COMPORTAMENTO, e foi isso que queimou o usuário antes. Única exceção:
+`PDF_NOME_CORROMPIDO` (`Kg [L]`, `N Kg/N Un` — valores de coluna que vazaram pro nome). Conferido
+contra os dados reais: **739 dos 740 nomes ficam idênticos**.
+
+O nome é montado por **proximidade em Y**: ele transborda pra cima E pra baixo da linha do código, e
+juntar "só a linha de baixo" colava o nome do produto seguinte no anterior.
+
+🧪 **Debug → "Gerar PDF de conferência"**: despeja a tabela que o site usa (todos os preços) pra bater
+contra o PDF da distribuidora. Foi assim que tudo acima foi descoberto.
+✅ `ferramentas/teste-pdf-tabela.js` e `teste-pdf-conferencia.js`.
+
+## ⚠️ Lição: componente dentro de componente inverte a digitação (2026-08-13, v2.20.1)
+Na tela de Lembretes as letras saíam AO CONTRÁRIO. Causa: `const Campo = ...` declarado DENTRO do
+`LembretesScreen`. Componente declarado no corpo de outro é **recriado a cada render**, o React trata
+como TIPO NOVO, desmonta a árvore e monta outra — o `<textarea>` era destruído a cada tecla, perdia o
+foco e o cursor voltava pra 0, então a letra seguinte entrava ANTES da anterior.
+
+**Regra: componente sempre no nível do módulo (8 espaços de indentação).** Existem 17 outros assim no
+arquivo (Kpi, Badge, Cartao, NavButton...), todos SEM campo de digitação dentro — remontam à toa, mas
+não quebram nada visível. ✅ `ferramentas/teste-componentes-aninhados.js` varre e falha apontando a
+linha (verificado reintroduzindo o bug de propósito).
+
 ## 🐞 PENDENTE / em investigação
+- ⛔ **A EXTENSÃO lê errado o produto `29741` (ARROZ BCO T1, pallet):** dá R$ 510,00 quando o preço
+  certo é **R$ 5.100,00** (confirmado pelo usuário e pelo PDF). O PDF lê certo. Suspeita: valores
+  acima de R$ 999,99 na tela do SPAmov saem como `5.100,00` (com ponto de milhar) e o filtro
+  `^\d{1,4}[.,]\d{2}$` do `extrairListaPrecos` não casa. **NÃO consertar no chute** — pedir o
+  `🔍 Ler Página` → `💾 Baixar .txt` da Lista de Preços e olhar o `{x,y,t}` real da linha.
+- 🧹 **30 "produtos fantasma"** na tabela do usuário, de cargas antigas do parser com bug: o código
+  deles é na verdade o número da coluna EST-VENDA (`1199`, `1240`, `1428`, `2400`, `3168`...). O
+  parser novo não cria mais, mas `setProducts` MESCLA e nunca apaga, então eles ficam. Falta um
+  botão de limpeza no Debug (o usuário ainda não decidiu se apaga tudo de uma vez).
 - **Bug do preço 00,00 no PDF `2206.pdf`**: vários itens vieram R$ 0,00. Ex.: código **13291**
   (correto = 30,63). Causa descoberta: NESSE PDF as colunas estão em posições X **diferentes** das
   outras tabelas (ex.: tipo ~208, preço ~535 com texto quebrado tipo "30 6" em vez de "30.63"; os

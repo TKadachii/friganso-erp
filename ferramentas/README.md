@@ -4,6 +4,44 @@ Scripts que rodam **no seu PC** (não fazem parte do site). Node.js puro, sem in
 
 ---
 
+## 🔄 `sincronizar.js` — põe o seu PC em dia
+
+**É por onde começar sempre que voltar ao projeto.**
+
+```powershell
+node ferramentas\sincronizar.js
+```
+
+Faz, em ordem:
+
+1. **Baixa** o que tem de novo (`git pull`) — e recusa se você tiver trabalho não commitado,
+   pra não atropelar
+2. Mostra **o que mudou desde a ÚLTIMA VEZ que você rodou** (não desde sempre) — commits e arquivos
+3. Lê as **entradas novas do CHANGELOG** em português, pra você saber o que virou o quê
+4. Confere as travas de versão — principalmente `APP_BUILD_VERSION` × `web-version.json`, que se
+   ficarem diferentes prendem o app num loop eterno de "atualização disponível"
+5. Avisa **se a extensão mudou** (ela não se atualiza sozinha — precisa baixar e reinstalar)
+6. Roda os testes
+7. Lembra de mandar o Claude local ler o `CONTEXTO-DO-PROJETO.md`
+
+| Flag | O que faz |
+|---|---|
+| `--sem-pull` | Não baixa nada, só analisa o que já está aqui |
+| `--sem-teste` | Pula os testes (mais rápido) |
+| `--tudo` | Mostra o histórico inteiro, não só o que é novo pra você |
+
+Ele guarda em `ferramentas/.ultima-sincronizacao` (fora do git) o último commit que você viu — é isso
+que faz ele mostrar só a novidade em vez de repetir tudo.
+
+⚠️ **Teste que não roda aparece como `⏭️ NÃO RODOU`, nunca como ✅.** Alguns testes precisam de
+pacotes que não são dependência do site. Pra rodar todos:
+
+```powershell
+npm install playwright jspdf xlsx pdfjs-dist@3.11.174
+```
+
+---
+
 ## 🎯 `gerar-leads.js` — lista de prospecção de graça
 
 Monta a lista de empresas pra abastecer a tela **🎯 Prospecção em Massa** do Friganso ERP,
