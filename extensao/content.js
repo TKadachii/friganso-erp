@@ -198,12 +198,34 @@
     // 💲 Coluna "Valor Unit." — preço por kg que o SPAmov usa (ex: "23,40/PL")
     function colXValor(scope) { return colXHeader(scope, function (t) { return t.indexOf("valor") !== -1 && t.indexOf("unit") !== -1; }); }
     // Converte "80.00" / "80,00" / "1.250,50" -> número (mesma lógica do parsePrice do site)
+    // 🔢 Lê número escrito em português OU em inglês. Aceita "23,00", "23.00", "5.100,00",
+    // "1,234.56", "278,8000" e "12941.8".
+    //
+    // ⚠️ BUG CORRIGIDO EM 2026-08-13 — leia antes de "simplificar" isto:
+    // a versão antiga usava a regex  /-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|.../  e ela TRUNCAVA
+    // qualquer número acima de 999,99 escrito com PONTO decimal. Em "5100.00" o \d{1,3} pegava
+    // "510", esperava um separador, encontrava "0" e parava ali → devolvia 510.
+    // Efeito real: o pallet de arroz (produto 29741) entrava na tabela a R$ 510,00 em vez de
+    // R$ 5.100,00, e os 9 preços dele saíam todos truncados (5176.50→517, 5253.00→525...).
+    // Passava despercebido porque preço de até R$ 999,99 funciona — e é a esmagadora maioria.
     function parseNumBR(s) {
-        s = String(s || "").trim();
-        const m = s.match(/-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|-?\d+(?:[.,]\d+)?/);
+        const m = String(s || "").trim().match(/-?\d[\d.,]*/);
         if (!m) return null;
-        let x = m[0];
-        x = (x.indexOf(".") !== -1 && x.indexOf(",") !== -1) ? x.replace(/\./g, "").replace(",", ".") : x.replace(",", ".");
+        let x = m[0].replace(/[.,]+$/, "");          // separador solto no fim não conta
+        const ultPonto = x.lastIndexOf("."), ultVirgula = x.lastIndexOf(",");
+        const sep = Math.max(ultPonto, ultVirgula);
+        if (sep < 0) { const v0 = parseFloat(x); return isNaN(v0) ? null : v0; }
+
+        const casasDepois = x.length - sep - 1;
+        const soUmTipo = (ultPonto === -1) !== (ultVirgula === -1);
+        const apareceUmaVez = x.split(x[sep]).length === 2;
+        // Com os dois separadores, o ÚLTIMO é sempre o decimal ("5.100,00" e "1,234.56").
+        // Com um tipo só aparecendo uma vez: 3 casas depois = separador de MILHAR ("5.100" = 5100);
+        // qualquer outra quantidade = decimal ("5100.00" = 5100,00 e "278,8000" = 278,8).
+        const ehMilhar = soUmTipo && apareceUmaVez && casasDepois === 3;
+        const ehTodosMilhar = soUmTipo && !apareceUmaVez;   // "1.234.567"
+        if (ehMilhar || ehTodosMilhar) x = x.replace(/[.,]/g, "");
+        else x = x.slice(0, sep).replace(/[.,]/g, "") + "." + x.slice(sep + 1);
         const v = parseFloat(x); return isNaN(v) ? null : v;
     }
 

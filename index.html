@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 185;
+        const APP_BUILD_VERSION = 186;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -6820,6 +6820,14 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.20.3', data: '13/08/2026', areas: ['extensao', 'app'], itens: [
+                '🐞 CORRIGIDO: a extensão truncava todo preço acima de R$ 999,99. O pallet de arroz (29741) entrava na tabela a R$ 510,00 em vez de R$ 5.100,00',
+                'Acontecia com qualquer valor de 4 dígitos ou mais: 5100,00 virava 510,00 · 1234,56 virava 123,00 · 5176,50 virava 517,00',
+                'Passava despercebido porque preço até R$ 999,99 funcionava — e é a maioria esmagadora dos produtos',
+                'Também valia pra pesos e quantidades: 12941.8 Kg era lido como 129',
+                '⚠️ PRECISA BAIXAR A EXTENSÃO DE NOVO e atualizar em chrome://extensions — extensão instalada por pasta não se atualiza sozinha',
+                'Depois de reinstalar, clique em "Atualizar Tabela do Site" de novo pra corrigir os preços que entraram errados',
+            ]},
             { versao: '2.20.2', data: '13/08/2026', areas: ['site'], itens: [
                 '🔄 Novo script "sincronizar" pra rodar no PC: baixa as novidades, mostra o que mudou desde a última vez que você rodou, confere as versões, avisa se a extensão precisa ser reinstalada e roda os testes',
                 'O CONTEXTO-DO-PROJETO.md foi atualizado com tudo que foi feito hoje — é o arquivo que o Claude lê pra saber do projeto quando a conversa se perde',
