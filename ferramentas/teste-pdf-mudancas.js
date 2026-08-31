@@ -22,6 +22,11 @@ eval(src.slice(i, fim).replace(/^const /, 'globalThis.'));
 let falhas = 0;
 const ok = (c, m) => { console.log(`${c ? '✅' : '❌'} ${m}`); if (!c) falhas++; };
 
+const novos = [
+    { code: '10744', name: 'FILE DE PEITO ENV. JUSSARA CX/20KG', price: 15.00 },
+    { code: '1602',  name: 'DIANTEIRO BOVINO',                   price: 23.00 },
+    { code: '29741', name: 'ARROZ BCO T1 (BLUE PATNA) FD/6X5KG', price: 5100.00 },
+];
 const mudancas = [
     { code: '1603',  name: 'COSTELA BOVINA C/+ 14KG',            oldPrice: 22.90, newPrice: 20.90 },
     { code: '10131', name: 'FILE DE COXA S/COXA C/P ENV LAR/20KG', oldPrice: 41.25, newPrice: 40.01 },
@@ -31,14 +36,19 @@ const mudancas = [
 console.log('Assinatura da função:', src.slice(i, i + 60).split('\n')[0]);
 ok(!/gerarPdfMudancasPreco = \(changes, user\)/.test(src), 'a função não recebe mais o `user`');
 
-const doc = gerarPdfMudancasPreco(mudancas);
+const doc = gerarPdfMudancasPreco(mudancas, novos);
 const buf = Buffer.from(doc.output('arraybuffer'));
 fs.writeFileSync(require('path').join(require('os').tmpdir(), 'friganso-mudancas-teste.pdf'), buf);
 const cru = buf.toString('latin1');
 
 console.log('\n═══ CONTEÚDO DO PDF GERADO ═══');
 // jsPDF escreve o texto em blocos Tj/TJ legíveis quando não há compressão
-const textos = [...cru.matchAll(/\((?:\\.|[^\\()])*\)\s*Tj/g)].map(m => m[0].slice(1, m[0].lastIndexOf(')')));
+// ⚠️ dentro do PDF os caracteres ( ) e \ vêm ESCAPADOS com barra invertida. Sem desescapar,
+// procurar por "TABELA (3)" nunca casa — o texto está gravado como "TABELA \(3\)".
+const desescapar = (t) => t.replace(/\\([()\\])/g, '$1');
+const lerTextos = (buf) => [...buf.matchAll(/\((?:\\.|[^\\()])*\)\s*Tj/g)]
+    .map(m => desescapar(m[0].slice(1, m[0].lastIndexOf(')'))));
+const textos = lerTextos(cru);
 console.log('   trechos de texto encontrados:', textos.length);
 
 const nomesPessoais = ['Bruno', 'Moura', 'bruno'];
@@ -53,6 +63,24 @@ ok(textos.some(t => t.includes('1603')), 'os produtos continuam no PDF');
 ok(textos.some(t => t.includes('BAIXARAM')), 'seção "BAIXARAM DE PREÇO" presente');
 ok(textos.some(t => t.includes('SUBIRAM')), 'seção "SUBIRAM DE PREÇO" presente');
 ok(textos.some(t => /Página 1 de \d/.test(t)), 'numeração de página mantida');
+
+console.log('\n═══ PRODUTOS NOVOS (o que foi pedido) ═══');
+ok(textos.some(t => /PRODUTOS NOVOS NA TABELA \(3\)/.test(t)), 'seção "PRODUTOS NOVOS" com a contagem');
+ok(textos.some(t => t.includes('DIANTEIRO BOVINO')), 'nome do produto novo aparece');
+ok(textos.some(t => t === '10744'), 'código do produto novo aparece');
+ok(textos.some(t => /R\$ 5\.?100,00|R\$ 5100,00/.test(t)), 'preço acima de mil sai correto (R$ 5.100,00)');
+ok(textos.some(t => /3 produto\(s\) novo\(s\)/.test(t)), 'o cabeçalho conta os novos');
+// os novos NÃO podem entrar nas seções de "baixaram/subiram", que exigem preço anterior
+const iNovos = textos.findIndex(t => /PRODUTOS NOVOS/.test(t));
+const iSubiram = textos.findIndex(t => /SUBIRAM/.test(t));
+ok(iNovos > iSubiram, 'a seção dos novos vem DEPOIS das de preço, não misturada');
+
+console.log('\n═══ SÓ NOVOS, SEM MUDANÇA DE PREÇO ═══');
+const doc2 = gerarPdfMudancasPreco([], novos);
+const cru2 = Buffer.from(doc2.output('arraybuffer')).toString('latin1');
+const t2 = lerTextos(cru2);
+ok(t2.some(t => /PRODUTOS NOVOS NA TABELA \(3\)/.test(t)), 'gera o PDF mesmo sem nenhuma mudança de preço');
+ok(!t2.some(t => /BAIXARAM|SUBIRAM/.test(t)), 'sem seções vazias de preço');
 
 console.log('\n   rodapé completo:', JSON.stringify(textos.filter(t => t === 'Friganso' || /Página/.test(t))));
 console.log(falhas ? `\n❌ ${falhas} falha(s)` : '\n✅ todos passaram');
