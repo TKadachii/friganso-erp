@@ -64,14 +64,14 @@ ok(textos.some(t => t.includes('BAIXARAM')), 'seção "BAIXARAM DE PREÇO" prese
 ok(textos.some(t => t.includes('SUBIRAM')), 'seção "SUBIRAM DE PREÇO" presente');
 ok(textos.some(t => /Página 1 de \d/.test(t)), 'numeração de página mantida');
 
-console.log('\n═══ PRODUTOS NOVOS (o que foi pedido) ═══');
-ok(textos.some(t => /PRODUTOS NOVOS NA TABELA \(3\)/.test(t)), 'seção "PRODUTOS NOVOS" com a contagem');
+console.log('\n═══ ITENS ADICIONADOS À TABELA ═══');
+ok(textos.some(t => /ITENS ADICIONADOS À TABELA \(3\)/.test(t)), 'seção "ITENS ADICIONADOS À TABELA" com a contagem');
 ok(textos.some(t => t.includes('DIANTEIRO BOVINO')), 'nome do produto novo aparece');
 ok(textos.some(t => t === '10744'), 'código do produto novo aparece');
 ok(textos.some(t => /R\$ 5\.?100,00|R\$ 5100,00/.test(t)), 'preço acima de mil sai correto (R$ 5.100,00)');
-ok(textos.some(t => /3 produto\(s\) novo\(s\)/.test(t)), 'o cabeçalho conta os novos');
+ok(textos.some(t => /3 item\(ns\) adicionado\(s\)/.test(t)), 'o cabeçalho conta os adicionados');
 // os novos NÃO podem entrar nas seções de "baixaram/subiram", que exigem preço anterior
-const iNovos = textos.findIndex(t => /PRODUTOS NOVOS/.test(t));
+const iNovos = textos.findIndex(t => /ITENS ADICIONADOS/.test(t));
 const iSubiram = textos.findIndex(t => /SUBIRAM/.test(t));
 ok(iNovos > iSubiram, 'a seção dos novos vem DEPOIS das de preço, não misturada');
 
@@ -79,7 +79,7 @@ console.log('\n═══ SÓ NOVOS, SEM MUDANÇA DE PREÇO ═══');
 const doc2 = gerarPdfMudancasPreco([], novos);
 const cru2 = Buffer.from(doc2.output('arraybuffer')).toString('latin1');
 const t2 = lerTextos(cru2);
-ok(t2.some(t => /PRODUTOS NOVOS NA TABELA \(3\)/.test(t)), 'gera o PDF mesmo sem nenhuma mudança de preço');
+ok(t2.some(t => /ITENS ADICIONADOS À TABELA \(3\)/.test(t)), 'gera o PDF mesmo sem nenhuma mudança de preço');
 ok(!t2.some(t => /BAIXARAM|SUBIRAM/.test(t)), 'sem seções vazias de preço');
 
 console.log('\n   rodapé completo:', JSON.stringify(textos.filter(t => t === 'Friganso' || /Página/.test(t))));

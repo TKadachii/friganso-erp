@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 187;
+        const APP_BUILD_VERSION = 188;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -2041,7 +2041,7 @@
             doc.text('FRIGANSO - MUDANÇAS DE PREÇO', 14, 16);
             doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
             const qtdNovos = (novos || []).length;
-            const resumo = [changes.length ? changes.length + ' preço(s) mudaram' : '', qtdNovos ? qtdNovos + ' produto(s) novo(s)' : '']
+            const resumo = [changes.length ? changes.length + ' preço(s) mudaram' : '', qtdNovos ? qtdNovos + ' item(ns) adicionado(s)' : '']
                 .filter(Boolean).join('  |  ') || 'sem mudanças';
             doc.text('Tabela de ' + hoje + '  |  ' + resumo + ' em relação à tabela anterior', 14, 22);
             doc.setLineWidth(0.4); doc.line(14, 25, 196, 25);
@@ -2084,7 +2084,7 @@
             if ((novos || []).length) {
                 if (y > 262) { doc.addPage(); y = 20; }
                 doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
-                doc.text('PRODUTOS NOVOS NA TABELA (' + novos.length + ')', 14, y); y += 2;
+                doc.text('ITENS ADICIONADOS À TABELA (' + novos.length + ')', 14, y); y += 2;
                 doc.setLineWidth(0.3); doc.line(14, y, 196, y); y += 6;
                 doc.setFont('helvetica', 'normal');
                 novos.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR')).forEach(n => {
@@ -2632,7 +2632,7 @@
                             <div className="p-4 space-y-3 max-h-[40vh] overflow-y-auto">
                                 <div className="flex flex-wrap gap-2 text-xs font-bold">
                                     <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded-lg">{priceChanges.changes.length} preço(s) mudaram</span>
-                                    <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg">{priceChanges.novos.length} novo(s)</span>
+                                    <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg">{priceChanges.novos.length} adicionado(s)</span>
                                     {priceChanges.removidos > 0 && <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">{priceChanges.removidos} sairam</span>}
                                 </div>
                                 {priceChanges.changes.length > 0 && (
@@ -2652,7 +2652,7 @@
                                 )}
                                 {priceChanges.novos.length > 0 && (
                                     <div>
-                                        <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-wide mb-1">Novos produtos</p>
+                                        <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-wide mb-1">Itens adicionados à tabela</p>
                                         <div className="flex flex-wrap gap-1">
                                             {priceChanges.novos.slice(0, 40).map((n, idx) => (
                                                 <span key={idx} className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-2 py-1"><span className="font-mono font-bold">{n.code}</span> {n.name.length > 20 ? n.name.slice(0,20)+'…' : n.name} · {formatPrice(n.price)}</span>
@@ -6845,6 +6845,9 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.21.1', data: '13/08/2026', areas: ['site'], itens: [
+                '✏️ "Novos produtos" agora se chama "Itens adicionados à tabela", tanto na tela quanto no PDF — fica mais claro do que se trata',
+            ]},
             { versao: '2.21.0', data: '13/08/2026', areas: ['site'], itens: [
                 '🆕 O PDF de "Mudanças nesta tabela" agora traz também os PRODUTOS NOVOS, numa seção própria com código, nome e preço',
                 'Antes ele só mostrava quem baixou e quem subiu de preço — produto novo aparecia na tela mas não ia pro PDF que você manda pro cliente',
