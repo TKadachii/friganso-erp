@@ -198,7 +198,7 @@ if (!opc.semTeste) {
     if (falhou) log(`\n   ⚠️  ${falhou} teste(s) FALHANDO — vale investigar antes de mexer em mais coisa.`);
     if (pulados) {
         log(`\n   ${pulados} teste(s) não rodaram por falta de pacote. Pra rodar todos:`);
-        log('       npm install playwright jspdf xlsx pdfjs-dist@3.11.174');
+        log('       npm install playwright jspdf xlsx pdfjs-dist@3.11.174 react@18 react-dom@18 chart.js @babel/standalone');
         log('   (não são dependências do site — só destes testes)');
     }
     if (!falhou && !pulados) log('\n   ✅ tudo passando');

@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 188;
+        const APP_BUILD_VERSION = 189;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -1270,7 +1270,6 @@
             const [versions, setVersions] = useState([]);
             const [periodo, setPeriodo] = useState('mes'); // 'dia' | 'semana' | 'mes' | 90 | 365
             const [mesOffset, setMesOffset] = useState(0); // navegação de meses (só usada quando periodo === 'mes')
-            const [prodPreco, setProdPreco] = useState('');
             // 💵 Margem de lucro estimada (% sobre o faturamento). Padrão 1%, troca pra 3%. Lembra a escolha.
             const [margem, setMargem] = useState(() => { const v = parseFloat(window.localStorage.getItem('friganso_margem')); return (v === 1 || v === 3) ? v : 1; });
             useEffect(() => { try { window.localStorage.setItem('friganso_margem', String(margem)); } catch (e) {} }, [margem]);
@@ -1279,7 +1278,8 @@
             useEffect(() => {
                 if (window.Chart) { window.Chart.defaults.color = '#94a3b8'; window.Chart.defaults.font.family = "system-ui, 'Segoe UI', sans-serif"; }
                 const unsub = db.collection('purchases').orderBy('ts', 'desc').limit(1500).onSnapshot(s => setPurchases(s.docs.map(d => d.data())), () => {});
-                db.collection('pdf_versions').orderBy('updatedAt', 'asc').limit(60).get().then(s => setVersions(s.docs.map(d => d.data()))).catch(() => {});
+                // ⚠️ guarda o ID do doc junto: sem ele não dá pra corrigir um preço errado do histórico
+                db.collection('pdf_versions').orderBy('updatedAt', 'asc').limit(60).get().then(s => setVersions(s.docs.map(d => ({ id: d.id, ...d.data() })))).catch(() => {});
                 return () => unsub();
             }, []);
 
@@ -1316,18 +1316,25 @@
                 return { dias, labelsDia, serieQtd, seriePed, serieVal, topProd, topCli, tipoC, vendC, comprasP, totalItens, totalValor, ticketMedio, cliCount: cliSet.size, prodCount: prodSet.size, melhorDia, melhorQ, melhorDiaV, melhorV, periodoLabel: label, periodoFechaEm: fechaEm };
             }, [purchases, periodo, mesOffset]);
 
-            const precoSerie = useMemo(() => {
-                const code = String(prodPreco || (dados.topProd[0] && dados.topProd[0].code) || (products[0] && products[0].code) || '');
-                if (!code || !versions.length) return null;
-                const labels = [], valores = [];
-                versions.forEach(v => {
-                    const dt = (v.updatedAt && v.updatedAt.toDate) ? v.updatedAt.toDate() : new Date(v.updatedAt || Date.now());
-                    const p = (v.products || []).find(x => String(x.code) === code);
-                    if (p) { labels.push(('0' + dt.getDate()).slice(-2) + '/' + ('0' + (dt.getMonth() + 1)).slice(-2)); valores.push(Number(p.originalPrice) || 0); }
-                });
-                const nome = (products.find(x => String(x.code) === code) || {}).name || ('Cod ' + code);
-                return { code, nome, labels, valores };
-            }, [versions, prodPreco, dados, products]);
+
+            // ✏️ Corrige o preço de UM produto dentro de UMA tabela já distribuída. O Firestore não
+            // atualiza item de array por índice, então lê o documento, troca só aquele produto e grava
+            // de volta — mexendo no mínimo possível do resto.
+            const salvarPrecoHistorico = async (versaoId, code, novoValor) => {
+                if (!versaoId) { showMessage('Essa data não tem identificação da tabela — não dá pra corrigir.', 'error'); return false; }
+                try {
+                    const ref = db.collection('pdf_versions').doc(versaoId);
+                    const doc = await ref.get();
+                    if (!doc.exists) { showMessage('Tabela não encontrada.', 'error'); return false; }
+                    const prods = (doc.data().products || []).map(p => String(p.code) === String(code)
+                        ? { ...p, originalPrice: novoValor, discountedPrice: checkDiscountRules(p.code, p.name, novoValor).unitFinalPrice }
+                        : p);
+                    await ref.update({ products: prods });
+                    setVersions(vs => vs.map(v => v.id === versaoId ? { ...v, products: prods } : v));
+                    showMessage('Preço corrigido no histórico! 📊', 'success');
+                    return true;
+                } catch (e) { showMessage('Erro ao corrigir: ' + (e && e.message ? e.message : e), 'error'); return false; }
+            };
 
             const optBase = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: 'rgba(148,163,184,.12)' }, ticks: { maxTicksLimit: 12 } }, y: { grid: { color: 'rgba(148,163,184,.12)' }, beginAtZero: true } } };
             const fmtRS = (v) => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -1610,18 +1617,251 @@
                                 </CardGrafico>
                             )}
 
-                            {/* Variação de preço por data */}
-                            <CardGrafico titulo="💲 Variação de preço por data (entre as tabelas distribuídas)">
-                                <div className="mb-3">
-                                    <select value={prodPreco || (precoSerie ? precoSerie.code : '')} onChange={e => setProdPreco(e.target.value)} className="w-full sm:w-auto px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-rose-500 font-bold">
-                                        {products.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(p => <option key={p.code} value={p.code}>{p.code} — {p.name}</option>)}
-                                    </select>
-                                </div>
-                                {precoSerie && precoSerie.labels.length > 1
-                                    ? <Grafico tipo="line" altura={260} options={optBase} data={{ labels: precoSerie.labels, datasets: [{ label: 'R$/kg', data: precoSerie.valores, borderColor: '#fbbf24', backgroundColor: 'rgba(251,191,36,.15)', fill: true, tension: .3, pointRadius: 3, borderWidth: 2 }] }} />
-                                    : <p className="text-sm text-slate-400 py-6 text-center">Poucas tabelas distribuídas pra comparar esse produto. Distribua tabelas em dias diferentes pra ver a variação. 📅</p>}
+                            {/* 💲 Variação de preço — refeito em 13/08/2026 (ver GraficoPrecoProduto) */}
+                            <CardGrafico titulo="💲 Variação de preço por produto (entre as tabelas distribuídas)">
+                                <GraficoPrecoProduto
+                                    products={products}
+                                    versions={versions}
+                                    onSalvarPreco={salvarPrecoHistorico}
+                                    showMessage={showMessage}
+                                />
                             </CardGrafico>
                         </>
+                    )}
+                </div>
+            );
+        };
+
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        // 💲 VARIAÇÃO DE PREÇO POR PRODUTO (refeito em 2026-08-13)
+        //
+        // O que estava ruim, no relato do usuário: (1) parecia uma linha reta, (2) difícil achar o
+        // produto na lista, (3) sem como corrigir um preço errado no histórico.
+        //
+        // ⚠️ (1) era `beginAtZero: true`: num produto de R$ 35, um pico pra R$ 37,50 ocupa 6% da
+        // altura do gráfico e some. Aqui o eixo é FOCADO na faixa dos dados (com folga), e um aviso
+        // diz isso na cara — eixo cortado sem avisar engana quem lê.
+        //
+        // ⚠️ Componente no nível do MÓDULO de propósito: ele tem <input> dentro. Declarado no corpo
+        // de outro componente, seria recriado a cada tecla e a digitação sairia invertida (foi o bug
+        // dos Lembretes, no mesmo dia).
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        const GraficoPrecoProduto = ({ products, versions, onSalvarPreco, showMessage }) => {
+            const [busca, setBusca] = useState('');
+            const [aberto, setAberto] = useState(false);
+            const [code, setCode] = useState('');
+            const [editando, setEditando] = useState(null);   // índice do ponto em edição
+            const [valorEdit, setValorEdit] = useState('');
+            const [salvando, setSalvando] = useState(false);
+
+            const ordenados = useMemo(() => (products || []).slice()
+                .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR')), [products]);
+            const codeAtivo = code || (ordenados[0] && String(ordenados[0].code)) || '';
+            const produto = ordenados.find(p => String(p.code) === codeAtivo);
+
+            const achados = useMemo(() => {
+                const t = busca.trim().toLowerCase();
+                if (!t) return ordenados.slice(0, 60);
+                return ordenados.filter(p => String(p.code).toLowerCase().includes(t) ||
+                    String(p.name || '').toLowerCase().includes(t)).slice(0, 60);
+            }, [busca, ordenados]);
+
+            // série do produto escolhido, ao longo das tabelas distribuídas
+            const serie = useMemo(() => {
+                if (!codeAtivo) return [];
+                const pontos = [];
+                (versions || []).forEach(v => {
+                    const p = (v.products || []).find(x => String(x.code) === codeAtivo);
+                    if (!p) return;
+                    const dt = (v.updatedAt && v.updatedAt.toDate) ? v.updatedAt.toDate() : new Date(v.updatedAt || Date.now());
+                    pontos.push({
+                        versaoId: v.id,
+                        data: dt,
+                        label: ('0' + dt.getDate()).slice(-2) + '/' + ('0' + (dt.getMonth() + 1)).slice(-2),
+                        valor: Number(p.originalPrice) || 0,
+                    });
+                });
+                return pontos.sort((a, b) => a.data - b.data);
+            }, [versions, codeAtivo]);
+
+            const vals = serie.map(p => p.valor).filter(v => v > 0);
+            const min = vals.length ? Math.min(...vals) : 0;
+            const max = vals.length ? Math.max(...vals) : 0;
+            const atual = vals.length ? vals[vals.length - 1] : 0;
+            const primeiro = vals.length ? vals[0] : 0;
+            const variacao = primeiro ? ((atual - primeiro) / primeiro) * 100 : 0;
+            const rs = (v) => 'R$ ' + Number(v || 0).toFixed(2).replace('.', ',');
+
+            // 📏 Eixo FOCADO: 12% de folga em cima e embaixo. Faixa mínima de R$ 1 pra série sem
+            // variação nenhuma não virar uma linha colada no topo por causa de ruído de arredondamento.
+            const folga = Math.max((max - min) * 0.12, 0.5);
+            const yMin = Math.max(0, min - folga);
+            const yMax = max + folga;
+            const eixoCortado = yMin > 0.01;
+
+            const opcoes = {
+                responsive: true, maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },   // crosshair: pega o ponto mais próximo em X
+                plugins: {
+                    legend: { display: false },                     // série única: o título já nomeia
+                    tooltip: {
+                        displayColors: false,
+                        callbacks: {
+                            title: (itens) => { const p = serie[itens[0].dataIndex]; return p ? p.data.toLocaleDateString('pt-BR') : ''; },
+                            label: (c) => {
+                                const i = c.dataIndex, v = serie[i].valor, ant = i > 0 ? serie[i - 1].valor : null;
+                                const linhas = [rs(v) + ' /kg'];
+                                if (ant != null && Math.abs(v - ant) >= 0.005) {
+                                    const d = v - ant, pct = ant ? (d / ant) * 100 : 0;
+                                    linhas.push((d > 0 ? '▲ subiu ' : '▼ baixou ') + rs(Math.abs(d)) + '  (' + (d > 0 ? '+' : '') + pct.toFixed(1) + '%)');
+                                } else if (ant != null) linhas.push('sem mudança');
+                                return linhas;
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    x: { grid: { color: 'rgba(148,163,184,.12)' }, ticks: { maxTicksLimit: 12 } },
+                    y: {
+                        grid: { color: 'rgba(148,163,184,.12)' },
+                        beginAtZero: false, min: yMin, max: yMax,
+                        ticks: { callback: (v) => rs(v) },
+                    },
+                },
+            };
+
+            // marca em destaque só os pontos onde o preço MUDOU — ponto em toda data vira ruído
+            const mudou = serie.map((p, i) => i > 0 && Math.abs(p.valor - serie[i - 1].valor) >= 0.005);
+            const dados = {
+                labels: serie.map(p => p.label),
+                datasets: [{
+                    label: 'R$/kg', data: serie.map(p => p.valor),
+                    borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,.10)',
+                    fill: true, tension: .25, borderWidth: 2,
+                    // ⚠️ ponto 0 nas datas SEM mudança: com um pontinho em cada data a linha vira
+                    // um tracejado e a leitura some. Só as mudanças e a data atual ganham marcador.
+                    pointRadius: serie.map((_, i) => (mudou[i] || i === serie.length - 1) ? 5 : 0),
+                    pointHoverRadius: 8,
+                    pointBackgroundColor: serie.map((_, i) => mudou[i] ? '#d97706' : '#fbbf24'),
+                    pointBorderColor: '#fff', pointBorderWidth: 2,
+                }],
+            };
+
+            const salvar = async (i) => {
+                const v = Number(String(valorEdit).replace(',', '.'));
+                if (!isFinite(v) || v <= 0) { showMessage('Digite um preço válido.', 'error'); return; }
+                setSalvando(true);
+                const ok = await onSalvarPreco(serie[i].versaoId, codeAtivo, v);
+                setSalvando(false);
+                if (ok) { setEditando(null); setValorEdit(''); }
+            };
+
+            const Tile = ({ rotulo, valor, cor }) => (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-center min-w-[92px]">
+                    <p className={`text-base font-black ${cor || 'text-slate-800'}`}>{valor}</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">{rotulo}</p>
+                </div>
+            );
+
+            return (
+                <div>
+                    {/* 🔍 Busca — antes era um <select> com centenas de itens, impossível de achar nada */}
+                    <div className="relative mb-3">
+                        <input
+                            value={aberto ? busca : (produto ? `${produto.code} — ${produto.name}` : '')}
+                            onChange={e => { setBusca(e.target.value); setAberto(true); }}
+                            onFocus={() => { setBusca(''); setAberto(true); }}
+                            placeholder="🔍 Buscar produto por código ou nome..."
+                            className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:border-rose-500 font-bold" />
+                        {aberto && (
+                            <>
+                                <div className="fixed inset-0 z-10" onClick={() => setAberto(false)}></div>
+                                <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-64 overflow-y-auto">
+                                    {achados.length === 0 && <p className="px-3 py-3 text-xs text-slate-400">Nenhum produto com esse termo.</p>}
+                                    {achados.map(p => (
+                                        <button key={p.code} onClick={() => { setCode(String(p.code)); setAberto(false); setBusca(''); setEditando(null); }}
+                                            className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex items-center gap-2 ${String(p.code) === codeAtivo ? 'bg-rose-50' : ''}`}>
+                                            <span className="font-mono text-[11px] font-bold text-slate-400 shrink-0">{p.code}</span>
+                                            <span className="truncate text-slate-700">{p.name}</span>
+                                        </button>
+                                    ))}
+                                    {achados.length === 60 && <p className="px-3 py-2 text-[11px] text-slate-400 italic">mostrando 60 — refine a busca</p>}
+                                </div>
+                            </>
+                        )}
+                    </div>
+
+                    {serie.length > 1 ? (
+                        <>
+                            <div className="flex flex-wrap gap-2 mb-3">
+                                <Tile rotulo="Hoje" valor={rs(atual)} />
+                                <Tile rotulo="Mínimo" valor={rs(min)} cor="text-emerald-700" />
+                                <Tile rotulo="Máximo" valor={rs(max)} cor="text-red-600" />
+                                <Tile rotulo="No período" valor={(variacao > 0 ? '+' : '') + variacao.toFixed(1) + '%'}
+                                      cor={variacao > 0 ? 'text-red-600' : variacao < 0 ? 'text-emerald-700' : 'text-slate-400'} />
+                                <Tile rotulo="Tabelas" valor={serie.length} />
+                            </div>
+
+                            <Grafico tipo="line" altura={280} options={opcoes} data={dados} />
+
+                            {eixoCortado && (
+                                <p className="text-[11px] text-slate-400 mt-2">
+                                    ⚠️ O eixo começa em {rs(yMin)}, não em zero — é o que deixa a variação visível.
+                                    Os pontos maiores são as datas em que o preço mudou.
+                                </p>
+                            )}
+
+                            {/* ✏️ Correção de preço errado no histórico */}
+                            <details className="mt-3 group">
+                                <summary className="cursor-pointer text-xs font-bold text-slate-500 hover:text-slate-700 select-none">
+                                    ✏️ Corrigir um preço errado neste histórico ({serie.length} datas)
+                                </summary>
+                                <p className="text-[11px] text-slate-400 mt-2 mb-2 leading-snug">
+                                    Isto corrige a tabela <b>já distribuída</b> daquela data — serve pra arrumar preço que entrou
+                                    errado e está torcendo o gráfico. Não muda a tabela de hoje: pra isso, recarregue a tabela.
+                                </p>
+                                <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                                    {serie.slice().reverse().map((p, iRev) => {
+                                        const i = serie.length - 1 - iRev;
+                                        const emEdicao = editando === i;
+                                        const ant = i > 0 ? serie[i - 1].valor : null;
+                                        const d = ant != null ? p.valor - ant : 0;
+                                        return (
+                                            <div key={i} className="px-3 py-2 flex items-center gap-2 text-sm">
+                                                <span className="text-xs text-slate-400 w-20 shrink-0">{p.data.toLocaleDateString('pt-BR')}</span>
+                                                {emEdicao ? (
+                                                    <>
+                                                        <input value={valorEdit} onChange={e => setValorEdit(e.target.value)} autoFocus
+                                                            onKeyDown={e => { if (e.key === 'Enter') salvar(i); if (e.key === 'Escape') setEditando(null); }}
+                                                            className="w-28 px-2 py-1 border border-rose-300 rounded-lg text-sm outline-none" />
+                                                        <button onClick={() => salvar(i)} disabled={salvando}
+                                                            className="text-xs font-bold px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white">{salvando ? '...' : 'Salvar'}</button>
+                                                        <button onClick={() => setEditando(null)} className="text-xs font-bold px-2 py-1 rounded-lg bg-slate-100 text-slate-600">Cancelar</button>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <span className="font-bold text-slate-800 flex-1">{rs(p.valor)}</span>
+                                                        {ant != null && Math.abs(d) >= 0.005 && (
+                                                            <span className={`text-[11px] font-bold ${d > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                                                                {d > 0 ? '▲' : '▼'} {rs(Math.abs(d))}
+                                                            </span>
+                                                        )}
+                                                        <button onClick={() => { setEditando(i); setValorEdit(String(p.valor).replace('.', ',')); }}
+                                                            className="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 shrink-0">✏️</button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </details>
+                        </>
+                    ) : (
+                        <p className="text-sm text-slate-400 py-6 text-center">
+                            {serie.length === 1
+                                ? 'Esse produto só aparece em 1 tabela distribuída — precisa de pelo menos 2 datas pra ter variação. 📅'
+                                : 'Poucas tabelas distribuídas pra comparar esse produto. Distribua tabelas em dias diferentes pra ver a variação. 📅'}
+                        </p>
                     )}
                 </div>
             );
@@ -6845,6 +7085,14 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.22.0', data: '13/08/2026', areas: ['site'], itens: [
+                '📈 O gráfico de variação de preço foi refeito — antes parecia uma linha reta mesmo quando o preço mudava',
+                '⚠️ O motivo: o eixo começava no ZERO. Num produto de R$ 35, um pico pra R$ 37,50 ocupava 6% da altura e sumia. Agora o eixo acompanha a faixa do produto e o mesmo pico ocupa 71% — com um aviso embaixo dizendo que o eixo não começa em zero',
+                '🔍 Busca de produto: era uma lista com centenas de itens, agora você digita o código ou o nome e ele filtra',
+                '✏️ Dá pra CORRIGIR preço errado no histórico: abre "Corrigir um preço errado", acha a data e edita. Serve pra arrumar valor que entrou torto e estava distorcendo o gráfico',
+                '📊 Resumo em cima: preço de hoje, mínimo, máximo, variação no período e quantas tabelas entraram na conta',
+                'Passando o mouse aparece a data, o preço e quanto subiu ou baixou em relação à tabela anterior. Os pontos maiores marcam só as datas em que o preço mudou',
+            ]},
             { versao: '2.21.1', data: '13/08/2026', areas: ['site'], itens: [
                 '✏️ "Novos produtos" agora se chama "Itens adicionados à tabela", tanto na tela quanto no PDF — fica mais claro do que se trata',
             ]},

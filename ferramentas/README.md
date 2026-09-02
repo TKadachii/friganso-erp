@@ -37,7 +37,7 @@ que faz ele mostrar só a novidade em vez de repetir tudo.
 pacotes que não são dependência do site. Pra rodar todos:
 
 ```powershell
-npm install playwright jspdf xlsx pdfjs-dist@3.11.174
+npm install playwright jspdf xlsx pdfjs-dist@3.11.174 react@18 react-dom@18 chart.js @babel/standalone
 ```
 
 ---
