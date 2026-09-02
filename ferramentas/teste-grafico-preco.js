@@ -88,11 +88,16 @@ fs.writeFileSync(path.join(dir, 'preview.html'), `<!doctype html><html><head><me
 const { useState, useEffect, useMemo, useRef } = React;
 ${pegar('Grafico')}
 ${pegar('GraficoPrecoProduto')}
-const V = ${JSON.stringify(versions)}.map(v => ({ ...v, updatedAt: new Date(v.updatedAt) }));
-ReactDOM.createRoot(document.getElementById('raiz')).render(
-  <GraficoPrecoProduto products={${JSON.stringify(products)}} versions={V}
+const V0 = ${JSON.stringify(versions)}.map(v => ({ ...v, updatedAt: new Date(v.updatedAt) }));
+const Raiz = () => {
+  const [vs, setVs] = useState(V0);
+  window.__ignorar = (id, ign) => setVs(a => a.map(v => v.id === id ? { ...v, ignorada: ign } : v));
+  return <GraficoPrecoProduto products={${JSON.stringify(products)}} versions={vs}
     onSalvarPreco={async (versaoId, code, valor) => { window.__salvou = { versaoId, code, valor }; return true; }}
-    showMessage={() => {}} />);
+    onIgnorarTabela={async (id, ign) => { window.__ignorou = { id, ign }; window.__ignorar(id, ign); return true; }}
+    showMessage={() => {}} />;
+};
+ReactDOM.createRoot(document.getElementById('raiz')).render(<Raiz />);
 </script></body></html>`);
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.map': 'application/json' };
@@ -162,6 +167,36 @@ const srv = http.createServer((q, r) => {
     await pg.locator('summary ~ div input').fill('abc');
     await pg.locator('button:has-text("Salvar")').click(); await pg.waitForTimeout(300);
     ok(await pg.evaluate(() => window.__salvou) === null, 'recusa valor inválido');
+
+    console.log('\n═══ 5. DESCARTAR A TABELA INTEIRA DE UM DIA ═══');
+    // caso real: uma tabela foi carregada de um PDF errado e sujou vários produtos de uma vez
+    pg.on('dialog', d => d.accept());
+    const antes = await pg.evaluate(() => {
+        const c = window.Chart.getChart(document.querySelector('canvas'));
+        return c.data.labels.length;
+    });
+    await pg.locator('button:has-text("🚫")').nth(6).click();
+    await pg.waitForTimeout(600);
+    const ign = await pg.evaluate(() => window.__ignorou);
+    ok(ign && ign.ign === true, 'pediu pra descartar a tabela daquela data');
+    ok(ign && /^v\d+$/.test(ign.id), `mandou o ID da tabela → ${ign && ign.id}`);
+    const depois = await pg.evaluate(() => {
+        const c = window.Chart.getChart(document.querySelector('canvas'));
+        return c.data.labels.length;
+    });
+    ok(depois === antes - 1, `o ponto saiu do gráfico (${antes} → ${depois})`);
+    ok(await pg.locator('text=/tabela\\(s\\) fora do gráfico/').count() === 1, 'mostra o aviso de tabela descartada');
+    ok(await pg.locator('button:has-text("Trazer de volta")').count() === 1, 'oferece o botão de restaurar');
+
+    // ⚠️ o pulo do gato: descartar TUDO não pode esconder o botão de restaurar
+    await pg.evaluate(() => { document.querySelectorAll('button').forEach(b => {}); });
+    const total = await pg.evaluate(() => window.__ignorar && true);
+    await pg.evaluate(() => {
+        for (let i = 0; i < 40; i++) window.__ignorar('v' + i, true);
+    });
+    await pg.waitForTimeout(600);
+    ok(await pg.locator('button:has-text("Trazer de volta")').count() > 0,
+       'com TUDO descartado, o botão de restaurar continua na tela (não deixa o usuário sem saída)');
 
     await nav.close(); srv.close();
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}

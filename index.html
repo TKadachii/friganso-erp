@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 190;
+        const APP_BUILD_VERSION = 191;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -1317,6 +1317,21 @@
             }, [purchases, periodo, mesOffset]);
 
 
+            // 🚫 Descarta (ou traz de volta) UMA tabela distribuída inteira do gráfico de preços.
+            // Serve pra quando uma tabela foi carregada de um PDF errado e sujou o histórico de vários
+            // produtos de uma vez — corrigir um por um seria inviável.
+            // ⚠️ NÃO apaga o documento: marca `ignorada`. Se o dia estiver errado, dá pra reverter, e
+            // o registro do que foi distribuído continua existindo.
+            const ignorarTabela = async (versaoId, ignorar) => {
+                if (!versaoId) return false;
+                try {
+                    await db.collection('pdf_versions').doc(versaoId).update({ ignorada: !!ignorar });
+                    setVersions(vs => vs.map(v => v.id === versaoId ? { ...v, ignorada: !!ignorar } : v));
+                    showMessage(ignorar ? 'Tabela descartada do gráfico. 🚫' : 'Tabela de volta no gráfico. ↩️', 'success');
+                    return true;
+                } catch (e) { showMessage('Erro: ' + (e && e.message ? e.message : e), 'error'); return false; }
+            };
+
             // ✏️ Corrige o preço de UM produto dentro de UMA tabela já distribuída. O Firestore não
             // atualiza item de array por índice, então lê o documento, troca só aquele produto e grava
             // de volta — mexendo no mínimo possível do resto.
@@ -1623,6 +1638,7 @@
                                     products={products}
                                     versions={versions}
                                     onSalvarPreco={salvarPrecoHistorico}
+                                    onIgnorarTabela={ignorarTabela}
                                     showMessage={showMessage}
                                 />
                             </CardGrafico>
@@ -1646,7 +1662,7 @@
         // de outro componente, seria recriado a cada tecla e a digitação sairia invertida (foi o bug
         // dos Lembretes, no mesmo dia).
         // ═══════════════════════════════════════════════════════════════════════════════════════
-        const GraficoPrecoProduto = ({ products, versions, onSalvarPreco, showMessage }) => {
+        const GraficoPrecoProduto = ({ products, versions, onSalvarPreco, onIgnorarTabela, showMessage }) => {
             const [busca, setBusca] = useState('');
             const [aberto, setAberto] = useState(false);
             const [code, setCode] = useState('');
@@ -1671,6 +1687,7 @@
                 if (!codeAtivo) return [];
                 const pontos = [];
                 (versions || []).forEach(v => {
+                    if (v.ignorada) return;                       // 🚫 tabela descartada não entra no gráfico
                     const p = (v.products || []).find(x => String(x.code) === codeAtivo);
                     if (!p) return;
                     const dt = (v.updatedAt && v.updatedAt.toDate) ? v.updatedAt.toDate() : new Date(v.updatedAt || Date.now());
@@ -1755,6 +1772,22 @@
                 setSalvando(false);
                 if (ok) { setEditando(null); setValorEdit(''); }
             };
+
+            // 🚫 Descarta a tabela inteira daquela data. É o caso de "carreguei o PDF errado e sujou
+            // vários produtos de uma vez" — corrigir um por um não teria fim.
+            const descartar = async (ponto) => {
+                const qtd = ((versions || []).find(v => v.id === ponto.versaoId) || {}).productCount;
+                if (!window.confirm(
+                    'Descartar a tabela de ' + ponto.data.toLocaleDateString('pt-BR') + ' do histórico?\n\n' +
+                    'Sai do gráfico de TODOS os produtos' + (qtd ? ' (' + qtd + ' produtos)' : '') + ', não só deste.\n' +
+                    'Dá pra trazer de volta depois — nada é apagado.')) return;
+                await onIgnorarTabela(ponto.versaoId, true);
+            };
+            const descartadas = (versions || []).filter(v => v.ignorada).map(v => ({
+                id: v.id,
+                data: (v.updatedAt && v.updatedAt.toDate) ? v.updatedAt.toDate() : new Date(v.updatedAt || Date.now()),
+                qtd: v.productCount,
+            })).sort((a, b) => b.data - a.data);
 
             const Tile = ({ rotulo, valor, cor }) => (
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-center min-w-[92px]">
@@ -1847,7 +1880,11 @@
                                                             </span>
                                                         )}
                                                         <button onClick={() => { setEditando(i); setValorEdit(String(p.valor).replace('.', ',')); }}
+                                                            title="Corrigir só o preço deste produto nesta data"
                                                             className="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 shrink-0">✏️</button>
+                                                        <button onClick={() => descartar(p)}
+                                                            title="Descartar a tabela INTEIRA desta data (todos os produtos)"
+                                                            className="text-xs font-bold px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 shrink-0">🚫</button>
                                                     </>
                                                 )}
                                             </div>
@@ -1855,6 +1892,7 @@
                                     })}
                                 </div>
                             </details>
+
                         </>
                     ) : (
                         <p className="text-sm text-slate-400 py-6 text-center">
@@ -1862,6 +1900,27 @@
                                 ? 'Esse produto só aparece em 1 tabela distribuída — precisa de pelo menos 2 datas pra ter variação. 📅'
                                 : 'Poucas tabelas distribuídas pra comparar esse produto. Distribua tabelas em dias diferentes pra ver a variação. 📅'}
                         </p>
+                    )}
+
+                    {/* ⚠️ FORA do ramo "tem gráfico" de propósito: se descartar tabelas demais a série
+                        fica curta e o gráfico some — e o botão de trazer de volta iria junto, deixando
+                        o usuário sem saída. */}
+                    {descartadas.length > 0 && (
+                        <div className="mt-3 bg-red-50 border border-red-200 rounded-xl p-3">
+                            <p className="text-xs font-bold text-red-800 mb-2">🚫 {descartadas.length} tabela(s) fora do gráfico</p>
+                            <div className="space-y-1">
+                                {descartadas.map(d => (
+                                    <div key={d.id} className="flex items-center gap-2 text-xs">
+                                        <span className="text-red-700 flex-1">{d.data.toLocaleDateString('pt-BR')}{d.qtd ? ` · ${d.qtd} produtos` : ''}</span>
+                                        <button onClick={() => onIgnorarTabela(d.id, false)}
+                                            className="font-bold px-2.5 py-1 rounded-lg bg-white hover:bg-red-100 text-red-700 border border-red-200">↩️ Trazer de volta</button>
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="text-[11px] text-red-600/70 mt-2 leading-snug">
+                                Elas continuam salvas — só não entram no gráfico nem na conta de mínimo, máximo e variação.
+                            </p>
+                        </div>
                     )}
                 </div>
             );
@@ -7085,6 +7144,12 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.23.0', data: '13/08/2026', areas: ['site'], itens: [
+                '🚫 Agora dá pra DESCARTAR do gráfico a tabela inteira de um dia — pra quando você carregou um PDF errado e ele sujou o preço de vários produtos de uma vez',
+                'No painel "Corrigir um preço errado", cada data ganhou um botão 🚫 ao lado do ✏️. O ✏️ arruma só aquele produto; o 🚫 tira a tabela toda do gráfico, de todos os produtos',
+                'Nada é apagado: a tabela continua salva e aparece numa lista com "↩️ Trazer de volta" a qualquer momento',
+                'Enquanto descartada, ela não entra no gráfico nem na conta de mínimo, máximo e variação',
+            ]},
             { versao: '2.22.1', data: '13/08/2026', areas: ['site'], itens: [
                 '🚨 CORRIGIDO: o site abria todo BRANCO na versão anterior. Culpa minha — o Painel passou a usar um recurso que não estava recebendo, e isso derruba a página inteira',
                 'Criei uma verificação automática pra esse tipo de erro não passar de novo: o teste de sintaxe que eu usava não pegava, porque o código estava escrito certo e só quebrava na hora de abrir',
