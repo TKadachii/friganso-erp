@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 189;
+        const APP_BUILD_VERSION = 190;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -1265,7 +1265,7 @@
             return { desde: null, ate: null, label: 'Todos' }; // modo === 0 (todos)
         };
 
-        const DashboardScreen = ({ user, clients, products, setActiveRoute }) => {
+        const DashboardScreen = ({ user, clients, products, setActiveRoute, showMessage }) => {
             const [purchases, setPurchases] = useState([]);
             const [versions, setVersions] = useState([]);
             const [periodo, setPeriodo] = useState('mes'); // 'dia' | 'semana' | 'mes' | 90 | 365
@@ -7085,6 +7085,10 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.22.1', data: '13/08/2026', areas: ['site'], itens: [
+                '🚨 CORRIGIDO: o site abria todo BRANCO na versão anterior. Culpa minha — o Painel passou a usar um recurso que não estava recebendo, e isso derruba a página inteira',
+                'Criei uma verificação automática pra esse tipo de erro não passar de novo: o teste de sintaxe que eu usava não pegava, porque o código estava escrito certo e só quebrava na hora de abrir',
+            ]},
             { versao: '2.22.0', data: '13/08/2026', areas: ['site'], itens: [
                 '📈 O gráfico de variação de preço foi refeito — antes parecia uma linha reta mesmo quando o preço mudava',
                 '⚠️ O motivo: o eixo começava no ZERO. Num produto de R$ 35, um pico pra R$ 37,50 ocupava 6% da altura e sumia. Agora o eixo acompanha a faixa do produto e o mesmo pico ocupa 71% — com um aviso embaixo dizendo que o eixo não começa em zero',
@@ -10670,7 +10674,7 @@
 
             const renderContent = () => {
                 switch(activeRoute) {
-                    case 'dashboard': return <DashboardScreen user={user} clients={clients} products={products} setActiveRoute={setActiveRoute} />;
+                    case 'dashboard': return <DashboardScreen user={user} clients={clients} products={products} setActiveRoute={setActiveRoute} showMessage={showMessage} />;
                     case 'clients': return <ClientsScreen products={products} showMessage={showMessage} setActiveRoute={setActiveRoute} />;
                     case 'cadastrosProcesso': return <CadastrosProcessoScreen user={user} showMessage={showMessage} />;
                     case 'consultaCnpj': return <ConsultaCnpjScreen showMessage={showMessage} />;
@@ -10693,8 +10697,8 @@
                     case 'pedido': return <FazerPedidoScreen products={products} clients={clients} user={user} showMessage={showMessage} />;
                     case 'navegador': return isElectron ? null : <NavegadorScreen />;
                     case 'tutorial': return <TutorialScreen setActiveRoute={setActiveRoute} />;
-                    case 'debug': return user.role === 'admin' ? <DebugScreen user={user} showMessage={showMessage} products={products} /> : <DashboardScreen user={user} />;
-                    default: return <DashboardScreen user={user} />;
+                    case 'debug': return user.role === 'admin' ? <DebugScreen user={user} showMessage={showMessage} products={products} /> : <DashboardScreen user={user} showMessage={showMessage} />;
+                    default: return <DashboardScreen user={user} showMessage={showMessage} />;
                 }
             };
 
