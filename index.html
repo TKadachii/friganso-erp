@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 193;
+        const APP_BUILD_VERSION = 194;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -4709,6 +4709,13 @@
                                 clienteName: (cli && cli.name) || p.clienteNome || '',
                                 tipoPessoa: p.tipoPessoa || (cli && cli.tipo) || 'juridica',
                                 itens: itensSafe, valor: valorTotal, pesoTotal, devolucao: !!p.devolucao,
+                                // 📅 A DATA também tem que ser corrigida no reenvio. Sem isso, quem
+                                // importou histórico com a versão que herdava a data da linha de cima
+                                // ficava preso: reimportar arrumava valor, itens e devolução, mas o
+                                // `dia` errado continuava gravado e não havia como consertar pela tela.
+                                // Só sobrescreve quando a leitura trouxe data — se veio vazia, o que já
+                                // está gravado é melhor do que carimbar hoje por cima.
+                                ...(p.dia ? { dia: p.dia } : {}),
                                 origemReal: true, corrigidoEm: Date.now(), corrigidoPor: (user && user.code) || ''
                             });
                         } else {
@@ -7155,6 +7162,12 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.24.2', data: '09/09/2026', areas: ['site'], itens: [
+                '🔁 CORRIGIDO: reimportar um pedido que já estava no sistema NÃO corrigia a data dele — só valor, itens e devolução',
+                'Isso deixava você preso: os pedidos importados com a data errada continuavam errados mesmo reimportando, e não havia jeito de arrumar pela tela',
+                'Agora a data é atualizada junto. Reimporte o período e os dias se acertam sozinhos',
+                '⚠️ Se a leitura não conseguir a data, o que já está gravado é mantido — não carimba a data de hoje por cima',
+            ]},
             { versao: '2.24.1', data: '09/09/2026', areas: ['site', 'extensao'], itens: [
                 '📅 CORRIGIDO: ao importar histórico grande, os pedidos saíam com a DATA TROCADA — pegavam o dia do pedido de cima, mesmo com todas as datas certas na tela',
                 'A causa é irmã da de cima: a extensão juntava as células de TRÊS linhas (a de cima, a atual e a de baixo) e escolhia a data pela posição horizontal. Só que a coluna DATA fica na mesma posição em toda linha — não tinha como desempatar, e sobrava sempre a da linha anterior',
