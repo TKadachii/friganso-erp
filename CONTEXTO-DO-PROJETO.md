@@ -314,6 +314,52 @@ exatamente qual etapa zera. Foi assim que caiu de "não lê" pra causa exata em 
 `pcsItem` sai vazio. Não impede a leitura (o campo é só informativo) — mas se um dia precisar do
 número de peças, é aí que está o problema.
 
+## ↩️ Devolução no relatório de vendas (2026-09-09, v2.24.0) — TERCEIRA vez do mesmo bug de pixel
+`extrairRelatorioVendas()` marcava devolução procurando o "E"/"D" numa **faixa fixa de tela**
+(`x > 600 && x < 900`). Mesmo vício das lições de 04/07 e 03/08, agora na terceira função. Na tela de
+faturamento de 09/09 as células estavam em **x=554 e x=576** — fora da faixa: das **10 devoluções do
+mês, ZERO eram detectadas**, e todas somavam como venda.
+
+| | valor |
+|---|---|
+| 182 vendas | R$ 287.223,52 |
+| 10 devoluções | R$ 10.824,05 |
+| o que o app contava | **R$ 298.047,57** |
+| o que era de verdade | **R$ 276.399,47** |
+| erro | **R$ 21.648,10 (+7,8%)** |
+
+Dois bugs de pixel na mesma função, os dois mudos:
+- `x > 600 && x < 900` (devolução) — nenhuma devolução detectada;
+- `c.x > 2000` (total faturado do pedido) — o valor fica em **x=1643**, então `faturadoTotal` vinha
+  `null` em **todo** pedido. De quebra isso desligava a conferência "soma dos itens x total do
+  pedido" lá no app, que só roda quando `faturadoTotal != null`. Uma checagem de segurança morta sem
+  nenhum aviso.
+
+**Conserto** — leitura por COLUNA, via `mapaColunasRelatorio()` + `lerLinhaPedido()`:
+- acha o índice das colunas pelo **cabeçalho** (`E/S`, `DEV`, `CFOP`) e lê a célula do `<tr>`;
+- devolução = `DEV="D"`, ou `E/S="E"`, ou **CFOP `1.xxx`** (entrada; venda normal é `5.xxx`);
+- reforço pelo `bgcolor` que o SPAmov já usa (`ffffcc` entrada, `ffcccc` devolução);
+- plano B **sem pixel nenhum**: varre as células da própria linha atrás de um "E"/"D" solto;
+- faturado = **última célula da linha** (a única em negrito). Se vier **vazia**, o pedido não faturou
+  e o valor é `null` — antes o risco era pegar a coluna "PEDIDO" ao lado, que é só estimativa.
+
+**Devolução deixou de ser descartada.** Jogar fora deixava a venda original contada cheia: o dinheiro
+nunca voltava do total. Agora ela entra **negativa** — o sinal é aplicado uma vez só, na hora de
+gravar a compra (`sinal = p.devolucao ? -1 : 1`), então **toda soma que já existe no app** (dashboard,
+ranking de cliente, fechamento do mês) fica certa sozinha, sem ter que ensinar devolução pra cada uma.
+Os itens continuam com peso **positivo** de propósito: o app filtra item com `peso <= 0`, e sem isso a
+devolução seria descartada de novo, agora silenciosamente.
+
+Detalhe que custa caro se esquecer: nas linhas de devolução o SPAmov manda **quantidade e peso
+negativos** (`-2`, `-44,8000`) mas o **faturado positivo** na mesma linha. Por isso as regexes ganharam
+`-?` e os valores são guardados em módulo.
+
+Teste de regressão: `ferramentas/teste-devolucao-relatorio.js` — cobre venda, devolução, devolução sem
+nota, cabeçalho irreconhecível, e **falha de propósito se algum número mágico de pixel voltar**.
+
+⚠️ Armadilha de leitura visual: no print da tela o `#` do item cola no código do produto — "22701" é
+na verdade `#`=2 + código `2701`. Ler o `<td>` pelo DOM resolve; ler pela imagem engana.
+
 ## 🎯 Prospecção em Massa / Leads (2026-08-13, v2.14.0)
 Tela `LeadsScreen` (rota `leads`) pra **aumentar a carteira** abordando muito estabelecimento pelo
 WhatsApp. Importa uma planilha de empresas, filtra, e dispara.

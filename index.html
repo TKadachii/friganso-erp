@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 191;
+        const APP_BUILD_VERSION = 192;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -4570,8 +4570,11 @@
             const itens = p.itens || [];
             if (!itens.length) { avisos.push('Pedido sem nenhum item'); return avisos; }
             const somaItens = Math.round(itens.reduce((a, i) => a + (Number(i.faturado) || 0), 0) * 100) / 100;
-            if (p.faturadoTotal != null && Math.abs(somaItens - p.faturadoTotal) > 0.5) {
-                avisos.push(`Soma dos itens (R$ ${somaItens.toFixed(2)}) não bate com o total do pedido (R$ ${p.faturadoTotal.toFixed(2)})`);
+            // Numa DEVOLUÇÃO o faturadoTotal vem negativo (é venda que voltou), mas os itens vêm em
+            // módulo — comparar os dois direto acusaria "não bate" em toda devolução e ela entraria
+            // desmarcada na lista, ou seja, nunca seria importada. A conferência é de MÓDULO.
+            if (p.faturadoTotal != null && Math.abs(somaItens - Math.abs(p.faturadoTotal)) > 0.5) {
+                avisos.push(`Soma dos itens (R$ ${somaItens.toFixed(2)}) não bate com o total do pedido (R$ ${Math.abs(p.faturadoTotal).toFixed(2)})`);
             }
             // Itens rejeitados (peso 0) já foram filtrados antes de chegar aqui — o que sobra só
             // precisa ter quantidade válida.
@@ -4691,8 +4694,13 @@
                     try {
                         const itensSafe = p.itens.map(i => ({ code: String(i.code), name: i.name || ('Produto ' + i.code), qty: Number(i.qty) || 1, peso: Number(i.peso) || 0, valorKg: Number(i.valorKg) || 0 })).filter(i => i.code && i.peso > 0);
                         if (!itensSafe.length) { falha++; continue; }
-                        const valorTotal = p.faturadoTotal != null ? p.faturadoTotal : Math.round(itensSafe.reduce((a, i) => a + i.peso * i.valorKg, 0) * 100) / 100;
-                        const pesoTotal = Math.round(itensSafe.reduce((a, i) => a + i.peso, 0) * 100) / 100;
+                        // ➖ DEVOLUÇÃO entra NEGATIVA (valor e peso). Fazendo o sinal aqui, uma vez só,
+                        // todo lugar que já soma 'valor' — dashboard, ranking de cliente, fechamento do
+                        // mês — passa a dar o número líquido sozinho, sem ter que ensinar devolução pra
+                        // cada uma dessas contas.
+                        const sinal = p.devolucao ? -1 : 1;
+                        const valorTotal = sinal * Math.abs(p.faturadoTotal != null ? p.faturadoTotal : Math.round(itensSafe.reduce((a, i) => a + i.peso * i.valorKg, 0) * 100) / 100);
+                        const pesoTotal = sinal * Math.round(itensSafe.reduce((a, i) => a + i.peso, 0) * 100) / 100;
                         const cli = (clients || []).find(c => String(c.code) === String(p.clienteCode));
                         const existente = await db.collection('purchases').where('spamov', '==', String(p.spamov)).limit(1).get();
                         if (!existente.empty) {
@@ -4700,7 +4708,7 @@
                                 clienteCode: String(p.clienteCode),
                                 clienteName: (cli && cli.name) || p.clienteNome || '',
                                 tipoPessoa: p.tipoPessoa || (cli && cli.tipo) || 'juridica',
-                                itens: itensSafe, valor: valorTotal, pesoTotal,
+                                itens: itensSafe, valor: valorTotal, pesoTotal, devolucao: !!p.devolucao,
                                 origemReal: true, corrigidoEm: Date.now(), corrigidoPor: (user && user.code) || ''
                             });
                         } else {
@@ -4708,7 +4716,7 @@
                                 clienteCode: String(p.clienteCode),
                                 clienteName: (cli && cli.name) || p.clienteNome || '',
                                 tipoPessoa: p.tipoPessoa || (cli && cli.tipo) || 'juridica',
-                                itens: itensSafe, valor: valorTotal, pesoTotal,
+                                itens: itensSafe, valor: valorTotal, pesoTotal, devolucao: !!p.devolucao,
                                 spamov: String(p.spamov), condicaoPagamento: '', dia: p.dia || diaStrGlobal(new Date()), ts: Date.now(),
                                 via: 'relatorio_vendas', vendedor: (user && user.code) || '', origemReal: true
                             });
@@ -4834,8 +4842,11 @@
                                                 <input type="checkbox" disabled={!p.clienteCode} checked={!!selecionados[p.spamov]} onChange={() => toggleSel(p.spamov)} className="mt-1.5 h-4 w-4" />
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                                                        <p className="font-bold text-slate-800 text-sm truncate">SPAMOV {p.spamov} — {p.clienteNome || '❌ cliente não identificado'}</p>
-                                                        <p className="font-black text-emerald-700 text-sm">{fmt(p.faturadoTotal != null ? p.faturadoTotal : (p.itens || []).reduce((a, i) => a + i.faturado, 0))}</p>
+                                                        <p className="font-bold text-slate-800 text-sm truncate">
+                                                            {p.devolucao && <span className="mr-1 px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-black align-middle">↩️ DEVOLUÇÃO</span>}
+                                                            SPAMOV {p.spamov} — {p.clienteNome || '❌ cliente não identificado'}
+                                                        </p>
+                                                        <p className={`font-black text-sm ${p.devolucao ? 'text-rose-600' : 'text-emerald-700'}`}>{p.devolucao ? '- ' : ''}{fmt(Math.abs(p.faturadoTotal != null ? p.faturadoTotal : (p.itens || []).reduce((a, i) => a + i.faturado, 0)))}</p>
                                                     </div>
                                                     <p className="text-xs text-slate-400">{(p.itens || []).length} item(ns) · {Math.round((p.itens || []).reduce((a, i) => a + i.peso, 0) * 100) / 100} kg embarcados · {p.dia ? '📅 ' + p.dia.slice(8, 10) + '/' + p.dia.slice(5, 7) + '/' + p.dia.slice(0, 4) : '⚠️ sem data — vai entrar como hoje'}</p>
                                                     <ul className="mt-1 space-y-0.5">
@@ -7144,6 +7155,16 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.24.0', data: '09/09/2026', areas: ['site', 'extensao'], itens: [
+                '💰 CORRIGIDO: o relatório de vendas estava contando DEVOLUÇÃO como se fosse venda — o total do mês vinha inflado',
+                'Na tela de faturamento de hoje isso dava R$ 21.648,10 a mais: R$ 298.047,57 em vez dos R$ 276.399,47 que você realmente vendeu (182 vendas e 10 devoluções)',
+                '🔍 A causa: a extensão procurava a marca de devolução ("E" amarelo / "D" vermelho) numa faixa FIXA da tela (entre 600 e 900 pixels). Essa faixa muda com o tamanho da janela e do nome do cliente — hoje as marcas estavam em 554 e 576, fora da faixa, então NENHUMA das 10 devoluções era pega',
+                'Agora ela acha a coluna pelo cabeçalho (E/S, DEV, CFOP) e lê a célula certa da linha — não depende mais de pixel, então não quebra de novo quando você mexe na janela',
+                '➖ E devolução deixou de ser jogada fora: agora entra NEGATIVA. Antes ela era descartada, e a venda original continuava contada cheia — o dinheiro nunca voltava do total',
+                '🐛 Mesmo problema de pixel matava o total faturado de TODO pedido (procurava depois de 2000px, o valor está em 1643): com isso a conferência "soma dos itens x total do pedido" estava desligada sem ninguém saber. Voltou a funcionar',
+                '⚠️ Pedido lançado mas NÃO faturado (coluna FATURADO vazia) agora conta zero, em vez de pegar a estimativa da coluna do lado',
+                '↩️ Na lista de importação, devolução aparece com etiqueta vermelha e valor negativo',
+            ]},
             { versao: '2.23.0', data: '13/08/2026', areas: ['site'], itens: [
                 '🚫 Agora dá pra DESCARTAR do gráfico a tabela inteira de um dia — pra quando você carregou um PDF errado e ele sujou o preço de vários produtos de uma vez',
                 'No painel "Corrigir um preço errado", cada data ganhou um botão 🚫 ao lado do ✏️. O ✏️ arruma só aquele produto; o 🚫 tira a tabela toda do gráfico, de todos os produtos',

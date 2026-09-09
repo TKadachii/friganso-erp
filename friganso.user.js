@@ -1,13 +1,12 @@
 // ==UserScript==
 // @name         Friganso ERP - Lancar pedido
 // @namespace    friganso-erp
-// @version      2026.8.31.1115
+// @version      2026.9.9.2019
 // @description  Le e lanca pedidos no SPAmov direto pelo app Friganso (funciona no celular via Firefox + Tampermonkey).
 // @author       Friganso
 // @match        https://tkadachii.github.io/*
 // @match        *://*.friganso.com.br/*
 // @match        *://spd1.friganso.com.br/*
-// @match        *://web.whatsapp.com/*
 // @run-at       document-idle
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -15,7 +14,6 @@
 // @downloadURL  https://tkadachii.github.io/friganso-erp/friganso.user.js
 // @updateURL    https://tkadachii.github.io/friganso-erp/friganso.user.js
 // ==/UserScript==
-
 
 // Friganso ERP - Extensão (Resumo + Lançar pedido)
 (function () {
@@ -40,7 +38,6 @@
             }
         } }
     };
-
 
 
     const APP_URL = "https://TKadachii.github.io/friganso-erp/";
@@ -858,6 +855,89 @@
         const bt = bodyText();
         return /faturado/i.test(bt) && /embarcado/i.test(bt) && /spamov/i.test(bt);
     }
+    // 🧭 LEITURA ESTRUTURAL DO RELATÓRIO (por COLUNA, não por pixel)
+    // ------------------------------------------------------------------
+    // Lição nº1 do CONTEXTO-DO-PROJETO ("extração por ordem, não distância") aplicada aqui: a versão
+    // antiga procurava o "E"/"D" de devolução numa faixa fixa de tela (x entre 600 e 900). Essa faixa
+    // depende da largura da janela, do zoom e do tamanho do nome do cliente — em 09/09/2026 as células
+    // estavam em x=554 e x=576, ou seja, FORA da faixa: nenhuma devolução era detectada e todas
+    // entravam somando como venda. Agora a gente acha a coluna pelo CABEÇALHO ("E/S", "DEV", "CFOP")
+    // e lê a célula certa do <tr>, que não se mexe com o tamanho da tela.
+    function normLabelRel(s) { return (s || "").replace(/\s+/g, " ").trim().toUpperCase().replace(/[. ]/g, ""); }
+
+    // Mapa tabela -> { es, dev, cfop } com o índice real de cada coluna, lido do cabeçalho.
+    function mapaColunasRelatorio(doc) {
+        const mapas = new Map();
+        const tabelas = doc.querySelectorAll("table");
+        for (let t = 0; t < tabelas.length; t++) {
+            const rows = tabelas[t].rows;
+            for (let r = 0; r < Math.min(rows.length, 5); r++) {
+                const cs = rows[r].cells, m = {};
+                for (let i = 0; i < cs.length; i++) {
+                    const L = normLabelRel(cs[i].textContent);
+                    if (L === "E/S") m.es = i;
+                    else if (L === "DEV") m.dev = i;
+                    else if (L === "CFOP") m.cfop = i;
+                }
+                if (m.es != null && m.dev != null) { mapas.set(tabelas[t], m); break; }
+            }
+        }
+        return mapas;
+    }
+
+    // Lê a linha do pedido a partir do <a> do número SPAMOV. Devolve null se não der pra ler
+    // estruturalmente (aí o chamador cai no plano B).
+    function lerLinhaPedido(elA, mapas) {
+        try {
+            if (!elA || !elA.closest) return null;
+            const tr = elA.closest("tr");
+            if (!tr || !tr.cells || !tr.cells.length) return null;
+            const txtCel = function (i) { return (i != null && tr.cells[i]) ? (tr.cells[i].textContent || "").trim().toUpperCase() : ""; };
+            const bgCel = function (i) { return (i != null && tr.cells[i]) ? ((tr.cells[i].getAttribute("bgcolor") || "").toLowerCase()) : ""; };
+            const m = mapas.get(tr.closest("table"));
+            let devolucao = null, motivo = "";
+            if (m) {
+                const es = txtCel(m.es), dev = txtCel(m.dev), cfop = txtCel(m.cfop);
+                // Devolução = entrada (E/S = "E"), marcada em DEV, ou CFOP de entrada (1.xxx).
+                // Venda normal = E/S "S" e CFOP 5.xxx.
+                if (dev === "D" || es === "E" || /^1[.,]/.test(cfop)) { devolucao = true; motivo = "coluna " + (dev === "D" ? "DEV=D" : es === "E" ? "E/S=E" : "CFOP=" + cfop); }
+                else if (es === "S" || /^5[.,]/.test(cfop)) { devolucao = false; motivo = "coluna E/S=S"; }
+                // Reforço: o SPAmov pinta a célula de amarelo (entrada) e vermelho (devolução).
+                if (devolucao === null && (bgCel(m.dev) === "ffcccc" || bgCel(m.es) === "ffffcc")) { devolucao = true; motivo = "bgcolor"; }
+            }
+            if (devolucao === null) {
+                // Plano B ainda SEM pixel: varre só as células desta linha atrás de um "E"/"D" solto
+                // (numa venda normal essa coluna mostra "S", e nenhuma outra célula da linha é uma
+                // letra sozinha) ou de uma célula pintada de vermelho/amarelo.
+                for (let i = 0; i < tr.cells.length; i++) {
+                    const c = tr.cells[i];
+                    if (c.children.length) continue;
+                    const t = (c.textContent || "").trim().toUpperCase();
+                    const bg = (c.getAttribute("bgcolor") || "").toLowerCase();
+                    if (t === "D" || t === "E" || bg === "ffcccc") { devolucao = true; motivo = "linha:" + (t || bg); break; }
+                }
+                if (devolucao === null) { devolucao = false; motivo = "sem marca"; }
+            }
+            // 💰 Faturado do pedido = ÚLTIMA célula da linha (a anterior é o "Valor" do pedido, que é
+            // só estimativa). Antes isso era pego por pixel (x > 2000) e também estava morto: nesta
+            // tela o valor fica em x=1643, então faturadoTotal vinha null em TODO pedido — o que de
+            // quebra desligava a conferência "soma dos itens x total do pedido" lá no app.
+            // A coluna VALOR tem DUAS sub-colunas: "PEDIDO" (estimativa) e "FATURADO" (o que saiu na
+            // nota). A que vale é a FATURADO — a última da linha, e a única em negrito.
+            // ⚠️ Se ela vier VAZIA o pedido simplesmente não faturou (ex.: SPAMOV 1963689, uma
+            // devolução lançada sem nota): nesse caso o certo é null, NÃO cair na coluna PEDIDO ao
+            // lado — isso contaria como faturamento uma estimativa que nunca virou dinheiro.
+            let celFat = null;
+            for (let i = tr.cells.length - 1; i >= 0; i--) { if (tr.cells[i].querySelector("b")) { celFat = tr.cells[i]; break; } }
+            if (!celFat) celFat = tr.cells[tr.cells.length - 1];
+            const mFat = ((celFat.textContent || "").trim()).match(/^-?\d{1,3}(?:\.\d{3})*,\d{2}$/);
+            const faturadoTotal = mFat ? Math.abs(parseFloat(mFat[0].replace(/\./g, "").replace(",", "."))) : null;
+            // estrutural = true diz pro chamador confiar nesse null (é "não faturou") em vez de sair
+            // procurando um número parecido na tela.
+            return { devolucao: devolucao, motivo: motivo, faturadoTotal: faturadoTotal, estrutural: true };
+        } catch (e) { return null; }
+    }
+
     function extrairRelatorioVendas() {
         // Mesma coleta de "célula-folha com posição" usada no diagnóstico — mas direto da tela viva,
         // sem precisar gerar/copiar um arquivo.
@@ -874,7 +954,7 @@
             if (!t || t.length > 200) return;
             const r = el.getBoundingClientRect();
             if (!r.width || !r.height) return;
-            textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t, tag: el.tagName });
+            textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: t, tag: el.tagName, el: el });
         });
         // Captura atributo "title"/tooltip também — caso a data só apareça ali em vez do texto visível.
         document.querySelectorAll("[title]").forEach(function (el) {
@@ -882,7 +962,7 @@
             if (!tit || tit.length > 200) return;
             const r = el.getBoundingClientRect();
             if (!r.width || !r.height) return;
-            textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: tit, tag: el.tagName });
+            textos.push({ x: Math.round(r.left), y: Math.round(r.top), t: tit, tag: el.tagName, el: el });
         });
         if (!textos.length) return [];
 
@@ -898,12 +978,17 @@
         });
         clusters.forEach(function (c) { c.itens.sort(function (a, b) { return a.x - b.x; }); });
 
-        const reCurrency = /^\d{1,3}(\.\d{3})*,\d{2}$/;      // 6.133,60
-        const reKg = /^\d{1,4},\d{4}$/;                        // 278,8000
+        // ⚠️ O "-?" não é decoração: nas linhas de DEVOLUÇÃO o SPAmov manda quantidade e peso
+        // negativos (-2, -44,8000). Sem isso a linha inteira era lida com peso 0, o app descartava o
+        // item (filtro peso > 0) e a devolução sumia do relatório sem ninguém perceber.
+        const reCurrency = /^-?\d{1,3}(\.\d{3})*,\d{2}$/;     // 6.133,60 / -460,72
+        const reKg = /^-?\d{1,4},\d{4}$/;                      // 278,8000 / -49,8000
         const reCliente = /\[([jf])\]\s*(\d+)\s*-\s*(.+)/i;    // [j] 86625 - dmb Produtos Ltda
         const reItem = /^(\d+)\s*-\s*(.+)/;                    // 1602 - DIANTEIRO BOVINO
         const reSpamov = /^\d{5,8}$/;
         const reData = /^(\d{2})-(\d{2})-(\d{4})\s+\d{2}:\d{2}:\d{2}$/; // 01-07-2026 21:57:05
+
+        const mapas = mapaColunasRelatorio(document);
 
         const pedidos = [];
         let atual = null;
@@ -916,15 +1001,20 @@
             for (let i = 0; i < cells.length; i++) { if (cells[i].tag === "A" && reSpamov.test(cells[i].t.trim())) { cellSpamov = cells[i]; break; } }
             if (cellSpamov) {
                 if (atual) pedidos.push(atual);
-                atual = { spamov: cellSpamov.t.trim(), clienteCode: "", clienteNome: "", tipoPessoa: "", faturadoTotal: null, dia: null, devolvido: false, itens: [] };
+                atual = { spamov: cellSpamov.t.trim(), clienteCode: "", clienteNome: "", tipoPessoa: "", faturadoTotal: null, dia: null, devolucao: false, devolvido: false, motivoDevolucao: "", lidoDaTabela: false, itens: [] };
                 const vizinhos = [clusters[ci - 1], cluster, clusters[ci + 1]].filter(Boolean).reduce(function (a, c) { return a.concat(c.itens); }, []);
-                // 🔴 "E"/"D" na coluna de status (onde um pedido normal mostra só "S") = teve ocorrência
-                // e foi DEVOLVIDO — o SPAmov mostra isso em vermelho. Pedido devolvido não é venda de
-                // verdade (foi estornado), então esse pedido inteiro é descartado, não só o item.
-                for (let i = 0; i < vizinhos.length; i++) {
-                    const st = vizinhos[i].t.trim();
-                    if ((st === "E" || st === "D") && vizinhos[i].x > 600 && vizinhos[i].x < 900) { atual.devolvido = true; break; }
+                // 🔴 DEVOLUÇÃO: lida pela COLUNA (E/S, DEV, CFOP), não por posição na tela.
+                // A devolução NÃO é mais descartada — ela é uma venda que voltou, então entra no
+                // relatório com sinal negativo lá no fim da função. Descartar deixava a venda
+                // original contada cheia e inflava o mês.
+                const linha = lerLinhaPedido(cellSpamov.el, mapas);
+                if (linha) {
+                    atual.devolucao = !!linha.devolucao;
+                    atual.motivoDevolucao = linha.motivo || "";
+                    atual.faturadoTotal = linha.faturadoTotal;
+                    atual.lidoDaTabela = !!linha.estrutural;
                 }
+                atual.devolvido = atual.devolucao;
                 let cCliente = null;
                 for (let i = 0; i < vizinhos.length; i++) { if (reCliente.test(vizinhos[i].t)) { cCliente = vizinhos[i]; break; } }
                 if (cCliente) {
@@ -943,10 +1033,15 @@
                 }
                 // Faturado do pedido = célula "B" em moeda, a mais à direita do cabeçalho (a "Valor" do
                 // pedido, mais cedo na linha, é só estimativa — não usar essa).
-                const candidatosFat = vizinhos.filter(function (c) { return c.tag === "B" && reCurrency.test(c.t.trim()) && c.x > 2000; });
-                if (candidatosFat.length) {
-                    candidatosFat.sort(function (a, b) { return b.x - a.x; });
-                    atual.faturadoTotal = parseFloat(candidatosFat[0].t.trim().replace(/\./g, "").replace(",", "."));
+                // Só cai aqui se a leitura estrutural acima não achou o valor (tela fora do padrão).
+                // Sem o antigo "c.x > 2000": é a moeda em negrito mais à DIREITA do cabeçalho, seja
+                // qual for a largura da tela.
+                if (atual.faturadoTotal == null && !atual.lidoDaTabela) {
+                    const candidatosFat = vizinhos.filter(function (c) { return c.tag === "B" && reCurrency.test(c.t.trim()); });
+                    if (candidatosFat.length) {
+                        candidatosFat.sort(function (a, b) { return b.x - a.x; });
+                        atual.faturadoTotal = Math.abs(parseFloat(candidatosFat[0].t.trim().replace(/\./g, "").replace(",", ".")));
+                    }
                 }
                 continue;
             }
@@ -962,23 +1057,32 @@
             const cellKg = cells.filter(function (c) { return reKg.test(c.t.trim()); })[0];
             let peso = 0, faturado = 0, qty = 1;
             if (cellKg) {
-                peso = parseFloat(cellKg.t.trim().replace(",", "."));
+                // Guarda sempre o MÓDULO: quem manda no sinal é o flag devolucao do pedido, aplicado
+                // uma vez só no fim. Misturar os dois dava número trocado (o SPAmov manda o peso
+                // negativo mas o faturado positivo na mesma linha de devolução).
+                peso = Math.abs(parseFloat(cellKg.t.trim().replace(",", ".")));
                 const candidatosF = cells.filter(function (c) { return c.x > cellKg.x && reCurrency.test(c.t.trim()); });
                 if (candidatosF.length) {
                     candidatosF.sort(function (a, b) { return a.x - b.x; });
-                    faturado = parseFloat(candidatosF[0].t.trim().replace(/\./g, "").replace(",", "."));
+                    faturado = Math.abs(parseFloat(candidatosF[0].t.trim().replace(/\./g, "").replace(",", ".")));
                 }
-                const candidatosQty = cells.filter(function (c) { return c.x < cellKg.x && /^\d+$/.test(c.t.trim()); });
+                const candidatosQty = cells.filter(function (c) { return c.x < cellKg.x && /^-?\d+$/.test(c.t.trim()); });
                 if (candidatosQty.length) {
                     candidatosQty.sort(function (a, b) { return b.x - a.x; });
-                    qty = parseInt(candidatosQty[0].t.trim(), 10) || 1;
+                    qty = Math.abs(parseInt(candidatosQty[0].t.trim(), 10)) || 1;
                 }
             }
             const valorKg = peso > 0 ? Math.round((faturado / peso) * 10000) / 10000 : 0;
             atual.itens.push({ code: code, name: name, qty: qty, peso: peso, faturado: faturado, valorKg: valorKg });
         }
         if (atual) pedidos.push(atual);
-        return pedidos.filter(function (p) { return !p.devolvido; });
+        // ➖ Devolução entra NEGATIVA em vez de ser jogada fora. Os itens continuam com peso positivo
+        // (o app filtra item com peso <= 0, e a devolução precisa sobreviver a esse filtro); o sinal
+        // fica no flag "devolucao" + no faturadoTotal, e o app aplica na hora de gravar a compra.
+        return pedidos.map(function (p) {
+            if (p.devolucao && p.faturadoTotal != null) p.faturadoTotal = -Math.abs(p.faturadoTotal);
+            return p;
+        });
     }
     function enviarRelatorioVendasParaApp() {
         const pedidos = extrairRelatorioVendas();
