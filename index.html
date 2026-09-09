@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 194;
+        const APP_BUILD_VERSION = 195;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -7162,6 +7162,13 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.24.3', data: '09/09/2026', areas: ['site'], itens: [
+                '🔎 NOVO em Debug: "Conferir faturamento" — quando o total do app não bate com o do SPAmov, ele separa a diferença POR CAUSA e diz quanto cada uma vale em reais',
+                'Aponta: SPAmov repetido em mais de um registro (contando duas vezes), devolução que ficou gravada como venda, e pedido cujo valor não bate com a soma dos próprios itens',
+                'Mostra também quanto o total ficaria depois de tirar duplicata e devolução — pra você comparar com o número do SPAmov',
+                'Não altera nada, só mede. Dá pra filtrar por período ou conferir o histórico inteiro',
+                '⚠️ Ele lê TODOS os pedidos; as outras telas leem no máximo 1500 a 3000 por vez. Se você passar disso, ele avisa — porque aí as outras telas mostram um total menor sem dizer nada',
+            ]},
             { versao: '2.24.2', data: '09/09/2026', areas: ['site'], itens: [
                 '🔁 CORRIGIDO: reimportar um pedido que já estava no sistema NÃO corrigia a data dele — só valor, itens e devolução',
                 'Isso deixava você preso: os pedidos importados com a data errada continuavam errados mesmo reimportando, e não havia jeito de arrumar pela tela',
@@ -10129,6 +10136,77 @@
                 }
             };
 
+            // 🔎 CONFERÊNCIA DE FATURAMENTO — "por que o app diz um número e o SPAmov diz outro?"
+            // Não conserta nada: mede. Lê a coleção INTEIRA (sem o limit das telas normais, que é
+            // justamente uma das causas possíveis de número diferente) e separa a diferença por causa,
+            // dizendo quanto cada uma infla ou desconta. Assim a pergunta "faltam R$ 7 mil" vira uma
+            // linha com nome e valor em vez de caça ao tesouro.
+            const [confDe, setConfDe] = useState('');
+            const [confAte, setConfAte] = useState('');
+            const [confResult, setConfResult] = useState(null);
+            const [confBusy, setConfBusy] = useState(false);
+            const conferirFaturamento = async () => {
+                setConfBusy(true);
+                try {
+                    // .get() sem limit de propósito: as telas do app leem com limit (1500/2000/3000) e,
+                    // se o histórico passar disso, elas mostram um total menor sem avisar. Aqui a gente
+                    // precisa do número de verdade pra poder comparar.
+                    const snap = await db.collection('purchases').get();
+                    const todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    const noPeriodo = todos.filter(p => {
+                        const dia = p.dia || '';
+                        if (confDe && (!dia || dia < confDe)) return false;
+                        if (confAte && (!dia || dia > confAte)) return false;
+                        return true;
+                    });
+                    const num = (v) => Number(v) || 0;
+                    const total = Math.round(noPeriodo.reduce((a, p) => a + num(p.valor), 0) * 100) / 100;
+
+                    // ── causa 1: mesmo SPAmov gravado em mais de um documento ────────────────────
+                    const porSpamov = {};
+                    noPeriodo.forEach(p => { const sp = String(p.spamov || '').trim(); if (sp) (porSpamov[sp] = porSpamov[sp] || []).push(p); });
+                    const dups = Object.keys(porSpamov).filter(sp => porSpamov[sp].length > 1)
+                        .map(sp => ({ spamov: sp, docs: porSpamov[sp] }));
+                    // o excedente é tudo menos UM documento por pedido
+                    const infladoDup = Math.round(dups.reduce((a, d) =>
+                        a + d.docs.slice(1).reduce((b, p) => b + num(p.valor), 0), 0) * 100) / 100;
+
+                    // ── causa 2: devolução gravada POSITIVA (importada antes do conserto) ─────────
+                    // O erro é o DOBRO do valor: além de não descontar, ela ainda soma.
+                    const devPositivas = noPeriodo.filter(p => p.devolucao && num(p.valor) > 0);
+                    const infladoDev = Math.round(devPositivas.reduce((a, p) => a + num(p.valor) * 2, 0) * 100) / 100;
+
+                    // ── causa 3: o 'valor' gravado não bate com a soma dos itens do próprio pedido ─
+                    const divergentes = [];
+                    noPeriodo.forEach(p => {
+                        const itens = p.itens || [];
+                        if (!itens.length) return;
+                        const somaItens = Math.round(itens.reduce((a, i) => a + num(i.peso) * num(i.valorKg), 0) * 100) / 100;
+                        const diff = Math.round((Math.abs(num(p.valor)) - somaItens) * 100) / 100;
+                        if (Math.abs(diff) > 0.5) divergentes.push({ spamov: p.spamov || '(sem)', dia: p.dia || '', valor: num(p.valor), somaItens, diff });
+                    });
+                    divergentes.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+                    const infladoDiv = Math.round(divergentes.reduce((a, d) => a + d.diff, 0) * 100) / 100;
+
+                    // ── causa 4: pedido sem data — some de qualquer filtro por período ────────────
+                    const semData = todos.filter(p => !p.dia);
+
+                    setConfResult({
+                        total, pedidos: noPeriodo.length, totalDocs: todos.length,
+                        dups, infladoDup,
+                        devPositivas, infladoDev,
+                        divergentes, infladoDiv,
+                        semData: semData.length,
+                        // o que sobraria tirando as duas causas que são erro puro (duplicata e
+                        // devolução positiva). A divergência de itens fica de fora do "corrigido"
+                        // porque nem sempre é erro: nota faturada pode legitimamente diferir dos itens.
+                        corrigido: Math.round((total - infladoDup - infladoDev) * 100) / 100,
+                        teto: todos.length > 1500,
+                    });
+                } catch (e) { showMessage('Erro ao conferir o faturamento.', 'error'); }
+                setConfBusy(false);
+            };
+
             // 🧹 Correção de pedidos duplicados (mesmo SPAmov registrado mais de uma vez, de antes da
             // regra "mesmo SPAmov = mesmo pedido" existir). Faz um escaneamento primeiro (não mexe em
             // nada), mostra o que seria corrigido, e só executa depois de confirmar.
@@ -10288,6 +10366,73 @@
                                     </table>
                                 </div>
                                 <div className="text-right text-lg font-extrabold text-rose-700">Total: {formatPrice(valorNota.total)}</div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>🔎</span> Conferir faturamento (de onde vem a diferença)</h3>
+                        <p className="text-xs text-slate-400">Quando o app mostra um total diferente do SPAmov, isso separa a diferença por causa e diz quanto cada uma vale em reais. <b>Não altera nada</b> — só mede. Deixe as datas em branco pra conferir tudo.</p>
+                        <div className="flex flex-wrap items-end gap-3">
+                            <label className="text-xs text-slate-500">De<input type="date" value={confDe} onChange={e => setConfDe(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></label>
+                            <label className="text-xs text-slate-500">Até<input type="date" value={confAte} onChange={e => setConfAte(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></label>
+                            <button onClick={conferirFaturamento} disabled={confBusy} className="bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white font-bold py-3 px-5 rounded-xl transition-colors">{confBusy ? 'Conferindo...' : '🔎 Conferir'}</button>
+                        </div>
+                        {confResult && (
+                            <div className="space-y-3">
+                                <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-2">
+                                    <span className="text-sm text-slate-500">{confResult.pedidos} pedido(s) no período</span>
+                                    <span className="text-2xl font-extrabold text-slate-800">{formatPrice(confResult.total)}</span>
+                                </div>
+                                <ul className="space-y-2 text-sm">
+                                    <li className={`flex items-start justify-between gap-3 ${confResult.dups.length ? 'text-rose-700' : 'text-slate-400'}`}>
+                                        <span>{confResult.dups.length ? '🔴' : '✅'} SPAmov repetido em mais de um registro — <b>{confResult.dups.length}</b> pedido(s){confResult.dups.length ? ' (o 🧹 aqui embaixo resolve)' : ''}</span>
+                                        <b className="whitespace-nowrap">{confResult.infladoDup ? '+' + formatPrice(confResult.infladoDup) : '—'}</b>
+                                    </li>
+                                    <li className={`flex items-start justify-between gap-3 ${confResult.devPositivas.length ? 'text-rose-700' : 'text-slate-400'}`}>
+                                        <span>{confResult.devPositivas.length ? '🔴' : '✅'} Devolução gravada como venda — <b>{confResult.devPositivas.length}</b> pedido(s){confResult.devPositivas.length ? ' (reimporte esses dias)' : ''}</span>
+                                        <b className="whitespace-nowrap">{confResult.infladoDev ? '+' + formatPrice(confResult.infladoDev) : '—'}</b>
+                                    </li>
+                                    <li className={`flex items-start justify-between gap-3 ${confResult.divergentes.length ? 'text-amber-700' : 'text-slate-400'}`}>
+                                        <span>{confResult.divergentes.length ? '🟡' : '✅'} Valor do pedido diferente da soma dos itens — <b>{confResult.divergentes.length}</b> pedido(s) <i className="text-slate-400 not-italic">(nem sempre é erro: a nota pode faturar diferente do pedido)</i></span>
+                                        <b className="whitespace-nowrap">{confResult.infladoDiv ? (confResult.infladoDiv > 0 ? '+' : '') + formatPrice(confResult.infladoDiv) : '—'}</b>
+                                    </li>
+                                    {!!confResult.semData && (
+                                        <li className="flex items-start justify-between gap-3 text-amber-700">
+                                            <span>🟡 Pedido sem data — <b>{confResult.semData}</b> registro(s) ficam de fora de qualquer filtro por período</span>
+                                            <b className="whitespace-nowrap">—</b>
+                                        </li>
+                                    )}
+                                </ul>
+                                {(confResult.infladoDup || confResult.infladoDev) ? (
+                                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-baseline justify-between gap-3">
+                                        <span className="text-sm font-bold text-emerald-800">Tirando duplicata e devolução, o total fica</span>
+                                        <span className="text-xl font-extrabold text-emerald-700">{formatPrice(confResult.corrigido)}</span>
+                                    </div>
+                                ) : (
+                                    <p className="text-xs text-slate-400">Nenhuma das causas conhecidas aparece aqui. Se o número ainda não bate, a diferença está na leitura de algum pedido — a lista de divergentes abaixo é por onde começar.</p>
+                                )}
+                                {!!confResult.teto && (
+                                    <p className="text-xs text-amber-700">⚠️ São {confResult.totalDocs} pedidos no banco. As outras telas do app leem no máximo 1500 a 3000 por vez — então elas podem mostrar um total MENOR que este, que leu tudo.</p>
+                                )}
+                                {!!confResult.divergentes.length && (
+                                    <div className="max-h-56 overflow-y-auto border border-slate-100 rounded-xl">
+                                        <table className="w-full text-xs">
+                                            <thead className="bg-slate-50 text-slate-500 sticky top-0"><tr><th className="text-left p-2">SPAmov</th><th className="text-left p-2">Dia</th><th className="text-right p-2">Gravado</th><th className="text-right p-2">Soma dos itens</th><th className="text-right p-2">Diferença</th></tr></thead>
+                                            <tbody>
+                                                {confResult.divergentes.slice(0, 60).map((d, i) => (
+                                                    <tr key={i} className="border-t border-slate-100">
+                                                        <td className="p-2 font-mono">{d.spamov}</td>
+                                                        <td className="p-2 text-slate-400">{d.dia ? d.dia.slice(8, 10) + '/' + d.dia.slice(5, 7) : '—'}</td>
+                                                        <td className="p-2 text-right">{formatPrice(d.valor)}</td>
+                                                        <td className="p-2 text-right text-slate-500">{formatPrice(d.somaItens)}</td>
+                                                        <td className={`p-2 text-right font-bold ${d.diff > 0 ? 'text-rose-600' : 'text-sky-600'}`}>{d.diff > 0 ? '+' : ''}{formatPrice(d.diff)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
