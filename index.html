@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 192;
+        const APP_BUILD_VERSION = 193;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -7155,6 +7155,13 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.24.1', data: '09/09/2026', areas: ['site', 'extensao'], itens: [
+                '📅 CORRIGIDO: ao importar histórico grande, os pedidos saíam com a DATA TROCADA — pegavam o dia do pedido de cima, mesmo com todas as datas certas na tela',
+                'A causa é irmã da de cima: a extensão juntava as células de TRÊS linhas (a de cima, a atual e a de baixo) e escolhia a data pela posição horizontal. Só que a coluna DATA fica na mesma posição em toda linha — não tinha como desempatar, e sobrava sempre a da linha anterior',
+                'Agora a data é lida da própria linha do pedido, pela coluna DATA do cabeçalho. Sem chance de herdar a do vizinho',
+                '⏰ E vale a coluna DATA (do pedido), não a PREV (previsão de entrega) — senão pedido do fim da noite virava do dia seguinte',
+                '⚠️ Se você já importou histórico com a versão anterior, vale reimportar: as datas erradas só se acertam relendo a tela',
+            ]},
             { versao: '2.24.0', data: '09/09/2026', areas: ['site', 'extensao'], itens: [
                 '💰 CORRIGIDO: o relatório de vendas estava contando DEVOLUÇÃO como se fosse venda — o total do mês vinha inflado',
                 'Na tela de faturamento de hoje isso dava R$ 21.648,10 a mais: R$ 298.047,57 em vez dos R$ 276.399,47 que você realmente vendeu (182 vendas e 10 devoluções)',

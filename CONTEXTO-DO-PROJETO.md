@@ -360,6 +360,44 @@ nota, cabeçalho irreconhecível, e **falha de propósito se algum número mági
 ⚠️ Armadilha de leitura visual: no print da tela o `#` do item cola no código do produto — "22701" é
 na verdade `#`=2 + código `2701`. Ler o `<td>` pelo DOM resolve; ler pela imagem engana.
 
+## 📅 Data do pedido trocada no relatório (2026-09-09, v2.24.1) — QUARTA vez, no mesmo dia da terceira
+Achado ao importar o histórico inteiro: pedidos entravam com o dia do **pedido anterior**, mesmo com
+todas as datas certas na tela. Em importação de um dia só quase não aparece; em histórico grande
+embaralha tudo, inclusive atravessando mês.
+
+A escolha da data era:
+
+```js
+const vizinhos = [clusters[ci - 1], cluster, clusters[ci + 1]] // 3 LINHAS juntas
+const candidatosData = vizinhos.filter(c => reData.test(c.t));
+candidatosData.sort((a, b) => a.x - b.x);                      // desempate por posição
+atual.dia = candidatosData[0];
+```
+
+O erro fino: a coluna DATA fica **no mesmo x em todas as linhas**, então ordenar por `x` não desempata
+nada — é um empate. E `Array.prototype.sort` é **estável**, então o vencedor do empate é quem entrou
+primeiro no array: `clusters[ci - 1]`, a linha **de cima**. Ou seja, o código pegava sistematicamente
+a data do pedido anterior. Não é aleatório, é determinístico — por isso "todas as datas certinhas" e
+mesmo assim tudo errado.
+
+**Conserto** — a data sai da **própria `<tr>`**, dentro do `lerLinhaPedido()`: coluna `DATA` do
+cabeçalho, e se o cabeçalho não for reconhecido, a **primeira** célula da linha com cara de data. Uma
+linha só não tem de quem herdar. O plano B do chamador também foi estreitado pro cluster do próprio
+pedido — nunca mais os vizinhos.
+
+⚠️ A linha tem **duas** datas: `DATA` (do pedido) e `PREV` (previsão de entrega). Vale a **primeira em
+ordem de coluna**. Pegar a segunda joga pedido do fim da noite pro dia seguinte.
+
+**A lição nº1 do projeto de novo, e agora dá pra enunciar melhor:** *desempate por coordenada só
+funciona quando a coordenada de fato distingue.* Entre COLUNAS o `x` distingue; entre LINHAS, não —
+ali o `x` é constante e o desempate vira "o primeiro do array", que é o vizinho de cima. Antes de
+ordenar por `x` ou `y`, pergunte: **os candidatos diferem nessa coordenada?**
+
+⚠️ Reimportar é necessário: o conserto arruma a leitura daqui pra frente, não o que já foi gravado.
+
+Coberto por `ferramentas/teste-devolucao-relatorio.js` (a data da linha, DATA × PREV, o plano B sem
+cabeçalho, e uma regressão que falha se a data voltar a ser pescada nas linhas vizinhas).
+
 ## 🎯 Prospecção em Massa / Leads (2026-08-13, v2.14.0)
 Tela `LeadsScreen` (rota `leads`) pra **aumentar a carteira** abordando muito estabelecimento pelo
 WhatsApp. Importa uma planilha de empresas, filtra, e dispara.

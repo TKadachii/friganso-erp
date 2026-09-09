@@ -22,6 +22,7 @@ function extrairFuncao(nome) {
     }
     return src.slice(i, f);
 }
+eval('globalThis.RE_DATA_REL = ' + (/const RE_DATA_REL = (\/.*\/);/.exec(src)||[])[1] + ';');
 eval(extrairFuncao('normLabelRel').replace('function normLabelRel', 'globalThis.normLabelRel = function'));
 eval(extrairFuncao('mapaColunasRelatorio').replace('function mapaColunasRelatorio', 'globalThis.mapaColunasRelatorio = function'));
 eval(extrairFuncao('lerLinhaPedido').replace('function lerLinhaPedido', 'globalThis.lerLinhaPedido = function'));
@@ -46,7 +47,7 @@ const linha = (es, dev, cfop, vlrPedido, vlrFaturado) => ([
     cel('17'), cel('1984355', { b: true }), cel('0/0', { b: true }), cel('1679101/1nfe', { b: true }),
     cel('[j] 54711 - g José dos Santos'),
     cel(es, { bg: es === 'E' ? 'ffffcc' : null }), cel(dev, { bg: dev === 'D' ? 'ffcccc' : null }),
-    cel(''), cel(cfop), cel('03-09-2026 20:04:37'), cel('03-09-2026 23:04:50'), cel('14 d.m.'),
+    cel(''), cel(cfop), cel('03-09-2026 20:04:37'), cel('04-09-2026 23:04:50'), cel('14 d.m.'),
     cel(vlrPedido), cel(vlrFaturado, { b: true }),
 ]);
 
@@ -90,6 +91,28 @@ const codigo = src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n'
 checa('sem a faixa de pixel 600..900', !/x\s*>\s*600\s*&&[^\n]*x\s*<\s*900/.test(codigo), 'voltou o filtro por posição de tela');
 checa('sem o corte x > 2000 no faturado', !/\.x\s*>\s*2000/.test(codigo), 'voltou o corte de pixel do faturado');
 checa('devolução não é mais descartada', !/filter\(function \(p\) \{ return !p\.devolvido; \}\)/.test(codigo), 'voltou o filtro que jogava devolução fora');
+
+// ── 📅 DATA DO PEDIDO ──────────────────────────────────────────────────────────────────────
+// Bug de 09/09/2026, MESMA família dos de cima (a quarta): a data era escolhida juntando as células
+// de TRÊS linhas (a de cima, a atual, a de baixo), filtrando o que parecia data e pegando a de menor
+// x. Só que a coluna DATA fica no mesmo x em toda linha — o desempate por x é um empate, e o sort
+// estável do JS entregava a primeira da lista: a data da LINHA DE CIMA. Ao importar histórico grande
+// os pedidos saíam com o dia do pedido anterior, mesmo com tudo certo na tela.
+r = ler(linha('S', '', '5.102/', '1.065,85', '1.065,85'));
+checa('lê a data do pedido da própria linha', r.dia === '2026-09-03', JSON.stringify(r));
+
+// A linha tem DUAS datas: DATA (do pedido, 20:04) e PREV (previsão de entrega, 23:04). Vale a
+// primeira em ordem de coluna — se pegasse a segunda, um pedido da meia-noite viraria do dia seguinte.
+checa('pega a DATA e não a PREV', r.dia === '2026-09-03', JSON.stringify(r));
+
+// Sem cabeçalho reconhecível, o plano B varre a própria linha — e continua sem olhar as vizinhas.
+r = ler(linha('S', '', '5.102/', '1.065,85', '1.065,85'), false);
+checa('plano B lê a data sem o cabeçalho', r.dia === '2026-09-03', JSON.stringify(r));
+
+// Regressão: a data não pode voltar a ser lida do conjunto de linhas vizinhas.
+checa('data não sai mais dos clusters vizinhos',
+    !/vizinhos\.filter\(function \(c\) \{ return reData/.test(codigo),
+    'voltou a pescar a data nas linhas de cima e de baixo');
 
 console.log(falhas ? `\n❌ ${falhas} falha(s)` : '\n✅ todos passaram');
 process.exit(falhas ? 1 : 0);

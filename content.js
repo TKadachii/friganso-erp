@@ -827,6 +827,10 @@
     // e lê a célula certa do <tr>, que não se mexe com o tamanho da tela.
     function normLabelRel(s) { return (s || "").replace(/\s+/g, " ").trim().toUpperCase().replace(/[. ]/g, ""); }
 
+    // 📅 Data/hora do relatório: "03-09-2026 20:04:37". Fica aqui em cima (e não dentro da
+    // extrairRelatorioVendas) porque a lerLinhaPedido também precisa dela.
+    const RE_DATA_REL = /^(\d{2})-(\d{2})-(\d{4})\s+\d{2}:\d{2}:\d{2}$/;
+
     // Mapa tabela -> { es, dev, cfop } com o índice real de cada coluna, lido do cabeçalho.
     function mapaColunasRelatorio(doc) {
         const mapas = new Map();
@@ -838,6 +842,7 @@
                 for (let i = 0; i < cs.length; i++) {
                     const L = normLabelRel(cs[i].textContent);
                     if (L === "E/S") m.es = i;
+                    else if (L === "DATA") m.data = i;
                     else if (L === "DEV") m.dev = i;
                     else if (L === "CFOP") m.cfop = i;
                 }
@@ -894,9 +899,29 @@
             if (!celFat) celFat = tr.cells[tr.cells.length - 1];
             const mFat = ((celFat.textContent || "").trim()).match(/^-?\d{1,3}(?:\.\d{3})*,\d{2}$/);
             const faturadoTotal = mFat ? Math.abs(parseFloat(mFat[0].replace(/\./g, "").replace(",", "."))) : null;
+            // 📅 DATA DO PEDIDO — lida DESTA linha, nunca das vizinhas.
+            // ⚠️ Quarta vez do mesmo vício de "distância" (04/07, 03/08, 09/09-devolução e agora):
+            // a versão antiga juntava as células de TRÊS linhas (a de cima, a atual e a de baixo),
+            // filtrava as que pareciam data e pegava a de menor x. Só que a coluna DATA fica no MESMO
+            // x em todas as linhas — o desempate por x é um empate. Como o sort do JS é estável, quem
+            // sobrava era a primeira da lista: a data da linha DE CIMA, ou seja, a do pedido ANTERIOR.
+            // Por isso "todas as datas certinhas na tela" viravam pedidos com o dia trocado ao
+            // importar histórico grande. Aqui a linha é uma só, então não tem de quem herdar.
+            // Das duas datas da linha (DATA do pedido e PREV de entrega) a que vale é a PRIMEIRA em
+            // ordem de coluna — a mesma regra de sempre: ordem, não posição.
+            let dia = null;
+            const celData = (m && m.data != null && tr.cells[m.data]) ? tr.cells[m.data] : null;
+            let mData = celData ? ((celData.textContent || "").trim()).match(RE_DATA_REL) : null;
+            if (!mData) {
+                for (let i = 0; i < tr.cells.length; i++) {
+                    const cand = ((tr.cells[i].textContent || "").trim()).match(RE_DATA_REL);
+                    if (cand) { mData = cand; break; }
+                }
+            }
+            if (mData) dia = mData[3] + "-" + mData[2] + "-" + mData[1];
             // estrutural = true diz pro chamador confiar nesse null (é "não faturou") em vez de sair
             // procurando um número parecido na tela.
-            return { devolucao: devolucao, motivo: motivo, faturadoTotal: faturadoTotal, estrutural: true };
+            return { devolucao: devolucao, motivo: motivo, faturadoTotal: faturadoTotal, dia: dia, estrutural: true };
         } catch (e) { return null; }
     }
 
@@ -974,6 +999,7 @@
                     atual.devolucao = !!linha.devolucao;
                     atual.motivoDevolucao = linha.motivo || "";
                     atual.faturadoTotal = linha.faturadoTotal;
+                    atual.dia = linha.dia || null;
                     atual.lidoDaTabela = !!linha.estrutural;
                 }
                 atual.devolvido = atual.devolucao;
@@ -985,13 +1011,17 @@
                     atual.clienteCode = m[2];
                     atual.clienteNome = m[3].trim();
                 }
-                // Data do pedido (não a data de faturamento/liberação) = a coluna de data/hora mais à
-                // esquerda do cabeçalho — o relatório mostra 2 datas, essa é a "Data do Pedido".
-                const candidatosData = vizinhos.filter(function (c) { return reData.test(c.t.trim()); });
-                if (candidatosData.length) {
-                    candidatosData.sort(function (a, b) { return a.x - b.x; });
-                    const md = candidatosData[0].t.trim().match(reData);
-                    atual.dia = md[3] + "-" + md[2] + "-" + md[1];
+                // 📅 Plano B da data — só entra se a leitura pela linha (lerLinhaPedido) falhou.
+                // ⚠️ Olha SÓ o cluster do próprio pedido. NUNCA os vizinhos: era daí que vinha a data
+                // do pedido de cima, porque a coluna DATA tem o mesmo x em toda linha e o desempate
+                // por x não desempata nada.
+                if (!atual.dia) {
+                    const candidatosData = cells.filter(function (c) { return reData.test(c.t.trim()); });
+                    if (candidatosData.length) {
+                        candidatosData.sort(function (a, b) { return a.x - b.x; });
+                        const md = candidatosData[0].t.trim().match(reData);
+                        atual.dia = md[3] + "-" + md[2] + "-" + md[1];
+                    }
                 }
                 // Faturado do pedido = célula "B" em moeda, a mais à direita do cabeçalho (a "Valor" do
                 // pedido, mais cedo na linha, é só estimativa — não usar essa).
