@@ -351,7 +351,7 @@
         const isCapacitor = (typeof window !== 'undefined') && !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform === 'function' ? window.Capacitor.isNativePlatform() : window.Capacitor.isNative));
         // 🔄 Versão desta página, pra comparar com web-version.json e saber se tem atualização pendente
         // (site/PWA/PC). PRECISA bater com o número em web-version.json — bump os dois juntos SEMPRE.
-        const APP_BUILD_VERSION = 195;
+        const APP_BUILD_VERSION = 196;
         // 📋 Chaves da Fila de Pedidos. Ficam aqui no topo porque são usadas por DUAS telas distantes:
         // a FilaScreen (que monta a lista) e a ResumoScreen (que marca o pedido como conferido ao copiar).
         const FILA_ATIVA = 'friganso_fila_ativa';   // [{ pedido, feito, texto }] — a fila em andamento
@@ -411,6 +411,230 @@
                 return rb.ultima - ra.ultima;
             });
         };
+        // ═══════════════════════════════════════════════════════════════════════════════════════
+        // 🎯 POSITIVAÇÃO DO MÊS
+        // A meta do vendedor não é só faturar: é POSITIVAR — vender pelo menos uma vez, dentro do
+        // mês, pra cada cliente da carteira. Um cliente que não comprou no mês é uma falha mesmo que
+        // o faturamento total esteja bom, e ninguém percebe isso olhando gráfico de dinheiro.
+        //
+        // ⚠️ O corte é pelo campo `dia` (a data da VENDA), NUNCA pelo `ts`. O `ts` é o carimbo de
+        // quando o pedido foi importado pro app — importar em setembro uma venda de julho gravaria
+        // ts de setembro, e o cliente apareceria positivado num mês em que não comprou nada.
+        //
+        // Fica aqui em nível de módulo, e não dentro de uma tela, por dois motivos: o painel é usado
+        // no Dashboard E no Radar (uma implementação só, não duas que divergem com o tempo), e
+        // componente declarado dentro de componente é recriado a cada render — foi o que já causou o
+        // bug da digitação ao contrário nos Lembretes.
+        const positivacaoNoMes = (clients, purchases, agora) => {
+            const ag = agora || new Date();
+            const p2 = (n) => String(n).padStart(2, '0');
+            const iniMes = `${ag.getFullYear()}-${p2(ag.getMonth() + 1)}-01`;
+            const ini = new Date(ag.getFullYear(), ag.getMonth() - 1, 1);
+            const iniAnterior = `${ini.getFullYear()}-${p2(ini.getMonth() + 1)}-01`;
+            const fimAnterior = iniMes;   // exclusivo
+
+            const porCliente = new Map();
+            (purchases || []).forEach(p => {
+                const k = String(p.clienteCode || '').trim();
+                if (!k) return;
+                if (!porCliente.has(k)) porCliente.set(k, []);
+                porCliente.get(k).push(p);
+            });
+
+            const fichas = (clients || []).map(c => {
+                const ps = porCliente.get(String(c.code || '').trim()) || [];
+                // ⚠️ Devolução NÃO positiva. Um mês em que a única movimentação do cliente foi
+                // devolver mercadoria é o oposto de uma venda — se contasse, o placar diria que ele
+                // está resolvido e você não ligaria pra ele.
+                const doMes = ps.filter(p => (p.dia || '') >= iniMes && !p.devolucao);
+                const doAnterior = ps.filter(p => (p.dia || '') >= iniAnterior && (p.dia || '') < fimAnterior && !p.devolucao);
+
+                // 📦 O que ele levou no mês passado — é DAQUI que sai o argumento de venda.
+                // Agrupado por produto e somado em kg: "você levou 45 kg de dianteiro em agosto"
+                // vende muito mais que "faz tempo que você não compra".
+                let anterior = null;
+                if (doAnterior.length) {
+                    const agg = new Map();
+                    doAnterior.forEach(p => (p.itens || []).forEach(i => {
+                        const nome = i.name || ('Produto ' + i.code);
+                        const at = agg.get(nome) || { nome: nome, code: String(i.code || ''), peso: 0, valor: 0 };
+                        at.peso += Math.abs(Number(i.peso) || 0);
+                        at.valor += Math.abs((Number(i.peso) || 0) * (Number(i.valorKg) || 0));
+                        agg.set(nome, at);
+                    }));
+                    anterior = {
+                        compras: doAnterior.length,
+                        valor: Math.round(doAnterior.reduce((a, p) => a + Math.abs(Number(p.valor) || 0), 0) * 100) / 100,
+                        itens: [...agg.values()].sort((a, b) => b.peso - a.peso).slice(0, 4)
+                            .map(i => ({ nome: i.nome, code: i.code, peso: Math.round(i.peso * 10) / 10, valor: Math.round(i.valor * 100) / 100 })),
+                    };
+                }
+
+                const ultima = ps.filter(p => p.dia).sort((a, b) => (b.dia || '').localeCompare(a.dia || ''))[0] || null;
+                let diasSem = null;
+                if (ultima && ultima.dia) {
+                    const d = new Date(ultima.dia + 'T12:00:00');
+                    diasSem = Math.max(0, Math.floor((ag - d) / 86400000));
+                }
+                return {
+                    cliente: c,
+                    positivado: doMes.length > 0,
+                    valorMes: Math.round(doMes.reduce((a, p) => a + Math.abs(Number(p.valor) || 0), 0) * 100) / 100,
+                    anterior: anterior,
+                    ultimaCompra: ultima ? ultima.dia : null,
+                    diasSem: diasSem,
+                    jamais: ps.length === 0,
+                };
+            });
+
+            const feitos = fichas.filter(f => f.positivado);
+            const faltam = fichas.filter(f => !f.positivado);
+            // Prioridade = quanto o cliente valia mês passado. Quem comprou R$ 8 mil em agosto e
+            // ainda não apareceu vale mais uma ligação hoje do que quem comprou R$ 200.
+            const comBase = faltam.filter(f => f.anterior).sort((a, b) => b.anterior.valor - a.anterior.valor);
+            // Tem histórico, mas nada no mês passado: mais frios, ordenados por quem sumiu há menos tempo
+            const frios = faltam.filter(f => !f.anterior && !f.jamais)
+                .sort((a, b) => (a.diasSem == null ? 1e9 : a.diasSem) - (b.diasSem == null ? 1e9 : b.diasSem));
+            const jamais = faltam.filter(f => f.jamais);
+
+            const diasNoMes = new Date(ag.getFullYear(), ag.getMonth() + 1, 0).getDate();
+            const diaDeHoje = ag.getDate();
+            const restantes = diasNoMes - diaDeHoje;
+            // Projeção simples: no ritmo de hoje, quantos fecham até o fim do mês. Serve pra saber se
+            // dá pra ir no embalo ou se precisa mudar de marcha — não é previsão, é régua.
+            const projecao = diaDeHoje > 0 ? Math.min(fichas.length, Math.round(feitos.length / diaDeHoje * diasNoMes)) : 0;
+
+            return {
+                total: fichas.length, feitos: feitos.length, faltam: faltam.length,
+                pct: fichas.length ? Math.round(feitos.length / fichas.length * 100) : 0,
+                comBase: comBase, frios: frios, jamais: jamais,
+                emRisco: Math.round(comBase.reduce((a, f) => a + f.anterior.valor, 0) * 100) / 100,
+                restantes: restantes, projecao: projecao,
+                mesLabel: ag.toLocaleDateString('pt-BR', { month: 'long' }),
+            };
+        };
+
+        // Mensagem de abordagem montada com o que o cliente REALMENTE levou no mês passado.
+        // Genérico ("temos novidades!") não vende; específico ("seus 45 kg de dianteiro") vende.
+        const textoPositivacao = (ficha) => {
+            const nome = (ficha.cliente.name || '').split(' ')[0] || 'tudo bem';
+            if (!ficha.anterior || !ficha.anterior.itens.length) {
+                return `Oi ${nome}, tudo bem? Aqui é o pessoal da Friganso. Passando pra ver se você está precisando de alguma coisa essa semana — posso te mandar a tabela de hoje?`;
+            }
+            const itens = ficha.anterior.itens.slice(0, 2).map(i => `${i.nome} (${i.peso} kg)`).join(' e ');
+            return `Oi ${nome}, tudo bem? Aqui é o pessoal da Friganso. No mês passado você levou ${itens} — separei os preços de hoje pra esses itens. Quer que eu mande?`;
+        };
+
+        const zapNumeroPositivacao = (tel) => { let d = String(tel || '').replace(/\D/g, ''); if (!d) return ''; if (d.length <= 11) d = '55' + d; return d; };
+
+        // 🎯 Painel de positivação — o MESMO componente no Dashboard (compacto) e no Radar (completo).
+        const PainelPositivacao = ({ clients, purchases, setActiveRoute, compacto }) => {
+            const [verFrios, setVerFrios] = useState(false);
+            const dados = useMemo(() => positivacaoNoMes(clients, purchases), [clients, purchases]);
+            if (!dados.total) return null;
+
+            const abrir = (c) => { try { window.localStorage.setItem('friganso_open_client_id', c.id); } catch (e) {} setActiveRoute('clients'); };
+            const lista = compacto ? dados.comBase.slice(0, 5) : dados.comBase;
+
+            // Uma linha de cliente. É uma FUNÇÃO que devolve JSX, não um componente declarado aqui
+            // dentro — componente dentro de componente é recriado a cada render (foi o bug da
+            // digitação ao contrário nos Lembretes).
+            const linha = (f) => (
+                <div key={f.cliente.id || f.cliente.code} className="p-4 flex flex-wrap items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                            <p className="font-bold text-slate-800 truncate">{f.cliente.name || 'Sem nome'}</p>
+                            {f.diasSem != null && <span className="text-[11px] text-slate-400">{f.diasSem} dia(s) sem comprar</span>}
+                        </div>
+                        {f.anterior ? (
+                            <>
+                                <p className="text-xs text-slate-500 mt-0.5">
+                                    Mês passado: <b className="text-slate-700">{formatPrice(f.anterior.valor)}</b> em {f.anterior.compras} compra(s)
+                                </p>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    <span className="text-slate-400">📦 Levou:</span>{' '}
+                                    {f.anterior.itens.map((i, k) => (
+                                        <span key={k} className="inline-block mr-2 whitespace-nowrap">{i.nome} <b className="text-slate-700">{i.peso} kg</b></span>
+                                    ))}
+                                </p>
+                            </>
+                        ) : (
+                            <p className="text-xs text-slate-400 mt-0.5">{f.ultimaCompra ? `Última compra em ${f.ultimaCompra.slice(8, 10)}/${f.ultimaCompra.slice(5, 7)}/${f.ultimaCompra.slice(0, 4)}` : 'Nunca comprou'}</p>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {f.anterior && <span className="text-sm font-extrabold text-slate-700 whitespace-nowrap">{formatPrice(f.anterior.valor)}</span>}
+                        {!!f.cliente.phone && (
+                            <a href={zapUrl(zapNumeroPositivacao(f.cliente.phone), textoPositivacao(f))} target="_blank" rel="noreferrer"
+                               className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white">💬 Zap</a>
+                        )}
+                        <button onClick={() => abrir(f.cliente)} className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600">👤 Abrir</button>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="p-5 border-b border-slate-100">
+                        <div className="flex items-end justify-between gap-3 flex-wrap">
+                            <div>
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2"><span>🎯</span> Positivação de {dados.mesLabel}</h3>
+                                <p className="text-xs text-slate-400 mt-0.5">Clientes da carteira que já compraram este mês</p>
+                            </div>
+                            <div className="text-right">
+                                <p className="text-3xl font-extrabold text-slate-800 leading-none">{dados.feitos}<span className="text-lg text-slate-300">/{dados.total}</span></p>
+                                <p className="text-xs text-slate-400 mt-1">faltam <b className="text-rose-600">{dados.faltam}</b> · {dados.restantes} dia(s) no mês</p>
+                            </div>
+                        </div>
+                        <div className="mt-3 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: dados.pct + '%' }} />
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-3 flex-wrap text-xs">
+                            <span className="text-slate-400">{dados.pct}% da carteira positivada</span>
+                            {/* Régua, não profecia: no ritmo de hoje, onde o mês fecha. */}
+                            <span className={dados.projecao >= dados.total ? 'text-emerald-600 font-bold' : 'text-amber-600 font-bold'}>
+                                No ritmo de hoje, fecha o mês com {dados.projecao} de {dados.total}
+                            </span>
+                        </div>
+                        {!!dados.emRisco && (
+                            <p className="mt-2 text-xs text-slate-500">
+                                <b className="text-rose-600">{formatPrice(dados.emRisco)}</b> é o que os clientes que faltam compraram mês passado — é esse dinheiro que está em jogo.
+                            </p>
+                        )}
+                    </div>
+
+                    {lista.length > 0 ? (
+                        <>
+                            <p className="px-5 pt-4 pb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                                Prioridade — compraram mês passado e ainda não voltaram
+                            </p>
+                            <div className="divide-y divide-slate-100">{lista.map(linha)}</div>
+                        </>
+                    ) : (
+                        <p className="p-5 text-sm text-emerald-700 font-bold">🎉 Todo cliente que comprou mês passado já voltou este mês.</p>
+                    )}
+
+                    {compacto ? (
+                        (dados.faltam > lista.length) && (
+                            <button onClick={() => setActiveRoute('radar')} className="w-full p-3 text-sm font-bold text-slate-600 hover:bg-slate-50 border-t border-slate-100">
+                                Ver os {dados.faltam} que faltam no Radar →
+                            </button>
+                        )
+                    ) : (
+                        (dados.frios.length > 0 || dados.jamais.length > 0) && (
+                            <div className="border-t border-slate-100">
+                                <button onClick={() => setVerFrios(v => !v)} className="w-full p-3 text-sm font-bold text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2">
+                                    {verFrios ? 'Esconder' : 'Mostrar'} os outros {dados.frios.length + dados.jamais.length} que faltam
+                                    <span className="text-xs text-slate-400 font-normal">({dados.frios.length} sem compra no mês passado, {dados.jamais.length} nunca compraram)</span>
+                                </button>
+                                {verFrios && <div className="divide-y divide-slate-100 border-t border-slate-100">{[...dados.frios, ...dados.jamais].map(linha)}</div>}
+                            </div>
+                        )
+                    )}
+                </div>
+            );
+        };
+
         // 🤖 Entrega a campanha inteira pra EXTENSÃO e abre o WhatsApp Web, que dispara sozinho.
         // É o equivalente, no site, ao "Enviar todos sozinho" do programa de PC: o navegador não
         // pode clicar dentro do web.whatsapp.com (outra origem), mas a extensão roda lá dentro.
@@ -1483,6 +1707,10 @@
                         <Kpi icon="📦" cor="bg-amber-100" label="Itens vendidos" valor={dados.totalItens} />
                         <Kpi icon="🔥" cor="bg-purple-100" label="Melhor dia (R$)" valor={dados.melhorV > 0 ? (dados.melhorDiaV.slice(8, 10) + '/' + dados.melhorDiaV.slice(5, 7)) : '—'} />
                     </div>
+
+                    {/* 🎯 POSITIVAÇÃO — vem ANTES da carteira de propósito: o número que decide o mês
+                        não é o faturamento, é quantos clientes você conseguiu fazer comprar. */}
+                    <PainelPositivacao clients={clients} purchases={purchases} setActiveRoute={setActiveRoute} compacto />
 
                     {/* 👥 MEUS CLIENTES — controle de carteira direto no painel */}
                     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
@@ -7162,6 +7390,15 @@
         // (reseta Y). Y também sobe se Z chegasse a 100 (reseta Z). Mais recente primeiro.
         // Toda entrega nova (site/extensão/app/PC) ganha uma entrada aqui.
         const CHANGELOG = [
+            { versao: '2.25.0', data: '10/09/2026', areas: ['site'], itens: [
+                '🎯 NOVO: Positivação do mês — no Dashboard e no Radar, um placar de quantos clientes da sua carteira já compraram este mês e quantos faltam',
+                'A lista dos que faltam vem ORDENADA PELO QUE ELES COMPRARAM MÊS PASSADO: quem valia R$ 8 mil em agosto e ainda não apareceu fica no topo, não perdido no meio do alfabeto',
+                '📦 Cada cliente mostra o que ele levou mês passado, com o peso em kg — é o argumento de venda pronto: "você levou 45 kg de dianteiro em agosto"',
+                '💬 Botão de WhatsApp com a mensagem já montada citando os produtos reais dele. Genérico não vende',
+                '💰 Mostra quanto dinheiro está em jogo: a soma do que os clientes que faltam compraram no mês passado',
+                '📊 E a régua do ritmo: "no ritmo de hoje, fecha o mês com X de Y" — pra saber se dá pra ir no embalo ou se precisa mudar de marcha',
+                '⚠️ Devolução NÃO positiva cliente. Um mês em que a única movimentação foi devolver mercadoria é o contrário de uma venda',
+            ]},
             { versao: '2.24.3', data: '09/09/2026', areas: ['site'], itens: [
                 '🔎 NOVO em Debug: "Conferir faturamento" — quando o total do app não bate com o do SPAmov, ele separa a diferença POR CAUSA e diz quanto cada uma vale em reais',
                 'Aponta: SPAmov repetido em mais de um registro (contando duas vezes), devolução que ficou gravada como venda, e pedido cujo valor não bate com a soma dos próprios itens',
@@ -8751,6 +8988,10 @@
                             Carregando o histórico de compras...
                         </div>
                     )}
+
+                    {/* 🎯 Positivação do mês, versão COMPLETA (o Dashboard mostra a compacta).
+                        Mesmo componente nos dois lugares — não são duas listas que divergem. */}
+                    {!loadingCompras && <PainelPositivacao clients={clients} purchases={purchases} setActiveRoute={setActiveRoute} />}
                     {!loadingCompras && purchases.length === 0 && (
                         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-700 text-sm font-medium">
                             ⚠️ Ainda não há compras registradas. O Radar precisa do histórico pra saber quem está atrasado —

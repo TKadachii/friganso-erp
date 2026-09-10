@@ -360,6 +360,32 @@ nota, cabeçalho irreconhecível, e **falha de propósito se algum número mági
 ⚠️ Armadilha de leitura visual: no print da tela o `#` do item cola no código do produto — "22701" é
 na verdade `#`=2 + código `2701`. Ler o `<td>` pelo DOM resolve; ler pela imagem engana.
 
+## 🎯 Positivação do mês (2026-09-10, v2.25.0)
+A meta do vendedor não é só faturar: é **positivar** — vender pelo menos uma vez, dentro do mês, pra
+cada cliente da carteira. Dá pra bater a meta de dinheiro com metade da carteira parada, e nenhum
+gráfico de faturamento mostra isso.
+
+`positivacaoNoMes(clients, purchases, agora)` e o componente `PainelPositivacao` ficam em **nível de
+módulo**, não dentro de uma tela, por dois motivos: o painel aparece no **Dashboard** (compacto) e no
+**Radar** (completo) — uma implementação só, não duas que divergem — e componente declarado dentro de
+componente é recriado a cada render (foi o bug da digitação ao contrário nos Lembretes).
+
+**⚠️ O corte é pelo campo `dia`, NUNCA pelo `ts`.** O `ts` é o carimbo de quando o pedido foi
+*importado*, não de quando a venda aconteceu: importar em setembro uma venda de julho grava `ts` de
+setembro. Se o corte olhasse o `ts`, o cliente apareceria positivado num mês em que não comprou nada —
+e a mentira estaria justamente no número que o usuário usa pra decidir quem ligar. O Radar usa `ts`
+pro "última compra" dele; isso é uma imprecisão conhecida, herdada, e não foi mexida aqui.
+
+**⚠️ Devolução não positiva.** Um mês em que a única movimentação do cliente foi devolver mercadoria é
+o oposto de uma venda. Se contasse, o placar diria que ele está resolvido.
+
+A ordem da lista é a decisão de produto mais importante da tela: **quem valia mais no mês passado vem
+primeiro**. Ordenar por nome ou por dias parados enterra o cliente de R$ 8 mil no meio da lista. E
+cada linha carrega o que ele levou (produto + kg), porque é isso que vira o argumento: "você levou
+45 kg de dianteiro em agosto" vende, "faz tempo que você não compra" não.
+
+Coberto por `ferramentas/teste-positivacao.js` (18 checagens), com destaque pro caso do `ts`.
+
 ## 📅 Data do pedido trocada no relatório (2026-09-09, v2.24.1) — QUARTA vez, no mesmo dia da terceira
 Achado ao importar o histórico inteiro: pedidos entravam com o dia do **pedido anterior**, mesmo com
 todas as datas certas na tela. Em importação de um dia só quase não aparece; em histórico grande
